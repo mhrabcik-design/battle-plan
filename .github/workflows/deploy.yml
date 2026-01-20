@@ -24,10 +24,14 @@ jobs:
           cache-dependency-path: battle-plan/package-lock.json
 
       - name: Install dependencies
-        run: cd battle-plan && npm install
+        run: |
+          cd battle-plan
+          npm install
 
       - name: Build
-        run: cd battle-plan && npm run build
+        run: |
+          cd battle-plan
+          npm run build
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
