@@ -444,7 +444,7 @@ function App() {
       {viewMode === 'week' && (
         <div className="mb-8 space-y-4">
           <div className="flex justify-between items-center px-1 mb-4">
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+            <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest">
               {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
             </h2>
             <div className="flex gap-2">
@@ -454,7 +454,7 @@ function App() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          <div className="flex flex-col gap-4">
             {getWeekDays(weekOffset).map((day) => {
               const dayTasks = tasks.filter(t => (t.date === day.full || t.deadline === day.full));
               return (
@@ -503,8 +503,8 @@ function App() {
                   <div className="flex justify-between items-start mb-3">
                     <div className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full border ${getUrgencyColor(task.urgency)}`}>Urgence {task.urgency}</div>
                     <div className="flex items-center gap-2">
-                      <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-xl bg-white/5 text-slate-500 hover:text-indigo-400 hover:bg-indigo-400/10 transition-all"><Mail className="w-3.5 h-3.5" /></button>
-                      <span className="text-slate-500 text-[10px] font-medium flex items-center gap-1">
+                      <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-xl bg-white/5 text-slate-300 hover:text-indigo-400 hover:bg-indigo-400/10 transition-all"><Mail className="w-3.5 h-3.5" /></button>
+                      <span className="text-slate-300 text-[10px] font-medium flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {task.startTime && <span className="text-white font-bold">{task.startTime}</span>}
                         {getTimeRemaining(task.deadline || task.date)}
@@ -529,7 +529,7 @@ function App() {
                       )}
                     </div>
                   </div>
-                  <p className="text-slate-400 text-sm mb-2 line-clamp-1 leading-relaxed">{task.description}</p>
+                  <p className="text-slate-200 text-sm mb-2 line-clamp-1 leading-relaxed">{task.description}</p>
 
                   {task.subTasks && task.subTasks.length > 0 && (
                     <div className="space-y-1 mb-4">
@@ -547,7 +547,7 @@ function App() {
                   {task.status === 'pending' && (task.type === 'task' || task.type === 'meeting') && (
                     <div className="space-y-3 mb-5 mt-4">
                       <div className="space-y-1">
-                        <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase"><span>Pokrok</span><span>{task.progress || 0}%</span></div>
+                        <div className="flex justify-between text-[10px] font-bold text-slate-300 uppercase"><span>Pokrok</span><span>{task.progress || 0}%</span></div>
                         <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
                           <motion.div initial={{ width: 0 }} animate={{ width: `${task.progress || 0}%` }} className={`h-full ${task.type === 'meeting' ? 'bg-orange-500' : 'bg-indigo-500'}`} />
                         </div>
@@ -576,20 +576,76 @@ function App() {
       <AnimatePresence>
         {editingTask && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-slate-950/90 backdrop-blur-sm overflow-y-auto pt-20 pb-10">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="glass-card w-full max-w-md p-6 space-y-5 my-auto">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="glass-card w-full max-w-md md:max-w-4xl p-6 space-y-5 my-auto">
               <div className="flex justify-between items-center"><h2 className="text-xl font-bold text-white uppercase tracking-tight">Detail záznamu</h2><button onClick={() => setEditingTask(null)} className="p-2 text-slate-500 hover:text-white"><X /></button></div>
-              <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Název</label>
-                  <input type="text" value={editingTask.title} onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none" />
-                  <div className="grid grid-cols-12 gap-2">
-                    <select value={editingTask.type} onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any })} className="col-span-4 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]"><option value="task">Úkol</option><option value="meeting">Schůzka</option><option value="thought">Myšlenka</option></select>
-                    <input type="date" value={editingTask.date || editingTask.deadline || ''} onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value })} className="col-span-5 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
-                    <input type="time" value={editingTask.startTime || ''} onChange={(e) => setEditingTask({ ...editingTask, startTime: e.target.value })} className="col-span-3 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
+              <div className="space-y-4 max-h-[70vh] overflow-y-auto px-1">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest pl-1">Název</label>
+                      <input type="text" value={editingTask.title} onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none" />
+                      <div className="grid grid-cols-12 gap-2">
+                        <select value={editingTask.type} onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any })} className="col-span-4 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]"><option value="task">Úkol</option><option value="meeting">Schůzka</option><option value="thought">Myšlenka</option></select>
+                        <input type="date" value={editingTask.date || editingTask.deadline || ''} onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value })} className="col-span-5 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
+                        <input type="time" value={editingTask.startTime || ''} onChange={(e) => setEditingTask({ ...editingTask, startTime: e.target.value })} className="col-span-3 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
+                      </div>
+                    </div>
+                    <div className="space-y-2"><label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest pl-1">Popis</label><textarea rows={5} value={editingTask.description} onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
+                    <div className="space-y-2"><label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest pl-1">Interní poznámky</label><textarea rows={5} value={editingTask.internalNotes || ''} onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
+                  </div>
+
+                  <div className="hidden md:flex flex-col space-y-4 border-l border-white/5 pl-8">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Podúkoly (Bullet points)</label>
+                      <button
+                        onClick={() => {
+                          const newSubTasks = [...(editingTask.subTasks || []), { id: Date.now().toString(), title: '', completed: false }];
+                          setEditingTask({ ...editingTask, subTasks: newSubTasks });
+                        }}
+                        className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded-lg border border-indigo-500/30 hover:bg-indigo-500/30 transition-all font-black uppercase"
+                      >
+                        + Přidat bod
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto no-scrollbar">
+                      {editingTask.subTasks?.map((st) => (
+                        <div key={st.id} className="flex gap-2 items-center group">
+                          <button
+                            onClick={() => {
+                              const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, completed: !item.completed } : item);
+                              setEditingTask({ ...editingTask, subTasks: newSubTasks });
+                            }}
+                            className={`w-5 h-5 rounded-md border border-white/20 flex items-center justify-center shrink-0 ${st.completed ? 'bg-indigo-500 border-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]' : 'bg-white/5'}`}
+                          >
+                            {st.completed && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
+                          </button>
+                          <input
+                            type="text"
+                            value={st.title}
+                            onChange={(e) => {
+                              const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, title: e.target.value } : item);
+                              setEditingTask({ ...editingTask, subTasks: newSubTasks });
+                            }}
+                            className={`bg-white/5 border-none focus:ring-1 focus:ring-indigo-500/50 rounded-lg px-3 py-2 text-xs flex-1 text-white ${st.completed ? 'line-through opacity-40' : ''}`}
+                            placeholder="Název podúkolu..."
+                          />
+                          <button
+                            onClick={() => {
+                              const newSubTasks = editingTask.subTasks?.filter(item => item.id !== st.id);
+                              setEditingTask({ ...editingTask, subTasks: newSubTasks });
+                            }}
+                            className="p-2 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      {(!editingTask.subTasks || editingTask.subTasks.length === 0) && (
+                        <p className="text-[10px] text-slate-600 italic text-center py-4">Žádné podúkoly. Klikněte na "+ Přidat bod".</p>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Popis</label><textarea rows={3} value={editingTask.description} onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
-                <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Interní poznámky</label><textarea rows={3} value={editingTask.internalNotes || ''} onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
 
                 {googleAuth.isSignedIn && (
                   <div className="pt-2 p-3 bg-indigo-500/5 rounded-2xl border border-indigo-500/10 text-center">

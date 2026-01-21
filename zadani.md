@@ -17,10 +17,11 @@ Transformovat aplikaci z čistě mobilního zobrazení na adaptivní desktopové
    - Odstranění velkého nápisu (H1) s názvem sekce pro zvětšení vertikální plochy.
 
 2. **Pracovní plocha (Main Content):**
-   - **Desktop:** Roztáhnutí plochy na šířku (implementace jako adaptivní grid - více sloupců na širokém monitoru).
-   - **Mobil:** Zachování jednoho sloupce.
-   - Žádný splitscreen.
-   - Seznam úkolů zůstává hlavní logikou aplikace.
+   - **Desktop:** Roztáhnutí plochy na šířku.
+   - **Týdenní zobrazení:** Na PC zobrazit 7 dní pod sebou (vertikální seznam) pro lepší přehled.
+   - **Kontrast:** Zvýšení kontrastu textů (nahrazení text-slate-500/400 za světlejší varianty).
+   - **Editace (Modal):** Na PC zvětšit editační okno (šířka 4xl).
+   - **Podúkoly:** Přidat možnost editace/přidávání bullet pointů v modalu (pouze na PC/velké ploše).
 
 3. **Budoucí kroky (Next Steps):**
    - Integrace rychlých poznámek přímo do seznamu.
