@@ -23,6 +23,20 @@ function App() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(localStorage.getItem('last_drive_sync'));
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const isAiActive = !!apiKey && isOnline;
 
   const getWeekDays = (offset: number) => {
     const today = new Date();
@@ -390,30 +404,42 @@ function App() {
   ];
 
   return (
-    <div className="max-w-md mx-auto px-4 py-6 pb-32 min-h-screen">
-      <nav className="sticky top-0 z-50 flex justify-between bg-slate-950/80 backdrop-blur-md p-2 mb-8 rounded-2xl border border-white/5 shadow-xl">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = viewMode === item.id;
-          return (
-            <button key={item.id} onClick={() => setViewMode(item.id as ViewMode)} className={`flex flex-col items-center gap-1 px-3 py-2 rounded-xl transition-all duration-300 ${isActive ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`}>
-              <Icon className={`w-5 h-5 ${isActive ? 'scale-110' : ''}`} />
-              <span className="text-[10px] font-medium uppercase tracking-tighter">{item.label}</span>
-              {isActive && <motion.div layoutId="nav-underline" className="w-1 h-1 bg-indigo-500 rounded-full mt-0.5" />}
-            </button>
-          );
-        })}
-      </nav>
-
-      <header className="mb-6 px-2 flex justify-between items-end">
-        <div>
-          <h1 className="text-3xl premium-gradient-text uppercase tracking-tight">{navItems.find(i => i.id === viewMode)?.label}</h1>
-          <p className="text-slate-500 text-xs">AI Systém aktivní.</p>
+    <div className="max-w-7xl mx-auto px-4 py-4 pb-32 min-h-screen">
+      <nav className="sticky top-0 z-50 flex items-center justify-between bg-slate-950/80 backdrop-blur-md p-2 mb-8 rounded-2xl border border-white/5 shadow-2xl">
+        <div className="flex gap-1 md:gap-4">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = viewMode === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setViewMode(item.id as ViewMode)}
+                className={`flex flex-col items-center gap-1 px-4 py-3 rounded-xl transition-all duration-300 ${isActive ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                title={item.label}
+              >
+                <Icon className={`w-6 h-6 ${isActive ? 'scale-110' : ''}`} />
+                {isActive && <motion.div layoutId="nav-underline" className="w-1.5 h-1.5 bg-indigo-500 rounded-full mt-0.5" />}
+              </button>
+            );
+          })}
         </div>
-        <button onClick={() => setShowSettings(true)} className="p-2 rounded-full bg-white/5 text-slate-400 hover:text-white transition-all">
-          <Settings className="w-5 h-5" />
-        </button>
-      </header>
+
+        <div className="flex items-center gap-2 pr-2">
+          <div className="hidden md:flex flex-col items-end mr-2">
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 leading-none">Bitevní Plán</span>
+            <span className="text-[8px] text-slate-700 font-bold tracking-tighter">AI ARCHITEKT v1.2</span>
+          </div>
+          <button
+            onClick={() => setShowSettings(true)}
+            className={`relative p-3 rounded-xl transition-all duration-300 ${isAiActive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-white/5 text-slate-400 hover:text-white'}`}
+          >
+            <Settings className={`w-6 h-6 ${isProcessing ? 'animate-spin' : ''}`} />
+            {isAiActive && (
+              <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-slate-950 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+            )}
+          </button>
+        </div>
+      </nav>
 
       {viewMode === 'week' && (
         <div className="mb-8 space-y-4">
@@ -428,7 +454,7 @@ function App() {
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {getWeekDays(weekOffset).map((day) => {
               const dayTasks = tasks.filter(t => (t.date === day.full || t.deadline === day.full));
               return (
@@ -464,7 +490,7 @@ function App() {
       )}
 
       {viewMode !== 'week' && (
-        <section className="space-y-4">
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-start">
           <AnimatePresence mode="popLayout">
             {tasks.length === 0 ? (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-12 text-center">
