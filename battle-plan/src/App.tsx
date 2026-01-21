@@ -575,8 +575,8 @@ function App() {
 
       <AnimatePresence>
         {editingTask && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-slate-950/90 backdrop-blur-sm overflow-y-auto pt-20 pb-10">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="glass-card w-full max-w-md md:max-w-4xl p-6 space-y-5 my-auto">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-slate-950/90 backdrop-blur-sm overflow-y-auto pt-10 pb-10">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="glass-card w-full max-w-md md:max-w-7xl p-8 space-y-6 my-auto">
               <div className="flex justify-between items-center"><h2 className="text-xl font-bold text-white uppercase tracking-tight">Detail záznamu</h2><button onClick={() => setEditingTask(null)} className="p-2 text-slate-500 hover:text-white"><X /></button></div>
               <div className="space-y-4 max-h-[70vh] overflow-y-auto px-1">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -609,25 +609,35 @@ function App() {
                     </div>
                     <div className="space-y-2 max-h-[400px] overflow-y-auto no-scrollbar">
                       {editingTask.subTasks?.map((st) => (
-                        <div key={st.id} className="flex gap-2 items-center group">
+                        <div key={st.id} className="flex gap-3 items-start group bg-white/2 p-2 rounded-xl border border-white/5 hover:border-white/10 transition-all">
                           <button
                             onClick={() => {
                               const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, completed: !item.completed } : item);
                               setEditingTask({ ...editingTask, subTasks: newSubTasks });
                             }}
-                            className={`w-5 h-5 rounded-md border border-white/20 flex items-center justify-center shrink-0 ${st.completed ? 'bg-indigo-500 border-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]' : 'bg-white/5'}`}
+                            className={`w-6 h-6 rounded-lg border border-white/20 flex items-center justify-center shrink-0 mt-1 ${st.completed ? 'bg-indigo-500 border-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]' : 'bg-white/5'}`}
                           >
-                            {st.completed && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
+                            {st.completed && <CheckCircle2 className="w-4 h-4 text-white" />}
                           </button>
-                          <input
-                            type="text"
+                          <textarea
                             value={st.title}
+                            rows={1}
                             onChange={(e) => {
                               const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, title: e.target.value } : item);
                               setEditingTask({ ...editingTask, subTasks: newSubTasks });
                             }}
-                            className={`bg-white/5 border-none focus:ring-1 focus:ring-indigo-500/50 rounded-lg px-3 py-2 text-xs flex-1 text-white ${st.completed ? 'line-through opacity-40' : ''}`}
+                            className={`bg-transparent border-none focus:ring-0 rounded-lg px-2 py-1 text-sm flex-1 text-white resize-none min-h-[32px] w-full overflow-hidden ${st.completed ? 'line-through opacity-40' : ''}`}
                             placeholder="Název podúkolu..."
+                            onInput={(e) => {
+                              const target = e.target as HTMLTextAreaElement;
+                              target.style.height = 'auto';
+                              target.style.height = target.scrollHeight + 'px';
+                            }}
+                            onFocus={(e) => {
+                              const target = e.target as HTMLTextAreaElement;
+                              target.style.height = 'auto';
+                              target.style.height = target.scrollHeight + 'px';
+                            }}
                           />
                           <button
                             onClick={() => {
