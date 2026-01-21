@@ -144,6 +144,24 @@ class GoogleService {
         }
     }
 
+    async deleteFromCalendar(eventId: string) {
+        if (!this.accessToken) return;
+
+        try {
+            await window.gapi.client.calendar.events.delete({
+                'calendarId': 'primary',
+                'calendarEventId': eventId, // NOTE: The parameter name for delete is often 'eventId', checking gapi docs
+                'eventId': eventId
+            });
+            console.log('Event deleted from Calendar');
+        } catch (err: any) {
+            console.error('Error deleting calendar event', err);
+            if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
+                this.signOut();
+            }
+        }
+    }
+
     async saveToDrive(data: any) {
         if (!this.accessToken) return;
 

@@ -474,7 +474,20 @@ function App() {
               </div>
               <div className="pt-2 flex flex-col gap-2">
                 <button onClick={handleSaveEdit} className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold uppercase text-xs rounded-2xl flex items-center justify-center gap-2"><Save className="w-4 h-4" /> Uložit vše</button>
-                <button onClick={async () => { if (editingTask.id) await db.tasks.delete(editingTask.id); setEditingTask(null); }} className="w-full py-2 text-[10px] text-red-500/50 uppercase">Smazat</button>
+                <button
+                  onClick={async () => {
+                    if (editingTask.id) {
+                      if (editingTask.googleEventId && googleAuth.isSignedIn) {
+                        try { await googleService.deleteFromCalendar(editingTask.googleEventId); } catch (e) { console.error(e); }
+                      }
+                      await db.tasks.delete(editingTask.id);
+                    }
+                    setEditingTask(null);
+                  }}
+                  className="w-full py-2 text-[10px] text-red-500/50 uppercase"
+                >
+                  Smazat
+                </button>
               </div>
             </motion.div>
           </div>
