@@ -113,12 +113,10 @@ class GoogleService {
 
             console.log('Event updated/created: ', response);
             return response.result.id;
-        } catch (err) {
+        } catch (err: any) {
             console.error('Error creating calendar event', err);
-            // If token expired, we might need to re-auth
-            if ((err as any).status === 401) {
-                this.signOut();
-            }
+            const errorMsg = err?.result?.error?.message || err?.message || JSON.stringify(err);
+            throw new Error(`Google Calendar Error: ${errorMsg}`);
         }
     }
 
