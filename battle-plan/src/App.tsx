@@ -24,6 +24,12 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(localStorage.getItem('last_drive_sync'));
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [uiScale, setUiScale] = useState<number>(Number(localStorage.getItem('ui_scale')) || 16);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--app-font-size', `${uiScale}px`);
+    localStorage.setItem('ui_scale', uiScale.toString());
+  }, [uiScale]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -704,7 +710,30 @@ function App() {
                 <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm" placeholder="Gemini API klíč..." />
                 <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full bg-slate-900 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm">{availableModels.map(m => <option key={m} value={m}>{m}</option>)}</select>
                 <div className="pt-4 border-t border-white/5 space-y-3">
-                  <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Google Integrace</h3>
+                  <h3 className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Vzhled a Čitelnost</h3>
+                  <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-4">
+                    <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase">
+                      <span>Velikost písma</span>
+                      <span className="text-white px-2 py-0.5 bg-indigo-500/20 rounded-md border border-indigo-500/30">{uiScale}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="12"
+                      max="24"
+                      step="1"
+                      value={uiScale}
+                      onChange={(e) => setUiScale(Number(e.target.value))}
+                      className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+                    <div className="flex justify-between text-[8px] text-slate-600 font-bold uppercase">
+                      <span>Malé</span>
+                      <span>Normální (16)</span>
+                      <span>Velké</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-white/5 space-y-3">
                   {googleAuth.isSignedIn ? (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
