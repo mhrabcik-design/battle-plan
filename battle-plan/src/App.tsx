@@ -384,11 +384,13 @@ function App() {
                     <span className="text-slate-500 text-[10px] font-medium flex items-center gap-1"><Clock className="w-3 h-3" /> {task.deadline || task.date}</span>
                   </div>
                   <div className="flex items-center gap-2 mb-1">
-                    {task.type === 'meeting' && <Users className="w-4 h-4 text-orange-400" />}
                     {task.type === 'thought' && <Lightbulb className="w-4 h-4 text-yellow-400" />}
                     {task.type === 'task' && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
                     <h3 className="text-md font-semibold text-slate-100 uppercase tracking-tight">{task.title}</h3>
-                    {task.googleEventId && <div className="ml-auto text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full border border-blue-500/30 font-bold">GOOGLE CALENDAR</div>}
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-[8px] text-slate-600 font-mono">id:{task.id} | type:{task.type}</span>
+                      {task.googleEventId && <div className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full border border-blue-500/30 font-bold">GOOGLE</div>}
+                    </div>
                   </div>
                   <p className="text-slate-400 text-sm mb-2 line-clamp-1 leading-relaxed">{task.description}</p>
 
@@ -442,15 +444,17 @@ function App() {
                 <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Popis</label><textarea rows={3} value={editingTask.description} onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
                 <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Interní poznámky</label><textarea rows={3} value={editingTask.internalNotes || ''} onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
 
-                {editingTask.type === 'meeting' && googleAuth.isSignedIn && (
-                  <div className="pt-2">
+                {googleAuth.isSignedIn && (
+                  <div className="pt-2 p-3 bg-blue-500/5 rounded-2xl border border-blue-500/10">
+                    <p className="text-[9px] text-blue-400/50 uppercase font-bold mb-2 text-center">Debug: Google Sync</p>
                     <button
                       onClick={() => handleSyncToGoogle(editingTask)}
                       className={`w-full py-3 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}
                     >
                       <Share2 className="w-4 h-4" />
-                      {editingTask.googleEventId ? 'Aktualizovat v kalendáři' : 'Odeslat do Google Kalendáře'}
+                      {editingTask.googleEventId ? 'Aktualizovat v kalendáři' : 'Odeslat do Kalendáře'}
                     </button>
+                    {editingTask.googleEventId && <p className="text-[8px] text-slate-600 mt-1 text-center font-mono truncate">ID: {editingTask.googleEventId}</p>}
                   </div>
                 )}
               </div>
@@ -502,6 +506,9 @@ function App() {
             </button>
           </div>
           <button onClick={() => setViewMode('week')} className="p-4 rounded-full bg-slate-900/50 border border-white/5 text-slate-400"><LayoutGrid className="w-6 h-6" /></button>
+        </div>
+        <div className="text-center mt-4">
+          <span className="text-[8px] text-slate-700 uppercase font-bold tracking-widest">Bitevní Plán v1.2-DEBUG | {new Date().toLocaleTimeString()}</span>
         </div>
       </div>
     </div>
