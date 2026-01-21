@@ -110,11 +110,16 @@ class GoogleService {
             if (task.googleEventId) params.eventId = task.googleEventId;
 
             const response = await window.gapi.client.calendar.events[method](params);
-
-            console.log('Event updated/created: ', response);
             return response.result.id;
         } catch (err: any) {
             console.error('Error creating calendar event', err);
+
+            // If token is invalid or missing (401), sign out so user can sign in again
+            if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
+                this.signOut();
+                throw new Error("Relace vypršela. Prosím přihlaste se znovu v nastavení.");
+            }
+
             const errorMsg = err?.result?.error?.message || err?.message || JSON.stringify(err);
             throw new Error(`Google Calendar Error: ${errorMsg}`);
         }
