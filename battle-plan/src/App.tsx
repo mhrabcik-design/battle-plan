@@ -477,10 +477,17 @@ function App() {
                 <button
                   onClick={async () => {
                     if (editingTask.id) {
+                      let calendarDeleted = false;
                       if (editingTask.googleEventId && googleAuth.isSignedIn) {
-                        try { await googleService.deleteFromCalendar(editingTask.googleEventId); } catch (e) { console.error(e); }
+                        try {
+                          await googleService.deleteFromCalendar(editingTask.googleEventId);
+                          calendarDeleted = true;
+                        } catch (e: any) {
+                          alert("Nepodařilo se smazat z kalendáře: " + e.message);
+                        }
                       }
                       await db.tasks.delete(editingTask.id);
+                      if (calendarDeleted) alert("Smazáno z aplikace i z Google Kalendáře.");
                     }
                     setEditingTask(null);
                   }}
