@@ -26,12 +26,19 @@ class GoogleService {
             const gapiLoad = () => {
                 window.gapi.load('client', async () => {
                     await window.gapi.client.init({
-                        apiKey: '', // API key is not strictly needed for GIS token flow if only using client ID
+                        apiKey: '',
                         discoveryDocs: [
                             'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest',
                             'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
                         ],
                     });
+
+                    if (this.accessToken) {
+                        window.gapi.client.setToken({ access_token: this.accessToken });
+                        window.dispatchEvent(new CustomEvent('google-auth-change', {
+                            detail: { isSignedIn: true, accessToken: this.accessToken }
+                        }));
+                    }
                     resolve();
                 });
             };
@@ -46,6 +53,7 @@ class GoogleService {
                         }
                         this.accessToken = response.access_token;
                         localStorage.setItem('google_access_token', response.access_token);
+                        window.gapi.client.setToken({ access_token: response.access_token });
                         window.dispatchEvent(new CustomEvent('google-auth-change', {
                             detail: { isSignedIn: true, accessToken: this.accessToken }
                         }));
@@ -73,7 +81,8 @@ class GoogleService {
 
     signIn() {
         if (this.tokenClient) {
-            this.tokenClient.requestAccessToken({ prompt: 'consent' });
+            // Remove prompt: 'consent' to allow silent sign-in if already authorized
+            this.tokenClient.requestAccessToken({ prompt: '' });
         }
     }
 
