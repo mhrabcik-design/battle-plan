@@ -387,7 +387,17 @@ function App() {
                     <h3 className="text-md font-semibold text-slate-100 uppercase tracking-tight">{task.title}</h3>
                     <div className="ml-auto flex items-center gap-2">
                       <span className="text-[8px] text-slate-600 font-mono">id:{task.id} | type:{task.type}</span>
-                      {task.googleEventId && <div className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full border border-blue-500/30 font-bold">GOOGLE</div>}
+
+                      {(task.type === 'meeting' || task.type === 'task') && googleAuth.isSignedIn && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleSyncToGoogle(task); }}
+                          className={`p-1.5 rounded-lg border transition-all flex items-center gap-1 ${task.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}
+                          title={task.googleEventId ? "Aktualizovat v kalendáři" : "Odeslat do kalendáře"}
+                        >
+                          <Share2 className="w-3 h-3" />
+                          <span className="text-[9px] font-bold uppercase">{task.googleEventId ? 'Sync' : 'Odeslat'}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                   <p className="text-slate-400 text-sm mb-2 line-clamp-1 leading-relaxed">{task.description}</p>
@@ -414,11 +424,7 @@ function App() {
                         </div>
                       </div>
 
-                      {task.type === 'meeting' && !task.googleEventId && googleAuth.isSignedIn && (
-                        <button onClick={(e) => { e.stopPropagation(); handleSyncToGoogle(task); }} className="w-full py-2 bg-blue-500/10 border border-blue-500/30 rounded-xl text-[10px] font-bold text-blue-400 uppercase flex items-center justify-center gap-2 hover:bg-blue-500/20 transition-all">
-                          <Share2 className="w-3 h-3" /> Synchronizovat s kalendářem
-                        </button>
-                      )}
+                      {/* Sync button moved to header */}
                     </div>
                   )}
 
