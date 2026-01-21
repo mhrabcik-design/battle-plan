@@ -93,11 +93,21 @@ class GoogleService {
                 'summary': `[BITEVNÍ PLÁN] ${task.title}`,
                 'description': `${task.description}\n\nInterní poznámky:\n${task.internalNotes || ''}`,
                 'start': {
-                    'dateTime': new Date(task.date || task.deadline || new Date().toISOString()).toISOString(),
+                    'dateTime': (() => {
+                        const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
+                        const timeStr = task.startTime || "09:00"; // Default to 9:00 if not set
+                        return new Date(`${dateStr}T${timeStr}:00`).toISOString();
+                    })(),
                     'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone
                 },
                 'end': {
-                    'dateTime': new Date(new Date(task.date || task.deadline || new Date().toISOString()).getTime() + (task.duration || 60) * 60000).toISOString(),
+                    'dateTime': (() => {
+                        const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
+                        const timeStr = task.startTime || "09:00";
+                        const baseDate = new Date(`${dateStr}T${timeStr}:00`);
+                        const duration = Number(task.duration) || Number(task.totalDuration) || 60;
+                        return new Date(baseDate.getTime() + duration * 60000).toISOString();
+                    })(),
                     'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone
                 }
             };

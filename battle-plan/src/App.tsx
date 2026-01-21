@@ -160,6 +160,8 @@ function App() {
           else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) finalType = 'meeting';
           else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) finalType = 'thought';
 
+          const defaultDuration = finalType === 'meeting' ? 60 : 30;
+
           const newTaskId = await db.tasks.add({
             title: result.title || "Nový záznam",
             description: result.description || "",
@@ -168,9 +170,10 @@ function App() {
             urgency: Number(result.urgency) as any || 3,
             status: 'pending',
             date: result.date || new Date().toISOString().split('T')[0],
+            startTime: result.startTime || (finalType === 'meeting' ? "09:00" : undefined),
             deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
-            duration: Number(result.duration) || 30,
-            totalDuration: Number(result.duration) || 30,
+            duration: Number(result.duration) || defaultDuration,
+            totalDuration: Number(result.duration) || defaultDuration,
             subTasks: result.subTasks || [],
             progress: Number(result.progress) || 0,
             createdAt: Date.now()
@@ -370,7 +373,11 @@ function App() {
                     <div className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full border ${getUrgencyColor(task.urgency)}`}>Urgence {task.urgency}</div>
                     <div className="flex items-center gap-2">
                       <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-xl bg-white/5 text-slate-500 hover:text-indigo-400 hover:bg-indigo-400/10 transition-all"><Mail className="w-3.5 h-3.5" /></button>
-                      <span className="text-slate-500 text-[10px] font-medium flex items-center gap-1"><Clock className="w-3 h-3" /> {getTimeRemaining(task.deadline || task.date)}</span>
+                      <span className="text-slate-500 text-[10px] font-medium flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {task.startTime && <span className="text-white font-bold">{task.startTime}</span>}
+                        {getTimeRemaining(task.deadline || task.date)}
+                      </span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mb-1">
@@ -440,9 +447,10 @@ function App() {
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Název</label>
                   <input type="text" value={editingTask.title} onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none" />
-                  <div className="grid grid-cols-2 gap-3">
-                    <select value={editingTask.type} onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any })} className="bg-slate-900 border border-white/10 rounded-xl px-4 py-3 text-white text-xs"><option value="task">Úkol</option><option value="meeting">Schůzka</option><option value="thought">Myšlenka</option></select>
-                    <input type="date" value={editingTask.deadline || ''} onChange={(e) => setEditingTask({ ...editingTask, deadline: e.target.value })} className="bg-slate-900 border border-white/10 rounded-xl px-4 py-3 text-white text-xs" />
+                  <div className="grid grid-cols-12 gap-2">
+                    <select value={editingTask.type} onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any })} className="col-span-4 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]"><option value="task">Úkol</option><option value="meeting">Schůzka</option><option value="thought">Myšlenka</option></select>
+                    <input type="date" value={editingTask.date || editingTask.deadline || ''} onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value })} className="col-span-5 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
+                    <input type="time" value={editingTask.startTime || ''} onChange={(e) => setEditingTask({ ...editingTask, startTime: e.target.value })} className="col-span-3 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
                   </div>
                 </div>
                 <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Popis</label><textarea rows={3} value={editingTask.description} onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>

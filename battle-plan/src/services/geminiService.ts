@@ -113,6 +113,7 @@ Z audia vytvoř POUZE JSON objekt s těmito poli:
 - urgency: Číslo 1 až 5.
 - duration: Odhadovaná délka v minutách (číslo).
 - date: Datum zahájení (YYYY-MM-DD).
+- startTime: Čas zahájení schůzky nebo úkolu (HH:mm). Pokud čas není v audiu explicitně uveden, odhadni ho (např. 'dopoledne' -> '09:00', 'odpoledne' -> '14:00') nebo nech prázdný.
 - deadline: Datum uzávěrky (YYYY-MM-DD).
 - subTasks: Pole objektů [{ id: string, title: string, completed: boolean }]. Buď INICIATIVNÍ: pokud je úkol komplexní, automaticky ho rozděl na logické pod-úkoly.
 - progress: Číslo 0-100. AI odhadne progres na základě splněných pod-úkolů nebo obsahu audia.
