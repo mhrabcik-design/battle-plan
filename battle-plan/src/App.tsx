@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Mic, MicOff, Play, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Hourglass, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail } from 'lucide-react';
+import { Mic, MicOff, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
@@ -302,16 +302,9 @@ function App() {
           <h1 className="text-3xl premium-gradient-text uppercase tracking-tight">{navItems.find(i => i.id === viewMode)?.label}</h1>
           <p className="text-slate-500 text-xs">AI Systém aktivní.</p>
         </div>
-        <div className="flex gap-2 items-center">
-          {activeVoiceUpdateId && (
-            <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} className="bg-red-500/20 text-red-400 p-2 rounded-full border border-red-500/30">
-              <Mic className="w-4 h-4 animate-pulse" />
-            </motion.div>
-          )}
-          <button onClick={() => setShowSettings(true)} className="p-2 rounded-full bg-white/5 text-slate-400 hover:text-white transition-all">
-            <Settings className="w-5 h-5" />
-          </button>
-        </div>
+        <button onClick={() => setShowSettings(true)} className="p-2 rounded-full bg-white/5 text-slate-400 hover:text-white transition-all">
+          <Settings className="w-5 h-5" />
+        </button>
       </header>
 
       {viewMode === 'week' && (
@@ -321,9 +314,9 @@ function App() {
               {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
             </h2>
             <div className="flex gap-2">
-              <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-xl bg-white/5 text-slate-400 hover:text-white transition-all active:scale-95"><ChevronLeft className="w-4 h-4" /></button>
-              <button onClick={() => setWeekOffset(0)} className="px-3 py-1 rounded-xl bg-white/5 text-[10px] font-bold text-slate-400 uppercase transition-all">Dnes</button>
-              <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-xl bg-white/5 text-slate-400 hover:text-white transition-all active:scale-95"><ChevronRight className="w-4 h-4" /></button>
+              <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-xl bg-white/5 text-slate-400 active:scale-95"><ChevronLeft className="w-4 h-4" /></button>
+              <button onClick={() => setWeekOffset(0)} className="px-3 py-1 rounded-xl bg-white/5 text-[10px] font-bold text-slate-400 uppercase">Dnes</button>
+              <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-xl bg-white/5 text-slate-400 active:scale-95"><ChevronRight className="w-4 h-4" /></button>
             </div>
           </div>
 
@@ -345,17 +338,11 @@ function App() {
                         <div className="flex items-center gap-2 relative z-10">
                           {t.type === 'meeting' ? <Users className="w-3.5 h-3.5 text-orange-400" /> : <List className="w-3.5 h-3.5 text-indigo-400" />}
                           <span className="text-xs font-bold uppercase tracking-tight text-white line-clamp-1">{t.title}</span>
-                          {t.googleEventId && <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30">G</span>}
+                          {t.googleEventId && <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30 flex items-center justify-center">G</span>}
                         </div>
-
                         {t.type === 'meeting' && !t.googleEventId && googleAuth.isSignedIn && (
-                          <div className="relative z-20 ml-2">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleSyncToGoogle(t); }}
-                              className="p-1 px-2 bg-blue-500/10 border border-blue-500/30 rounded-lg text-[8px] font-bold text-blue-400 uppercase hover:bg-blue-500/20 transition-all"
-                            >
-                              Sync
-                            </button>
+                          <div className="relative z-20">
+                            <button onClick={(e) => { e.stopPropagation(); handleSyncToGoogle(t); }} className="p-1 px-2 bg-blue-500/10 border border-blue-500/30 rounded-lg text-[8px] font-bold text-blue-400 uppercase">Sync</button>
                           </div>
                         )}
                       </button>
@@ -381,9 +368,13 @@ function App() {
                 <motion.div key={task.id} layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }} className={`glass-card p-5 group transition-all duration-300 ${task.status === 'completed' ? 'opacity-40' : ''}`}>
                   <div className="flex justify-between items-start mb-3">
                     <div className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full border ${getUrgencyColor(task.urgency)}`}>Urgence {task.urgency}</div>
-                    <span className="text-slate-500 text-[10px] font-medium flex items-center gap-1"><Clock className="w-3 h-3" /> {task.deadline || task.date}</span>
+                    <div className="flex items-center gap-2">
+                      <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-xl bg-white/5 text-slate-500 hover:text-indigo-400 hover:bg-indigo-400/10 transition-all"><Mail className="w-3.5 h-3.5" /></button>
+                      <span className="text-slate-500 text-[10px] font-medium flex items-center gap-1"><Clock className="w-3 h-3" /> {getTimeRemaining(task.deadline || task.date)}</span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 mb-1">
+                    {task.type === 'meeting' && <Users className="w-4 h-4 text-orange-400" />}
                     {task.type === 'thought' && <Lightbulb className="w-4 h-4 text-yellow-400" />}
                     {task.type === 'task' && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
                     <h3 className="text-md font-semibold text-slate-100 uppercase tracking-tight">{task.title}</h3>
@@ -393,6 +384,19 @@ function App() {
                     </div>
                   </div>
                   <p className="text-slate-400 text-sm mb-2 line-clamp-1 leading-relaxed">{task.description}</p>
+
+                  {task.subTasks && task.subTasks.length > 0 && (
+                    <div className="space-y-1 mb-4">
+                      {task.subTasks.slice(0, 3).map(st => (
+                        <button key={st.id} onClick={() => toggleSubtask(task, st.id)} className="flex items-center gap-2 text-[11px] text-slate-400 w-full text-left">
+                          <div className={`w-3.5 h-3.5 rounded-md border border-white/20 flex items-center justify-center shrink-0 ${st.completed ? 'bg-indigo-500 border-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]' : 'bg-white/5'}`}>
+                            {st.completed && <CheckCircle2 className="w-2.5 h-2.5 text-white" />}
+                          </div>
+                          <span className={st.completed ? 'line-through opacity-50' : ''}>{st.title}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   {task.status === 'pending' && (task.type === 'task' || task.type === 'meeting') && (
                     <div className="space-y-3 mb-5 mt-4">
@@ -447,14 +451,10 @@ function App() {
                 {googleAuth.isSignedIn && (
                   <div className="pt-2 p-3 bg-blue-500/5 rounded-2xl border border-blue-500/10">
                     <p className="text-[9px] text-blue-400/50 uppercase font-bold mb-2 text-center">Debug: Google Sync</p>
-                    <button
-                      onClick={() => handleSyncToGoogle(editingTask)}
-                      className={`w-full py-3 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}
-                    >
+                    <button onClick={() => handleSyncToGoogle(editingTask)} className={`w-full py-3 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
                       <Share2 className="w-4 h-4" />
                       {editingTask.googleEventId ? 'Aktualizovat v kalendáři' : 'Odeslat do Kalendáře'}
                     </button>
-                    {editingTask.googleEventId && <p className="text-[8px] text-slate-600 mt-1 text-center font-mono truncate">ID: {editingTask.googleEventId}</p>}
                   </div>
                 )}
               </div>
