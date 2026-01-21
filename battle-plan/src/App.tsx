@@ -347,6 +347,17 @@ function App() {
                           <span className="text-xs font-bold uppercase tracking-tight text-white line-clamp-1">{t.title}</span>
                           {t.googleEventId && <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30">G</span>}
                         </div>
+
+                        {t.type === 'meeting' && !t.googleEventId && googleAuth.isSignedIn && (
+                          <div className="relative z-20 ml-2">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleSyncToGoogle(t); }}
+                              className="p-1 px-2 bg-blue-500/10 border border-blue-500/30 rounded-lg text-[8px] font-bold text-blue-400 uppercase hover:bg-blue-500/20 transition-all"
+                            >
+                              Sync
+                            </button>
+                          </div>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -430,6 +441,18 @@ function App() {
                 </div>
                 <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Popis</label><textarea rows={3} value={editingTask.description} onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
                 <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Interní poznámky</label><textarea rows={3} value={editingTask.internalNotes || ''} onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
+
+                {editingTask.type === 'meeting' && googleAuth.isSignedIn && (
+                  <div className="pt-2">
+                    <button
+                      onClick={() => handleSyncToGoogle(editingTask)}
+                      className={`w-full py-3 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}
+                    >
+                      <Share2 className="w-4 h-4" />
+                      {editingTask.googleEventId ? 'Aktualizovat v kalendáři' : 'Odeslat do Google Kalendáře'}
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="pt-2 flex flex-col gap-2">
                 <button onClick={handleSaveEdit} className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold uppercase text-xs rounded-2xl flex items-center justify-center gap-2"><Save className="w-4 h-4" /> Uložit vše</button>
