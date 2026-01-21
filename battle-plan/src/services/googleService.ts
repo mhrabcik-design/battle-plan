@@ -177,18 +177,25 @@ class GoogleService {
             // Find existing file in appDataFolder
             const listResponse = await window.gapi.client.drive.files.list({
                 spaces: 'appDataFolder',
+                q: "name = 'battle_plan_data.json'",
                 fields: 'files(id, name)',
                 pageSize: 1
             });
 
             const existingFile = listResponse.result.files[0];
             const metadata = {
-                name: 'battle_plan_backup.json',
+                name: 'battle_plan_data.json',
                 mimeType: 'application/json',
                 parents: ['appDataFolder']
             };
 
-            const fileContent = JSON.stringify(data);
+            const payload = {
+                version: '1.2',
+                timestamp: Date.now(),
+                data: data
+            };
+
+            const fileContent = JSON.stringify(payload);
             const boundary = '-------314159265358979323846';
             const delimiter = "\r\n--" + boundary + "\r\n";
             const close_delim = "\r\n--" + boundary + "--";
@@ -205,7 +212,7 @@ class GoogleService {
             const method = existingFile ? 'PATCH' : 'POST';
             const url = `https://www.googleapis.com/upload/drive/v3/files${existingFile ? '/' + existingFile.id : ''}?uploadType=multipart`;
 
-            await fetch(url, {
+            const response = await fetch(url, {
                 method: method,
                 headers: {
                     'Authorization': `Bearer ${this.accessToken}`,
@@ -214,9 +221,12 @@ class GoogleService {
                 body: body
             });
 
+            if (!response.ok) throw new Error(`Sync failed: ${response.statusText}`);
             console.log('Backup saved to Drive');
+            return true;
         } catch (err) {
             console.error('Error saving to Drive', err);
+            throw err;
         }
     }
 
@@ -226,6 +236,7 @@ class GoogleService {
         try {
             const listResponse = await window.gapi.client.drive.files.list({
                 spaces: 'appDataFolder',
+                q: "name = 'battle_plan_data.json'",
                 fields: 'files(id, name)',
                 pageSize: 1
             });
@@ -239,6 +250,7 @@ class GoogleService {
                 }
             });
 
+            if (!response.ok) return null;
             return await response.json();
         } catch (err) {
             console.error('Error loading from Drive', err);

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Mic, MicOff, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail } from 'lucide-react';
+import { Mic, MicOff, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail, CloudUpload, CloudDownload } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
@@ -21,6 +21,8 @@ function App() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(localStorage.getItem('last_drive_sync'));
 
   const getWeekDays = (offset: number) => {
     const today = new Date();
@@ -66,6 +68,7 @@ function App() {
     return () => window.removeEventListener('google-auth-change', handleAuthChange);
   }, []);
 
+
   const tasks = useLiveQuery(async () => {
     if (viewMode === 'battle') {
       return await db.tasks
@@ -104,6 +107,52 @@ function App() {
     });
   }, [viewMode, weekOffset]) || [];
 
+  // Auto-sync check on start
+  useEffect(() => {
+    if (googleAuth.isSignedIn) {
+      const checkSync = async () => {
+        const payload = await googleService.loadFromDrive();
+        if (payload && payload.data) {
+          const localCount = await db.tasks.count();
+          if (localCount === 0) {
+            const { tasks: driveTasks, settings: driveSettings } = payload.data;
+            if (driveTasks) await db.tasks.bulkAdd(driveTasks);
+            if (driveSettings) {
+              for (const s of driveSettings) {
+                await db.settings.put(s);
+                if (s.id === 'gemini_api_key') setApiKey(s.value);
+                if (s.id === 'gemini_model') setSelectedModel(s.value);
+              }
+            }
+            console.log('Auto-restored from Drive (local was empty)');
+          }
+        }
+      };
+      checkSync();
+    }
+  }, [googleAuth.isSignedIn]);
+
+  // Auto-backup on change
+  useEffect(() => {
+    if (!googleAuth.isSignedIn || tasks.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const allTasks = await db.tasks.toArray();
+        const allSettings = await db.settings.toArray();
+        await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
+        const now = new Date().toLocaleString('cs-CZ');
+        setLastSync(now);
+        localStorage.setItem('last_drive_sync', now);
+        console.log('Auto-backup completed');
+      } catch (e) {
+        console.error('Auto-backup failed', e);
+      }
+    }, 10000); // Debounce 10s
+
+    return () => clearTimeout(timer);
+  }, [tasks, googleAuth.isSignedIn]);
+
   useEffect(() => {
     db.settings.get('gemini_api_key').then(setting => {
       if (setting) setApiKey(setting.value);
@@ -131,6 +180,62 @@ function App() {
     await db.settings.put({ id: 'gemini_model', value: selectedModel });
     setShowSettings(false);
     await geminiService.init();
+  };
+
+  const handleBackupToDrive = async () => {
+    if (!googleAuth.isSignedIn) return;
+    setIsSyncing(true);
+    try {
+      const allTasks = await db.tasks.toArray();
+      const allSettings = await db.settings.toArray();
+      await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
+      const now = new Date().toLocaleString('cs-CZ');
+      setLastSync(now);
+      localStorage.setItem('last_drive_sync', now);
+      alert('Záloha úspěšně uložena na Google Disk');
+    } catch (e: any) {
+      alert('Chyba při zálohování: ' + e.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleRestoreFromDrive = async () => {
+    if (!googleAuth.isSignedIn) return;
+    if (!confirm('Opravdu chcete obnovit data z Google Disku? Současná lokální data budou přepsána.')) return;
+
+    setIsSyncing(true);
+    try {
+      const payload = await googleService.loadFromDrive();
+      if (!payload || !payload.data) {
+        alert('Na Google Disku nebyla nalezena žádná záloha.');
+        return;
+      }
+
+      const { tasks: driveTasks, settings: driveSettings } = payload.data;
+
+      // Clear and restore tasks
+      await db.tasks.clear();
+      if (driveTasks) await db.tasks.bulkAdd(driveTasks);
+
+      // Restore settings if present
+      if (driveSettings) {
+        for (const s of driveSettings) {
+          await db.settings.put(s);
+          if (s.id === 'gemini_api_key') setApiKey(s.value);
+          if (s.id === 'gemini_model') setSelectedModel(s.value);
+        }
+      }
+
+      const now = new Date().toLocaleString('cs-CZ');
+      setLastSync(now);
+      localStorage.setItem('last_drive_sync', now);
+      alert('Data byla úspěšně obnovena z Google Disku.');
+    } catch (e: any) {
+      alert('Chyba při obnově dat: ' + e.message);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   useEffect(() => {
@@ -386,8 +491,6 @@ function App() {
                     {task.type === 'task' && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
                     <h3 className="text-md font-semibold text-slate-100 uppercase tracking-tight">{task.title}</h3>
                     <div className="ml-auto flex items-center gap-2">
-                      <span className="text-[8px] text-slate-600 font-mono">id:{task.id} | type:{task.type}</span>
-
                       {(task.type === 'meeting' || task.type === 'task') && googleAuth.isSignedIn && (
                         <button
                           onClick={(e) => { e.stopPropagation(); handleSyncToGoogle(task); }}
@@ -463,11 +566,10 @@ function App() {
                 <div className="space-y-2"><label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Interní poznámky</label><textarea rows={3} value={editingTask.internalNotes || ''} onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
 
                 {googleAuth.isSignedIn && (
-                  <div className="pt-2 p-3 bg-blue-500/5 rounded-2xl border border-blue-500/10">
-                    <p className="text-[9px] text-blue-400/50 uppercase font-bold mb-2 text-center">Debug: Google Sync</p>
-                    <button onClick={() => handleSyncToGoogle(editingTask)} className={`w-full py-3 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
+                  <div className="pt-2 p-3 bg-indigo-500/5 rounded-2xl border border-indigo-500/10 text-center">
+                    <button onClick={() => handleSyncToGoogle(editingTask)} className={`w-full py-3 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-indigo-600 text-white border-transparent shadow-lg shadow-indigo-600/20'}`}>
                       <Share2 className="w-4 h-4" />
-                      {editingTask.googleEventId ? 'Aktualizovat v kalendáři' : 'Odeslat do Kalendáře'}
+                      {editingTask.googleEventId ? 'Aktualizovat v kalendáři' : 'Odeslat do kalendáře'}
                     </button>
                   </div>
                 )}
@@ -512,12 +614,36 @@ function App() {
                 <div className="pt-4 border-t border-white/5 space-y-3">
                   <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Google Integrace</h3>
                   {googleAuth.isSignedIn ? (
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
                         <span className="text-xs text-emerald-400 font-bold">Připojeno</span>
                         <button onClick={() => googleService.signOut()} className="text-[10px] text-slate-500 uppercase underline">Odpojit</button>
                       </div>
-                      <button onClick={async () => { const all = await db.tasks.toArray(); await googleService.saveToDrive(all); alert('Záloha uložena'); }} className="w-full py-3 bg-indigo-600/20 text-indigo-300 rounded-xl text-xs font-bold border border-indigo-500/30">Zálohovat na Disk</button>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={handleBackupToDrive}
+                          disabled={isSyncing}
+                          className="flex flex-col items-center justify-center p-4 bg-indigo-600/10 border border-indigo-500/20 rounded-2xl text-indigo-300 transition-all hover:bg-indigo-600/20 disabled:opacity-50"
+                        >
+                          <CloudUpload className={`w-5 h-5 mb-1 ${isSyncing ? 'animate-bounce' : ''}`} />
+                          <span className="text-[10px] font-bold uppercase">Zálohovat</span>
+                        </button>
+                        <button
+                          onClick={handleRestoreFromDrive}
+                          disabled={isSyncing}
+                          className="flex flex-col items-center justify-center p-4 bg-blue-500/10 border border-blue-500/20 rounded-2xl text-blue-300 transition-all hover:bg-blue-500/20 disabled:opacity-50"
+                        >
+                          <CloudDownload className="w-5 h-5 mb-1" />
+                          <span className="text-[10px] font-bold uppercase">Obnovit</span>
+                        </button>
+                      </div>
+
+                      {lastSync && (
+                        <p className="text-center text-[9px] text-slate-600 font-mono">
+                          Poslední synchronizace: {lastSync}
+                        </p>
+                      )}
                     </div>
                   ) : <button onClick={() => googleService.signIn()} className="w-full py-4 bg-white text-slate-900 rounded-2xl text-xs font-bold uppercase flex items-center justify-center gap-2 font-black">Google Přihlášení</button>}
                 </div>
@@ -542,7 +668,7 @@ function App() {
           <button onClick={() => setViewMode('week')} className="p-4 rounded-full bg-slate-900/50 border border-white/5 text-slate-400"><LayoutGrid className="w-6 h-6" /></button>
         </div>
         <div className="text-center mt-4">
-          <span className="text-[8px] text-slate-700 uppercase font-bold tracking-widest">Bitevní Plán v1.2-DEBUG | {new Date().toLocaleTimeString()}</span>
+          <span className="text-[8px] text-slate-700 uppercase font-bold tracking-widest">Bitevní Plán v1.2 | AI Časový Architekt</span>
         </div>
       </div>
     </div>
