@@ -664,7 +664,7 @@ function App() {
                 </div>
 
               </div>
-              <div className="pt-6 flex flex-col md:flex-row gap-4 items-center border-t border-white/5">
+              <div className="pt-6 flex flex-row gap-2 md:gap-4 items-center border-t border-white/5 overflow-x-auto no-scrollbar">
                 <button
                   onClick={async () => {
                     if (editingTask.id) {
@@ -682,9 +682,11 @@ function App() {
                     }
                     setEditingTask(null);
                   }}
-                  className="order-3 md:order-1 w-full md:w-auto px-4 py-2 text-[10px] font-black uppercase text-red-500/40 hover:text-red-500 transition-colors"
+                  className="px-4 py-4 rounded-2xl bg-red-600/20 border border-red-500/30 text-red-500 text-[10px] font-black uppercase hover:bg-red-600 hover:text-white transition-all shrink-0"
+                  title="Smazat záznam"
                 >
-                  Smazat záznam
+                  <span className="hidden md:inline">Smazat záznam</span>
+                  <X className="w-4 h-4 md:hidden mx-auto" />
                 </button>
 
                 <div className="hidden md:block flex-1" />
@@ -692,18 +694,18 @@ function App() {
                 {editingTask.type === 'meeting' && googleAuth.isSignedIn && (
                   <button
                     onClick={() => handleSyncToGoogle(editingTask)}
-                    className={`order-2 w-full md:w-auto py-4 px-6 rounded-2xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-white/5 border-white/10 text-indigo-400 hover:bg-white/10'}`}
+                    className={`shrink-0 py-4 px-4 md:px-8 rounded-2xl border text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${editingTask.googleEventId ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-emerald-600/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-600 hover:text-white'}`}
                   >
                     <Share2 className="w-4 h-4" />
-                    {editingTask.googleEventId ? 'Aktualizovat kalendář' : 'Odeslat do kalendáře'}
+                    <span className="hidden md:inline">{editingTask.googleEventId ? 'Aktualizovat kalendář' : 'Odeslat do kalendáře'}</span>
                   </button>
                 )}
 
                 <button
                   onClick={handleSaveEdit}
-                  className="order-1 md:order-3 w-full md:w-auto py-4 px-12 bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-xs rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 transition-all active:scale-95"
+                  className="flex-1 md:flex-none py-4 px-8 md:px-16 bg-orange-600 hover:bg-orange-500 text-white font-black uppercase text-xs rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-orange-600/25 transition-all active:scale-95 whitespace-nowrap"
                 >
-                  <Save className="w-4 h-4" /> Uložit vše
+                  <Save className="w-4 h-4" /> <span className="hidden md:inline">Uložit vše</span><span className="md:hidden">Uložit</span>
                 </button>
               </div>
             </motion.div>
