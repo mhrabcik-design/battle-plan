@@ -21,6 +21,7 @@ export interface Task {
     status: 'pending' | 'completed' | 'cancelled';
     subTasks?: SubTask[];
     progress?: number; // 0-100
+    googleEventId?: string;
     createdAt: number;
 }
 
@@ -60,6 +61,11 @@ export class BattlePlanDB extends Dexie {
         });
         this.version(4).stores({
             tasks: '++id, type, date, deadline, urgency, status, createdAt',
+            recordings: '++id, analyzed, createdAt',
+            settings: 'id'
+        });
+        this.version(5).stores({
+            tasks: '++id, type, date, deadline, urgency, status, googleEventId, createdAt',
             recordings: '++id, analyzed, createdAt',
             settings: 'id'
         });

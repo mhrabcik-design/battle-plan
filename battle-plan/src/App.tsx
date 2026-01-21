@@ -5,6 +5,7 @@ import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { geminiService } from './services/geminiService';
+import { googleService, type GoogleAuthStatus } from './services/googleService';
 
 type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts';
 
@@ -18,6 +19,7 @@ function App() {
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
 
   // Kalendář
   const [weekOffset, setWeekOffset] = useState(0);
@@ -55,6 +57,19 @@ function App() {
       }
     };
     cleanup();
+  }, []);
+
+  // Google Initializace
+  useEffect(() => {
+    const initGoogle = async () => {
+      await googleService.init();
+      setGoogleAuth(googleService.getAuthStatus());
+    };
+    initGoogle();
+
+    const handleAuthChange = (e: any) => setGoogleAuth(e.detail);
+    window.addEventListener('google-auth-change', handleAuthChange);
+    return () => window.removeEventListener('google-auth-change', handleAuthChange);
   }, []);
 
   const tasks = useLiveQuery(async () => {
@@ -157,7 +172,7 @@ function App() {
           else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) finalType = 'meeting';
           else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) finalType = 'thought';
 
-          await db.tasks.add({
+          const newTaskId = await db.tasks.add({
             title: result.title || "Nový záznam",
             description: result.description || "",
             internalNotes: result.internalNotes || "",
@@ -172,6 +187,15 @@ function App() {
             progress: Number(result.progress) || 0,
             createdAt: Date.now()
           });
+
+          // Google Calendar Sync
+          if (finalType === 'meeting' && googleAuth.isSignedIn) {
+            const addedTask = await db.tasks.get(newTaskId);
+            if (addedTask) {
+              const eventId = await googleService.addToCalendar(addedTask);
+              if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
+            }
+          }
         }
       }
     } catch (err: any) {
@@ -210,6 +234,15 @@ function App() {
   const handleSaveEdit = async () => {
     if (editingTask && editingTask.id) {
       await db.tasks.update(editingTask.id, editingTask as any);
+
+      // Google Calendar Sync
+      if (editingTask.type === 'meeting' && googleAuth.isSignedIn) {
+        const eventId = await googleService.addToCalendar(editingTask);
+        if (eventId && eventId !== editingTask.googleEventId) {
+          await db.tasks.update(editingTask.id, { googleEventId: eventId });
+        }
+      }
+
       setEditingTask(null);
     }
   };
@@ -350,6 +383,7 @@ Odesláno z aplikace Bitevní Plán
                             <span className={`text-xs font-bold uppercase tracking-tight text-white line-clamp-1 ${t.status === 'completed' ? 'line-through' : ''}`}>
                               {t.title}
                             </span>
+                            {t.googleEventId && <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30">G</span>}
                           </div>
 
                           <div className="flex items-center gap-3 relative z-10">
@@ -405,6 +439,7 @@ Odesláno z aplikace Bitevní Plán
                     {task.type === 'thought' && <Lightbulb className="w-4 h-4 text-yellow-400" />}
                     {task.type === 'task' && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
                     <h3 className={`text-md font-semibold text-slate-100 uppercase tracking-tight ${task.status === 'completed' ? 'line-through' : ''}`}>{task.title}</h3>
+                    {task.googleEventId && <div className="ml-auto text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full border border-blue-500/30 font-bold">GOOGLE CALENDAR</div>}
                   </div>
 
                   <p className="text-slate-400 text-sm mb-2 line-clamp-1 leading-relaxed">{task.description}</p>
@@ -639,8 +674,41 @@ Odesláno z aplikace Bitevní Plán
                 <div className="flex flex-col gap-2">
                   <button onClick={async () => { const res = await geminiService.testConnection(selectedModel); alert(res); }} className="w-full py-2 bg-indigo-600/20 border border-indigo-500/30 rounded-xl text-xs text-indigo-300 font-bold">Otestovat model</button>
                 </div>
+
+                {/* Google Sync Section */}
+                <div className="pt-4 border-t border-white/5 space-y-3">
+                  <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Google Integrace</h3>
+                  {googleAuth.isSignedIn ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                          <span className="text-xs text-emerald-400 font-bold">Připojeno ke Googlu</span>
+                        </div>
+                        <button onClick={() => googleService.signOut()} className="text-[10px] text-slate-500 hover:text-white uppercase font-bold underline">Odpojit</button>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const allTasks = await db.tasks.toArray();
+                          await googleService.saveToDrive(allTasks);
+                          alert('Záloha uložena na Google Disk');
+                        }}
+                        className="w-full py-3 bg-indigo-600/20 border border-indigo-500/30 rounded-xl text-xs text-indigo-300 font-bold flex items-center justify-center gap-2"
+                      >
+                        <Save className="w-3.5 h-3.5" /> Zálohovat na Disk
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => googleService.signIn()}
+                      className="w-full py-4 bg-white text-slate-900 border border-white rounded-2xl text-xs font-bold uppercase flex items-center justify-center gap-2 hover:bg-slate-200 transition-all"
+                    >
+                      <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="Google" /> Přihlásit přes Google
+                    </button>
+                  )}
+                </div>
               </div>
-              <button onClick={saveSettings} className="w-full py-4 bg-indigo-600 rounded-2xl text-white font-bold uppercase text-xs"><Save className="w-4 h-4" /> Uložit nastavení</button>
+              <button onClick={saveSettings} className="w-full py-4 bg-indigo-600 rounded-2xl text-white font-bold uppercase text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30"><Save className="w-4 h-4" /> Uložit nastavení</button>
             </motion.div>
           </div>
         )}
