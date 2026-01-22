@@ -197,36 +197,49 @@ class GoogleService {
 
             const fileContent = JSON.stringify(payload);
             const boundary = '-------314159265358979323846';
-            const delimiter = "\r\n--" + boundary + "\r\n";
+
+            // Correct multipart format: start directly with boundary
+            const delimiter = "--" + boundary + "\r\n";
             const close_delim = "\r\n--" + boundary + "--";
 
             const body =
                 delimiter +
-                'Content-Type: application/json\r\n\r\n' +
+                'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
                 JSON.stringify(metadata) +
                 delimiter +
-                'Content-Type: application/json\r\n\r\n' +
+                'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
                 fileContent +
                 close_delim;
 
-            const method = existingFile ? 'PATCH' : 'POST';
-            const url = `https://www.googleapis.com/upload/drive/v3/files${existingFile ? '/' + existingFile.id : ''}?uploadType=multipart`;
+            const path = existingFile
+                ? `/upload/drive/v3/files/${existingFile.id}?uploadType=multipart`
+                : '/upload/drive/v3/files?uploadType=multipart';
 
-            const response = await fetch(url, {
-                method: method,
+            const response = await window.gapi.client.request({
+                path: path,
+                method: existingFile ? 'PATCH' : 'POST',
                 headers: {
-                    'Authorization': `Bearer ${this.accessToken}`,
                     'Content-Type': `multipart/related; boundary=${boundary}`
                 },
                 body: body
             });
 
-            if (!response.ok) throw new Error(`Sync failed: ${response.statusText}`);
+            if (response.status !== 200 && response.status !== 201) {
+                throw new Error(`Sync failed: ${response.statusText || response.status}`);
+            }
+
             console.log('Backup saved to Drive');
             return true;
-        } catch (err) {
+        } catch (err: any) {
             console.error('Error saving to Drive', err);
-            throw err;
+
+            if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
+                this.signOut();
+                throw new Error("Relace vypršela. Přihlaste se znovu v nastavení.");
+            }
+
+            const msg = err?.result?.error?.message || err?.message || "Chyba synchronizace";
+            throw new Error(`Disk Error: ${msg}`);
         }
     }
 
