@@ -183,11 +183,15 @@ class GoogleService {
             });
 
             const existingFile = listResponse.result.files[0];
-            const metadata = {
+            const metadata: any = {
                 name: 'battle_plan_data.json',
-                mimeType: 'application/json',
-                parents: ['appDataFolder']
+                mimeType: 'application/json'
             };
+
+            // Important: 'parents' is not allowed in PATCH (update) requests for Google Drive v3
+            if (!existingFile) {
+                metadata.parents = ['appDataFolder'];
+            }
 
             const payload = {
                 version: '1.2',
