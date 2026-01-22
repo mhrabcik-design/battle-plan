@@ -198,18 +198,14 @@ class GoogleService {
             const fileContent = JSON.stringify(payload);
             const boundary = '-------314159265358979323846';
 
-            // Correct multipart format: start directly with boundary
-            const delimiter = "--" + boundary + "\r\n";
-            const close_delim = "\r\n--" + boundary + "--";
-
             const body =
-                delimiter +
-                'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-                JSON.stringify(metadata) +
-                delimiter +
-                'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-                fileContent +
-                close_delim;
+                "--" + boundary + "\r\n" +
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+                JSON.stringify(metadata) + "\r\n" +
+                "--" + boundary + "\r\n" +
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+                fileContent + "\r\n" +
+                "--" + boundary + "--";
 
             const path = existingFile
                 ? `/upload/drive/v3/files/${existingFile.id}?uploadType=multipart`
