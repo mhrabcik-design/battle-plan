@@ -1,6 +1,24 @@
 @import "tailwindcss";
 
 @theme {
+  /* Office-inspired Palette */
+  --color-office-blue: #0078D4;
+  --color-office-blue-hover: #106EBE;
+  --color-office-blue-muted: rgba(0, 120, 212, 0.1);
+
+  --color-office-surface: #FFFFFF;
+  --color-office-bg: #F3F2F1;
+  --color-office-border: #EDEBE9;
+  --color-office-text: #323130;
+  --color-office-text-muted: #605E5C;
+
+  /* Dark Mode Office (Outlook-style) */
+  --color-office-dark-bg: #111111;
+  --color-office-dark-surface: #1B1B1B;
+  --color-office-dark-border: #2B2B2B;
+  --color-office-dark-text: #F3F2F1;
+  --color-office-dark-text-muted: #A19F9D;
+
   --color-glass-bg: rgba(255, 255, 255, 0.05);
   --color-glass-border: rgba(255, 255, 255, 0.1);
   --color-glass-accent: rgba(59, 130, 246, 0.5);
@@ -15,20 +33,32 @@
   }
 
   body {
+    /* Defaulting to a very clean, professional dark mode first, 
+       but we will use these tokens in the UI */
     @apply bg-slate-950 text-slate-50 font-body min-h-screen overflow-x-hidden;
     background-image:
-      radial-gradient(circle at 0% 0%, rgba(30, 58, 138, 0.15) 0%, transparent 50%),
-      radial-gradient(circle at 100% 100%, rgba(126, 34, 206, 0.15) 0%, transparent 50%);
+      radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.05) 0%, transparent 40%),
+      radial-gradient(circle at 0% 100%, rgba(99, 102, 241, 0.05) 0%, transparent 40%);
   }
 }
 
 @layer components {
-  .glass-card {
-    @apply bg-[var(--color-glass-bg)] border border-[var(--color-glass-border)] backdrop-blur-xl rounded-3xl shadow-2xl;
+
+  /* Office Like Components */
+  .office-card {
+    @apply bg-slate-900/50 border border-white/5 rounded-xl shadow-sm hover:shadow-md transition-all duration-200;
   }
 
-  .glass-button {
-    @apply relative overflow-hidden bg-white/10 hover:bg-white/20 border border-white/10 backdrop-blur-md px-6 py-3 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2;
+  .office-button-primary {
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-lg font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20;
+  }
+
+  .office-btn-ghost {
+    @apply text-slate-400 hover:text-white hover:bg-white/5 px-4 py-2 rounded-lg transition-all flex items-center gap-2;
+  }
+
+  .glass-card {
+    @apply bg-[var(--color-glass-bg)] border border-[var(--color-glass-border)] backdrop-blur-xl rounded-3xl shadow-2xl;
   }
 
   .premium-gradient-text {
@@ -36,25 +66,7 @@
   }
 }
 
-/* Custom animations */
-@keyframes pulse-slow {
-
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.5;
-  }
-
-  50% {
-    transform: scale(1.1);
-    opacity: 0.8;
-  }
-}
-
-.animate-pulse-slow {
-  animation: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
+/* Custom scrollbar for Office feel */
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar {
     display: none;
@@ -66,7 +78,7 @@
   }
 
   .custom-scrollbar::-webkit-scrollbar {
-    width: 4px;
+    width: 6px;
   }
 
   .custom-scrollbar::-webkit-scrollbar-track {
@@ -74,11 +86,6 @@
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    @apply bg-slate-800 rounded-full hover:bg-slate-700;
   }
 }

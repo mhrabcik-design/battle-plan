@@ -389,13 +389,6 @@ function App() {
     }
   };
 
-  const getTimeRemaining = (deadline?: string) => {
-    if (!deadline) return null;
-    const diff = new Date(deadline).getTime() - new Date().getTime();
-    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
-    return days > 0 ? `${days}d` : 'Dnes!';
-  };
-
   const getUrgencyColor = (urgency: number) => {
     switch (urgency) {
       case 5: return 'text-red-400 border-red-400/30 bg-red-400/10';
@@ -423,59 +416,107 @@ function App() {
   ];
 
   return (
-    <div className="flex h-screen bg-slate-950 overflow-hidden font-body">
-      {/* SIDEBAR FOR DESKTOP */}
-      <aside className="hidden md:flex flex-col w-64 border-r border-white/5 bg-slate-900/40 backdrop-blur-xl p-6 shrink-0 relative z-[60]">
-        <div className="flex flex-col items-start mb-10">
-          <span className="text-xl font-black uppercase tracking-tighter text-white leading-none">Bitevní Plán</span>
-          <span className="text-[10px] text-indigo-400 font-bold tracking-widest mt-1">AI ARCHITEKT v2.0</span>
+    <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
+      {/* SIDEBAR FOR DESKTOP - Office/Professional Style */}
+      <aside className="hidden md:flex flex-col w-72 border-r border-slate-800 bg-slate-900 shadow-xl shrink-0 relative z-[60]">
+        <div className="p-8 flex flex-col items-start gap-1 border-b border-slate-800 bg-slate-900/50">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-600/20">
+              <CheckCircle2 className="w-5 h-5 text-white" />
+            </div>
+            <span className="text-lg font-black uppercase tracking-tight text-white leading-none">Bitevní Plán</span>
+          </div>
+          <span className="text-[10px] text-slate-500 font-bold tracking-widest uppercase ml-10">Productivity Suite 2.0</span>
         </div>
 
-        <nav className="flex-1 space-y-2">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = viewMode === item.id;
-            return (
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-8">
+          <nav className="space-y-1">
+            <h3 className="px-4 text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] mb-4">Nástroje</h3>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = viewMode === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setViewMode(item.id as ViewMode)}
+                  className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all duration-200 group ${isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}
+                >
+                  <Icon className={`w-5 h-5 ${isActive ? 'scale-100' : 'group-hover:scale-110'} transition-transform`} />
+                  <span className="text-sm font-bold tracking-tight">{item.label}</span>
+                  {isActive && (
+                    <motion.div layoutId="active-indicator" className="ml-auto w-1.5 h-6 bg-white/20 rounded-full" />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="space-y-4">
+            <h3 className="px-4 text-[10px] font-black text-slate-600 uppercase tracking-[0.2em]">Systém</h3>
+            <div className="space-y-2">
+              {/* AI STATUS IN SIDEBAR */}
+              <div className="mx-2 flex items-center gap-3 p-4 rounded-2xl bg-slate-800/50 border border-slate-800">
+                <div className={`w-2.5 h-2.5 rounded-full ${isAiActive ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`} />
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-black text-white uppercase tracking-wider leading-none">AI ARCHITEKT</span>
+                  <span className={`text-[9px] font-bold ${isAiActive ? 'text-emerald-400' : 'text-slate-500'}`}>
+                    {isAiActive ? 'PŘIPOJENO' : 'OFFLINE'}
+                  </span>
+                </div>
+              </div>
+
               <button
-                key={item.id}
-                onClick={() => setViewMode(item.id as ViewMode)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 group ${isActive ? 'bg-indigo-600/20 text-indigo-400 shadow-[inset_0_0_20px_rgba(99,102,241,0.1)]' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                onClick={() => setShowSettings(true)}
+                className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-4 hover:bg-white/5 text-slate-400 hover:text-white rounded-2xl transition-all font-bold uppercase text-[10px] tracking-widest border border-transparent hover:border-slate-800"
               >
-                <Icon className={`w-5 h-5 ${isActive ? 'scale-110' : 'group-hover:scale-110'} transition-transform`} />
-                <span className="text-sm font-bold uppercase tracking-tight">{item.label}</span>
-                {isActive && <div className="ml-auto w-1.5 h-1.5 bg-indigo-500 rounded-full" />}
+                <Settings className={`w-5 h-5 ${isProcessing ? 'animate-spin' : ''}`} />
+                Nastavení Aplikace
               </button>
-            );
-          })}
-        </nav>
-
-        <div className="mt-auto space-y-4 pt-6 border-t border-white/5">
-          {/* AI STATUS IN SIDEBAR */}
-          <div className="flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/5">
-            <div className="flex flex-col">
-              <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none">AI Engine</span>
-              <span className={`text-[10px] font-bold ${isAiActive ? 'text-emerald-400' : 'text-slate-600'}`}>
-                {isAiActive ? 'AKTIVNÍ' : 'ODPOJENO'}
-              </span>
             </div>
-            <div className={`w-3 h-3 rounded-full ${isAiActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' : 'bg-slate-800'}`} />
           </div>
+        </div>
 
-          <button
-            onClick={() => setShowSettings(true)}
-            className="w-full flex items-center gap-3 px-4 py-4 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 rounded-2xl border border-indigo-500/10 transition-all font-black uppercase text-[10px] tracking-widest"
-          >
-            <Settings className={`w-5 h-5 ${isProcessing ? 'animate-spin' : ''}`} />
-            Nastavení
-          </button>
+        <div className="p-4 border-t border-slate-800 bg-slate-900/50">
+          <div className="flex items-center gap-3 px-3">
+            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-black text-[10px] text-indigo-400">MB</div>
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-white leading-none">Martin H.</span>
+              <span className="text-[10px] text-slate-500">Premium Plan</span>
+            </div>
+          </div>
         </div>
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 relative overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar">
-        <div className="max-w-7xl mx-auto w-full px-4 md:px-8 py-8 md:py-12 pb-32 md:pb-12">
+      <main className="flex-1 relative overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar bg-slate-950">
+        <div className="max-w-7xl mx-auto w-full px-4 md:px-12 py-6 md:py-10 pb-32 md:pb-12">
+
+          {/* DESKTOP HEADER - Office Style */}
+          <header className="hidden md:flex flex-col gap-1 mb-10 border-b border-slate-900 pb-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-3xl font-black text-white uppercase tracking-tight">
+                  {navItems.find(i => i.id === viewMode)?.label}
+                </h1>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">
+                  {viewMode === 'battle' ? 'Strategický přehled dne' :
+                    viewMode === 'week' ? 'Plánování týdenních cílů' :
+                      viewMode === 'google-tasks' ? 'Synchronizace s Google Tasks' :
+                        'Správa pracovního workflow'}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 flex items-center gap-3 w-64">
+                  <Clock className="w-4 h-4 text-slate-600" />
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">{new Date().toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+                </div>
+              </div>
+            </div>
+          </header>
+
           {/* MOBILE NAV (Hidden on Tablet/PC) */}
-          <nav className="md:hidden flex items-center justify-between bg-slate-950/80 backdrop-blur-md p-2 mb-6 rounded-2xl border border-white/5">
+          <nav className="md:hidden flex items-center justify-between bg-slate-900 p-2 mb-6 rounded-2xl border border-slate-800 shadow-xl">
             <div className="flex gap-1 overflow-x-auto no-scrollbar">
               {navItems.filter(i => !i.hideMobile).map((item) => {
                 const Icon = item.icon;
@@ -484,30 +525,24 @@ function App() {
                   <button
                     key={item.id}
                     onClick={() => setViewMode(item.id as ViewMode)}
-                    className={`flex flex-col items-center gap-1 px-4 py-3 rounded-xl transition-all ${isActive ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-500'}`}
+                    className={`flex flex-col items-center gap-1 px-4 py-3 rounded-xl transition-all ${isActive ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}
                   >
                     <Icon className="w-6 h-6" />
                   </button>
                 );
               })}
             </div>
-            <button
-              onClick={() => setShowSettings(true)}
-              className={`p-3 rounded-xl ${isAiActive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-white/5 text-slate-400'}`}
-            >
-              <Settings className="w-6 h-6" />
-            </button>
           </nav>
 
           {viewMode === 'google-tasks' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex gap-2 p-1 bg-white/5 rounded-2xl overflow-x-auto no-scrollbar">
+                <div className="flex gap-2 p-1 bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto no-scrollbar">
                   {googleTaskLists.map(list => (
                     <button
                       key={list.id}
                       onClick={() => setActiveTaskList(list.id)}
-                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase whitespace-nowrap transition-all ${activeTaskList === list.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
+                      className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase whitespace-nowrap transition-all ${activeTaskList === list.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
                     >
                       {list.title}
                     </button>
@@ -515,19 +550,18 @@ function App() {
                 </div>
                 <button
                   onClick={() => googleService.getTasks(activeTaskList).then(setGoogleTasksList)}
-                  className="p-3 bg-white/5 rounded-xl text-slate-400 hover:text-white transition-all self-end md:self-auto"
-                  title="Obnovit úkoly"
+                  className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-slate-400 hover:text-white transition-all self-end md:self-auto"
                 >
                   <Clock className={`w-5 h-5 ${isSyncing ? 'animate-spin' : ''}`} />
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 gap-3">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {googleTasksList.map((gt) => (
                   <motion.div
                     key={gt.id}
                     layout
-                    className="p-4 bg-slate-900/40 border border-white/5 rounded-2xl flex items-center gap-4 group hover:border-white/10 transition-all"
+                    className="p-5 bg-slate-900/50 border border-slate-800 rounded-2xl flex items-center gap-4 group hover:border-indigo-500/30 transition-all shadow-sm"
                   >
                     <button
                       onClick={async () => {
@@ -535,36 +569,39 @@ function App() {
                         await googleService.updateGoogleTask(gt.id, { status: newStatus }, activeTaskList);
                         googleService.getTasks(activeTaskList).then(setGoogleTasksList);
                       }}
-                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${gt.status === 'completed' ? 'bg-emerald-500 border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.4)]' : 'border-slate-700 hover:border-indigo-500'}`}
+                      className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${gt.status === 'completed' ? 'bg-emerald-600 border-emerald-600' : 'border-slate-700 hover:border-indigo-500'}`}
                     >
                       {gt.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-white" />}
                     </button>
                     <div className="flex-1 min-w-0">
                       <h3 className={`text-sm font-bold text-white truncate ${gt.status === 'completed' ? 'line-through opacity-40' : ''}`}>{gt.title}</h3>
-                      {gt.notes && <p className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">{gt.notes}</p>}
+                      {gt.notes && <p className="text-[10px] text-slate-500 line-clamp-1 mt-1 font-medium">{gt.notes}</p>}
                     </div>
                   </motion.div>
                 ))}
-                {googleTasksList.length === 0 && (
-                  <div className="py-20 text-center">
-                    <CheckCircle2 className="w-12 h-12 text-slate-800 mx-auto mb-4" />
-                    <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest">Žádné úkoly v tomto seznamu</p>
-                  </div>
-                )}
               </div>
+              {googleTasksList.length === 0 && (
+                <div className="py-20 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
+                  <CheckCircle2 className="w-12 h-12 text-slate-800 mx-auto mb-4" />
+                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest">Žádné úkoly k zobrazení</p>
+                </div>
+              )}
             </div>
           )}
 
           {viewMode === 'week' && (
-            <div className="mb-8 space-y-4">
-              <div className="flex justify-between items-center px-1 mb-4">
-                <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest">
-                  {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
-                </h2>
+            <div className="mb-8 space-y-6">
+              <div className="flex justify-between items-center bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-4">
+                  <LayoutGrid className="w-5 h-5 text-indigo-500" />
+                  <h2 className="text-sm font-black text-white uppercase tracking-widest">
+                    {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
+                  </h2>
+                </div>
                 <div className="flex gap-2">
-                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-xl bg-white/5 text-slate-400 active:scale-95"><ChevronLeft className="w-4 h-4" /></button>
-                  <button onClick={() => setWeekOffset(0)} className="px-3 py-1 rounded-xl bg-white/5 text-[10px] font-bold text-slate-400 uppercase">Dnes</button>
-                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-xl bg-white/5 text-slate-400 active:scale-95"><ChevronRight className="w-4 h-4" /></button>
+                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-all"><ChevronLeft className="w-4 h-4" /></button>
+                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-xl bg-slate-800 text-[10px] font-bold text-white uppercase tracking-widest hover:bg-slate-700 transition-all">Dnes</button>
+                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-all"><ChevronRight className="w-4 h-4" /></button>
                 </div>
               </div>
 
@@ -572,11 +609,11 @@ function App() {
                 {getWeekDays(weekOffset).map((day) => {
                   const dayTasks = tasks.filter(t => (t.date === day.full || t.deadline === day.full));
                   return (
-                    <div key={day.full} className={`p-4 rounded-3xl border transition-all ${day.isToday ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-white/2 border-white/5'}`}>
-                      <div className="flex justify-between items-center mb-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-400' : 'text-slate-600'}`}>{day.dayName}</span>
-                          <span className={`text-lg font-display font-black ${day.isToday ? 'text-white' : 'text-slate-400'}`}>{day.dayNum}</span>
+                    <div key={day.full} className={`p-6 rounded-2xl border transition-all ${day.isToday ? 'bg-indigo-600/5 border-indigo-500/20 shadow-lg shadow-indigo-600/5' : 'bg-slate-900/40 border-slate-800'}`}>
+                      <div className="flex justify-between items-center mb-5 border-b border-slate-800 pb-3">
+                        <div className="flex items-center gap-3">
+                          <span className={`text-[10px] uppercase font-black tracking-[0.2em] ${day.isToday ? 'text-indigo-400' : 'text-slate-500'}`}>{day.dayName}</span>
+                          <span className={`text-xl font-black ${day.isToday ? 'text-white' : 'text-slate-300'}`}>{day.dayNum}</span>
                         </div>
                       </div>
                       <div className="space-y-2">
@@ -607,77 +644,88 @@ function App() {
             <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-start">
               <AnimatePresence mode="popLayout">
                 {tasks.length === 0 ? (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-12 text-center">
-                    <AlertCircle className="w-10 h-10 text-slate-700 mx-auto mb-4" />
-                    <p className="text-slate-500 text-sm italic">Prázdnota. Něco jí řekněte.</p>
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-20 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
+                    <AlertCircle className="w-12 h-12 text-slate-800 mx-auto mb-4" />
+                    <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest">Seznam je prázdný</p>
                   </motion.div>
                 ) : (
                   tasks.map((task) => (
-                    <motion.div key={task.id} layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }} className={`glass-card p-5 group transition-all duration-300 ${task.status === 'completed' ? 'opacity-40' : ''}`}>
-                      <div className="flex justify-between items-start mb-3">
-                        <div className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full border ${getUrgencyColor(task.urgency)}`}>Urgence {task.urgency}</div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-xl bg-white/5 text-slate-300 hover:text-indigo-400 hover:bg-indigo-400/10 transition-all"><Mail className="w-3.5 h-3.5" /></button>
-                          <span className="text-slate-300 text-[10px] font-medium flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {task.startTime && <span className="text-white font-bold">{task.startTime}</span>}
-                            {getTimeRemaining(task.deadline || task.date)}
-                          </span>
+                    <motion.div
+                      key={task.id}
+                      layout
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.98 }}
+                      className={`p-6 bg-slate-900/40 border border-slate-800 rounded-2xl group transition-all duration-300 hover:border-slate-700 shadow-lg ${task.status === 'completed' ? 'opacity-40 grayscale-[0.5]' : ''}`}
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <div className={`text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-md border ${getUrgencyColor(task.urgency)}`}>
+                          Přednost {task.urgency}
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2 mb-1">
-                        {task.type === 'meeting' && <Users className="w-4 h-4 text-orange-400" />}
-                        {task.type === 'thought' && <Lightbulb className="w-4 h-4 text-yellow-400" />}
-                        {task.type === 'task' && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
-                        <h3 className="text-md font-semibold text-slate-100 uppercase tracking-tight">{task.title}</h3>
-                        <div className="ml-auto flex items-center gap-2">
-                          {(task.type === 'meeting' || task.type === 'task') && googleAuth.isSignedIn && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleSyncToGoogle(task); }}
-                              className={`p-1.5 rounded-lg border transition-all flex items-center gap-1 ${task.googleEventId ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}
-                              title={task.googleEventId ? "Aktualizovat v kalendáři" : "Odeslat do kalendáře"}
-                            >
-                              <Share2 className="w-3 h-3" />
-                              <span className="text-[9px] font-bold uppercase">{task.googleEventId ? 'Sync' : 'Odeslat'}</span>
-                            </button>
+                        <div className="flex items-center gap-2">
+                          <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-lg bg-slate-800 text-slate-500 hover:text-white transition-all"><Mail className="w-4 h-4" /></button>
+                          {task.startTime && (
+                            <div className="h-6 px-2 bg-slate-800 rounded-md flex items-center gap-1.5 border border-slate-700">
+                              <Clock className="w-3 h-3 text-indigo-400" />
+                              <span className="text-[10px] font-black text-white">{task.startTime}</span>
+                            </div>
                           )}
                         </div>
                       </div>
-                      <p className="text-slate-200 text-sm mb-2 line-clamp-1 leading-relaxed">{task.description}</p>
+
+                      <div className="mb-4">
+                        <div className="flex items-start gap-3">
+                          <div className={`mt-0.5 p-2 rounded-lg ${task.type === 'meeting' ? 'bg-orange-500/10 text-orange-400' : task.type === 'thought' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-indigo-500/10 text-indigo-400'}`}>
+                            {task.type === 'meeting' ? <Users className="w-4 h-4" /> : task.type === 'thought' ? <Lightbulb className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h3 className="text-sm font-black text-white uppercase tracking-tight leading-tight mb-1 group-hover:text-indigo-400 transition-colors">{task.title}</h3>
+                            <p className="text-xs text-slate-500 line-clamp-2 font-medium leading-relaxed">{task.description}</p>
+                          </div>
+                        </div>
+                      </div>
 
                       {task.subTasks && task.subTasks.length > 0 && (
-                        <div className="space-y-1 mb-4">
+                        <div className="space-y-2 mb-6 ml-11">
                           {task.subTasks.slice(0, 3).map(st => (
-                            <button key={st.id} onClick={() => toggleSubtask(task, st.id)} className="flex items-center gap-2 text-[11px] text-slate-400 w-full text-left">
-                              <div className={`w-3.5 h-3.5 rounded-md border border-white/20 flex items-center justify-center shrink-0 ${st.completed ? 'bg-indigo-500 border-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]' : 'bg-white/5'}`}>
-                                {st.completed && <CheckCircle2 className="w-2.5 h-2.5 text-white" />}
+                            <button key={st.id} onClick={() => toggleSubtask(task, st.id)} className="flex items-center gap-2 group/st w-full">
+                              <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-slate-700 group-hover/st:border-indigo-500'}`}>
+                                {st.completed && <CheckCircle2 className="w-3 h-3 text-white" />}
                               </div>
-                              <span className={st.completed ? 'line-through opacity-50' : ''}>{st.title}</span>
+                              <span className={`text-[11px] font-bold ${st.completed ? 'text-slate-600 line-through' : 'text-slate-400 group-hover/st:text-slate-200'}`}>{st.title}</span>
                             </button>
                           ))}
+                          {task.subTasks.length > 3 && (
+                            <div className="text-[10px] text-slate-600 font-bold uppercase">+ {task.subTasks.length - 3} dalších</div>
+                          )}
                         </div>
                       )}
 
                       {task.status === 'pending' && (task.type === 'task' || task.type === 'meeting') && (
-                        <div className="space-y-3 mb-5 mt-4">
-                          <div className="space-y-1">
-                            <div className="flex justify-between text-[10px] font-bold text-slate-300 uppercase"><span>Pokrok</span><span>{task.progress || 0}%</span></div>
-                            <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                              <motion.div initial={{ width: 0 }} animate={{ width: `${task.progress || 0}%` }} className={`h-full ${task.type === 'meeting' ? 'bg-orange-500' : 'bg-indigo-500'}`} />
-                            </div>
+                        <div className="mb-8 ml-11">
+                          <div className="flex justify-between items-end mb-1.5 px-0.5">
+                            <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Stav plnění</span>
+                            <span className="text-[10px] font-black text-white">{task.progress || 0}%</span>
                           </div>
-
-                          {/* Sync button moved to header */}
+                          <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <motion.div initial={{ width: 0 }} animate={{ width: `${task.progress || 0}%` }} className={`h-full ${task.type === 'meeting' ? 'bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.4)]' : 'bg-indigo-600 shadow-[0_0_10px_rgba(79,70,229,0.4)]'}`} />
+                          </div>
                         </div>
                       )}
 
-                      <div className="flex gap-2 mt-4">
-                        <button onClick={async () => { if (task.id) await db.tasks.update(task.id, { status: task.status === 'completed' ? 'pending' : 'completed' }); }} className={`glass-button py-2 px-3 text-[11px] flex-1 ${task.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-white/5'}`}>
-                          <CheckCircle2 className="w-3.5 h-3.5" /> {task.status === 'completed' ? 'Splněno' : 'Splnit'}
+                      <div className="flex gap-2 pt-4 border-t border-slate-800 mt-auto">
+                        <button
+                          onClick={async () => { if (task.id) await db.tasks.update(task.id, { status: task.status === 'completed' ? 'pending' : 'completed' }); }}
+                          className={`h-10 px-4 flex-1 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2 ${task.status === 'completed' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                        >
+                          {task.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
+                          {task.status === 'completed' ? 'Dokončeno' : 'Splnit'}
                         </button>
-                        <button onClick={() => setEditingTask(task)} className="glass-button py-2 px-3 text-[11px] flex-1"><FileText className="w-3.5 h-3.5" /> Upravit</button>
-                        <button onClick={() => { if (activeVoiceUpdateId === task.id) { stopRecording(); } else { setActiveVoiceUpdateId(task.id!); startRecording(); } }} className={`glass-button py-2 px-3 text-[11px] flex-1 ${activeVoiceUpdateId === task.id ? 'bg-red-500 text-white' : 'text-indigo-400'}`}>
-                          <Mic className="w-3.5 h-3.5" /> Hlasem
+                        <button onClick={() => setEditingTask(task)} className="h-10 px-4 flex-1 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2">
+                          <FileText className="w-3.5 h-3.5" /> Detaily
+                        </button>
+                        <button onClick={() => { if (activeVoiceUpdateId === task.id) { stopRecording(); } else { setActiveVoiceUpdateId(task.id!); startRecording(); } }} className={`h-10 px-4 rounded-xl transition-all border ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-600/10 border-indigo-600/20 text-indigo-400 hover:bg-indigo-600/20'}`}>
+                          <Mic className="w-4 h-4" />
                         </button>
                       </div>
                     </motion.div>
@@ -690,46 +738,47 @@ function App() {
           <AnimatePresence>
             {editingTask && (
               <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-slate-950/90 backdrop-blur-sm overflow-y-auto pt-10 pb-10">
-                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="glass-card w-full max-w-md md:max-w-7xl p-8 space-y-6 my-auto">
-                  <div className="flex justify-between items-center"><h2 className="text-xl font-bold text-white uppercase tracking-tight">Detail záznamu</h2><button onClick={() => setEditingTask(null)} className="p-2 text-slate-500 hover:text-white"><X /></button></div>
-                  <div className="space-y-4 max-h-[70vh] overflow-y-auto px-1">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest pl-1">Název</label>
-                          <input type="text" value={editingTask.title} onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none" />
-                          <div className="grid grid-cols-12 gap-2">
-                            <select value={editingTask.type} onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any })} className="col-span-4 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]"><option value="task">Úkol</option><option value="meeting">Schůzka</option><option value="thought">Myšlenka</option></select>
-                            <input type="date" value={editingTask.date || editingTask.deadline || ''} onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value })} className="col-span-5 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
-                            <input type="time" value={editingTask.startTime || ''} onChange={(e) => setEditingTask({ ...editingTask, startTime: e.target.value })} className="col-span-3 bg-slate-900 border border-white/10 rounded-xl px-2 py-3 text-white text-[10px]" />
+                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="w-full max-w-md md:max-w-7xl p-8 space-y-8 my-auto bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600" />
+                  <div className="flex justify-between items-center"><h2 className="text-xl font-black text-white uppercase tracking-tight">Vlastnosti záznamu</h2><button onClick={() => setEditingTask(null)} className="p-2 text-slate-500 hover:text-white transition-colors"><X className="w-6 h-6" /></button></div>
+                  <div className="space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar px-1">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] pl-1">Základní informace</label>
+                          <input type="text" value={editingTask.title} onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-5 py-3.5 text-white font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all" placeholder="Název úkolu..." />
+                          <div className="grid grid-cols-12 gap-3">
+                            <select value={editingTask.type} onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any })} className="col-span-4 bg-slate-800 border border-slate-700 rounded-xl px-2 py-3.5 text-white text-[10px] font-bold uppercase tracking-widest"><option value="task">Úkol</option><option value="meeting">Schůzka</option><option value="thought">Myšlenka</option></select>
+                            <input type="date" value={editingTask.date || editingTask.deadline || ''} onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value })} className="col-span-5 bg-slate-800 border border-slate-700 rounded-xl px-4 py-3.5 text-white text-[10px] font-bold" />
+                            <input type="time" value={editingTask.startTime || ''} onChange={(e) => setEditingTask({ ...editingTask, startTime: e.target.value })} className="col-span-3 bg-slate-800 border border-slate-700 rounded-xl px-4 py-3.5 text-white text-[10px] font-bold" />
                           </div>
                         </div>
-                        <div className="space-y-2"><label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest pl-1">Popis</label><textarea rows={5} value={editingTask.description} onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
-                        <div className="space-y-2"><label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest pl-1">Interní poznámky</label><textarea rows={5} value={editingTask.internalNotes || ''} onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm" /></div>
+                        <div className="space-y-3"><label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] pl-1">Podrobný popis</label><textarea rows={4} value={editingTask.description} onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-5 py-4 text-white text-sm font-medium focus:border-indigo-500 outline-none transition-all" /></div>
+                        <div className="space-y-3"><label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] pl-1">Interní poznámky</label><textarea rows={4} value={editingTask.internalNotes || ''} onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl px-5 py-4 text-white text-sm font-medium focus:border-indigo-500 outline-none transition-all" /></div>
                       </div>
 
-                      <div className="hidden md:flex flex-col space-y-4 border-l border-white/5 pl-8">
+                      <div className="hidden md:flex flex-col space-y-6 border-l border-slate-800 pl-10">
                         <div className="flex justify-between items-center">
-                          <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Podúkoly (Bullet points)</label>
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Checklist / Postup</label>
                           <button
                             onClick={() => {
                               const newSubTasks = [...(editingTask.subTasks || []), { id: Date.now().toString(), title: '', completed: false }];
                               setEditingTask({ ...editingTask, subTasks: newSubTasks });
                             }}
-                            className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded-lg border border-indigo-500/30 hover:bg-indigo-500/30 transition-all font-black uppercase"
+                            className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg transition-all font-black uppercase tracking-widest shadow-lg shadow-indigo-600/20"
                           >
-                            + Přidat bod
+                            + Nový bod
                           </button>
                         </div>
-                        <div className="space-y-2 max-h-[400px] overflow-y-auto no-scrollbar">
+                        <div className="space-y-3 max-h-[450px] overflow-y-auto no-scrollbar pr-2">
                           {editingTask.subTasks?.map((st) => (
-                            <div key={st.id} className="flex gap-3 items-start group bg-white/2 p-2 rounded-xl border border-white/5 hover:border-white/10 transition-all">
+                            <div key={st.id} className="flex gap-4 items-start group bg-slate-800/40 p-3 rounded-xl border border-slate-800 hover:border-slate-700 transition-all">
                               <button
                                 onClick={() => {
                                   const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, completed: !item.completed } : item);
                                   setEditingTask({ ...editingTask, subTasks: newSubTasks });
                                 }}
-                                className={`w-6 h-6 rounded-lg border border-white/20 flex items-center justify-center shrink-0 mt-1 ${st.completed ? 'bg-indigo-500 border-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]' : 'bg-white/5'}`}
+                                className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${st.completed ? 'bg-indigo-600 border-indigo-600 shadow-lg shadow-indigo-600/30' : 'bg-slate-900 border-slate-700 hover:border-indigo-500'}`}
                               >
                                 {st.completed && <CheckCircle2 className="w-4 h-4 text-white" />}
                               </button>
@@ -740,14 +789,9 @@ function App() {
                                   const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, title: e.target.value } : item);
                                   setEditingTask({ ...editingTask, subTasks: newSubTasks });
                                 }}
-                                className={`bg-transparent border-none focus:ring-0 rounded-lg px-2 py-1 text-sm flex-1 text-white resize-none min-h-[32px] w-full overflow-hidden ${st.completed ? 'line-through opacity-40' : ''}`}
-                                placeholder="Název podúkolu..."
+                                className={`bg-transparent border-none focus:ring-0 rounded-lg px-2 py-1 text-sm flex-1 text-white resize-none min-h-[32px] w-full overflow-hidden ${st.completed ? 'line-through text-slate-500' : 'font-bold'}`}
+                                placeholder="Název kroku..."
                                 onInput={(e) => {
-                                  const target = e.target as HTMLTextAreaElement;
-                                  target.style.height = 'auto';
-                                  target.style.height = target.scrollHeight + 'px';
-                                }}
-                                onFocus={(e) => {
                                   const target = e.target as HTMLTextAreaElement;
                                   target.style.height = 'auto';
                                   target.style.height = target.scrollHeight + 'px';
@@ -758,29 +802,21 @@ function App() {
                                   const newSubTasks = editingTask.subTasks?.filter(item => item.id !== st.id);
                                   setEditingTask({ ...editingTask, subTasks: newSubTasks });
                                 }}
-                                className="p-2 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                                className="p-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all self-center"
                               >
-                                <X className="w-3.5 h-3.5" />
+                                <X className="w-4 h-4" />
                               </button>
                             </div>
                           ))}
                           {(!editingTask.subTasks || editingTask.subTasks.length === 0) && (
-                            <p className="text-[10px] text-slate-600 italic text-center py-4">Žádné podúkoly. Klikněte na "+ Přidat bod".</p>
+                            <p className="text-[10px] text-slate-600 font-bold uppercase text-center py-10 opacity-50 tracking-[0.2em]">Žádné kroky definovány</p>
                           )}
                         </div>
                       </div>
                     </div>
-                    {googleAuth.isSignedIn && (
-                      <div className="pt-2 p-3 bg-indigo-500/5 rounded-2xl border border-indigo-500/10 text-center mb-4">
-                        <button onClick={() => handleSyncToGoogle(editingTask)} className="w-full py-3 rounded-xl border border-indigo-500/30 text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white">
-                          <Share2 className="w-4 h-4" />
-                          {editingTask.googleEventId ? 'Synchronizovat kalendář' : 'Přidat do kalendáře'}
-                        </button>
-                      </div>
-                    )}
                   </div>
 
-                  <div className="pt-6 flex flex-row gap-3 items-center border-t border-white/5">
+                  <div className="pt-8 flex flex-row gap-4 items-center border-t border-slate-800">
                     {/* Smazat - samostatně vlevo pro bezpečnost */}
                     <button
                       onClick={async () => {
