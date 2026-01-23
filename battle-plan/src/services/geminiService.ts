@@ -107,11 +107,11 @@ Dnešní datum je: ${today} (čas: ${now}). ${contextInfo}
 
 Z audia vytvoř POUZE JSON objekt s těmito poli:
 - title: Krátký, úderný název (max 5 slov, velká písmena).
-- description: Veřejný shrnující popis.
+- description: Veřejný shrnující popis. PRO SCHŮZKY: Musí obsahovat strukturovaně: KDO, KDE, PROJEKT a TÉMA (pokud jsou v audiu).
 - internalNotes: Interní detaily, podrobné zápisy ze schůzek (např. co se domluvilo při cestě autem).
 - type: 'task' (úkol), 'meeting' (schůzka) nebo 'thought' (myšlenka).
 - urgency: Číslo 1 až 5.
-- duration: Odhadovaná délka v minutách (číslo).
+- duration: Odhadovaná délka v minutách (číslo). Schůzky obvykle 30-60 min, pokud není řečeno jinak.
 - date: Datum zahájení (YYYY-MM-DD).
 - startTime: Čas zahájení schůzky nebo úkolu (HH:mm). Pokud čas není v audiu explicitně uveden, odhadni ho (např. 'dopoledne' -> '09:00', 'odpoledne' -> '14:00') nebo nech prázdný.
 - deadline: Datum uzávěrky (YYYY-MM-DD).
@@ -119,20 +119,24 @@ Z audia vytvoř POUZE JSON objekt s těmito poli:
 - progress: Číslo 0-100. AI odhadne progres na základě splněných pod-úkolů nebo obsahu audia.
 
 DŮLEŽITÉ POKYNY:
-1. PŘI AKTUALIZACI: Pokud uživatel doplňuje informace ("zapiš si ze schůzky...", "doplň k úkolu..."), ulož to primárně do "internalNotes". 
-2. Zachovej původní title a description, pokud nejsou měněny.
-3. Pokud uživatel nadiktuje seznam věcí ("musím udělat A, B a C"), vytvoř z nich "subTasks".
-4. Vrať POUZE čistý JSON. Žádný text okolo.
+1. **SPECIALIZACE NA SCHŮZKY (Meeting standard)**: Pokud detekuješ typ 'meeting', musíš v audiu AKTIVNĚ hledat a v popisu/poznámkách jasně strukturovat:
+   - **S KÝM**: Jména osob nebo firem.
+   - **KDE**: Lokalita (kancelář, kavárna, Teams link).
+   - **PROJEKT**: Název projektu, kterého se to týká.
+   - **KDY**: Přesný čas a den.
+   Pokud některý z těchto 4 bodů v audiu chybí, přidej do internalNotes poznámku: "[!] Chybí info: [název chybějícího bodu]".
+2. **PŘI AKTUALIZACI**: Pokud uživatel doplňuje informace ("zapiš si ze schůzky...", "doplň k úkolu..."), ulož to primárně do "internalNotes". 
+3. Zachovej původní title a description, pokud nejsou měněny.
+4. Pokud uživatel nadiktuje seznam věcí ("musím udělat A, B a C"), vytvoř z nich "subTasks".
+5. Vrať POUZE čistý JSON. Žádný text okolo.
 
-Příklad výstupu pro komplexní úkol:
+Příklad výstupu pro schůzku:
 {
-  "title": "NÁVRH PROJEKTU",
-  "type": "task",
-  "subTasks": [
-    { "id": "1", "title": "Analýza požadavků", "completed": false },
-    { "id": "2", "title": "Náčrt architektury", "completed": false }
-  ],
-  "progress": 0
+  "title": "SCHŮZKA INVESTICE",
+  "description": "KDO: Jan Novák | KDE: Restaurace Mánes | PROJEKT: Alpha | TÉMA: Review rozpočtu",
+  "type": "meeting",
+  "startTime": "14:00",
+  "urgency": 4
 }`;
 
 
