@@ -106,7 +106,7 @@ Tvým úkolem je analyzovat zvukový záznam (v češtině) a extrahovat z něj 
 Dnešní datum je: ${today} (čas: ${now}). ${contextInfo}
 
 Z audia vytvoř POUZE JSON objekt s těmito poli:
-- title: Krátký, úderný název (max 5 slov, velká písmena).
+- title: Krátký, úderný název (max 5 slov, velká písmena). PRO SCHŮZKY: Povinný formát "S KÝM: TÉMA" (např. "JAN NOVÁK: REVIZE PROJEKTU").
 - description: Veřejný shrnující popis. PRO SCHŮZKY: Musí obsahovat strukturovaně: KDO, KDE, PROJEKT a TÉMA (pokud jsou v audiu).
 - internalNotes: Interní detaily, podrobné zápisy ze schůzek (např. co se domluvilo při cestě autem).
 - type: 'task' (úkol), 'meeting' (schůzka) nebo 'thought' (myšlenka).
@@ -116,7 +116,7 @@ Z audia vytvoř POUZE JSON objekt s těmito poli:
 - startTime: Čas zahájení schůzky nebo úkolu (HH:mm). Pokud čas není v audiu explicitně uveden, odhadni ho (např. 'dopoledne' -> '09:00', 'odpoledne' -> '14:00') nebo nech prázdný.
 - deadline: Datum uzávěrky (YYYY-MM-DD).
 - subTasks: Pole objektů [{ id: string, title: string, completed: boolean }]. Buď INICIATIVNÍ: pokud je úkol komplexní, automaticky ho rozděl na logické pod-úkoly.
-- progress: Číslo 0-100. AI odhadne progres na základě splněných pod-úkolů nebo obsahu audia.
+- progress: Číslo 0-100.
 
 DŮLEŽITÉ POKYNY:
 1. **SPECIALIZACE NA SCHŮZKY (Meeting standard)**: Pokud detekuješ typ 'meeting', musíš v audiu AKTIVNĚ hledat a v popisu/poznámkách jasně strukturovat:

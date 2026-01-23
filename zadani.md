@@ -24,7 +24,7 @@ Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-F
    - **Dynamické Sloupce:** Sloupce dnů se roztahují dynamicky až dolů na konec stránky bez vnějšího scrollování stránky.
    - **Pozicování dle Času:** Schůzky a úkoly s časem se zobrazují na příslušném místě v časové ose.
    - **Indikátor Aktuálního Času:** Červená linka ukazující aktuální čas.
-   - **Vizuální Styl:** Profesionální "office" look, indigo pro schůzky, tmavý/oranžový styl pro úkoly.
+   - **Vizuální Styl:** Profesionální "office" look, indigo pro schůzky, tmavý/oranžový styl pro úkoly. Víkendy (sobota, neděle) jsou vizuálně odlišeny tmavším pozadím sloupců.
 
 3. **Maximalizovaná Editace (Focus Mode):**
    - Při rozkliknutí úkolu nebo meetingu se otevře editační okno dynamicky přes celou obrazovku (Focus Mode).

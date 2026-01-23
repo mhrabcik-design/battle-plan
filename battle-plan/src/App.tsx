@@ -94,7 +94,8 @@ function App() {
         full: d.toISOString().split('T')[0],
         dayName: d.toLocaleDateString('cs-CZ', { weekday: 'short' }),
         dayNum: d.getDate(),
-        isToday: d.toISOString().split('T')[0] === new Date().toISOString().split('T')[0]
+        isToday: d.toISOString().split('T')[0] === new Date().toISOString().split('T')[0],
+        isWeekend: d.getDay() === 0 || d.getDay() === 6
       };
     });
   };
@@ -703,12 +704,12 @@ function App() {
                     const dayTasks = tasks.filter(t => (t.date === day.full || t.deadline === day.full));
 
                     return (
-                      <div key={day.full} className={`relative border-r border-slate-800/40 last:border-r-0 pt-10 ${day.isToday ? 'bg-indigo-500/5' : ''}`}>
+                      <div key={day.full} className={`relative border-r border-slate-800/40 last:border-r-0 pt-10 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-slate-950/30' : ''}`}>
 
                         {/* DAY HEADER */}
-                        <div className="absolute top-0 left-0 w-full h-10 border-b border-slate-800/60 flex flex-col items-center justify-center bg-slate-900/20 backdrop-blur-sm z-20">
-                          <span className={`text-[8px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-400' : 'text-slate-500'}`}>{day.dayName}</span>
-                          <span className={`text-sm font-black leading-none ${day.isToday ? 'text-white' : 'text-slate-300'}`}>{day.dayNum}</span>
+                        <div className={`absolute top-0 left-0 w-full h-10 border-b border-slate-800/60 flex flex-col items-center justify-center backdrop-blur-sm z-20 ${day.isToday ? 'bg-indigo-500/10' : day.isWeekend ? 'bg-slate-950/40' : 'bg-slate-900/20'}`}>
+                          <span className={`text-[8px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-400' : day.isWeekend ? 'text-slate-500' : 'text-slate-500'}`}>{day.dayName}</span>
+                          <span className={`text-sm font-black leading-none ${day.isToday ? 'text-white' : day.isWeekend ? 'text-slate-400' : 'text-slate-300'}`}>{day.dayNum}</span>
                         </div>
 
                         {/* HOUR GRID LINES */}
