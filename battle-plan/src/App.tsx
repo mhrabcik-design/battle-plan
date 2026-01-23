@@ -96,7 +96,19 @@ function App() {
 
     const handleAuthChange = (e: any) => setGoogleAuth(e.detail);
     window.addEventListener('google-auth-change', handleAuthChange);
-    return () => window.removeEventListener('google-auth-change', handleAuthChange);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setEditingTask(null);
+        setShowSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('google-auth-change', handleAuthChange);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
 
@@ -105,6 +117,7 @@ function App() {
       return await db.tasks
         .where('status').equals('pending')
         .and(t => (t.date || t.deadline || '') >= new Date().toISOString().split('T')[0])
+        .and(t => t.type !== 'thought' && t.type !== 'note')
         .toArray()
         .then(all => all.sort((a, b) => {
           const dateA = a.date || a.deadline || '9999-12-31';
@@ -122,7 +135,7 @@ function App() {
         .where('date').between(start, end, true, true)
         .or('deadline').between(start, end, true, true)
         .toArray();
-      return all.filter(t => t.status !== 'completed');
+      return all.filter(t => t.status !== 'completed' && t.type !== 'thought' && t.type !== 'note');
     }
 
     let collection;
@@ -820,10 +833,10 @@ function App() {
 
                   {/* EDITOR CONTENT - SCROLLABLE AREA */}
                   <div className="flex-1 overflow-y-auto no-scrollbar">
-                    <div className="max-w-[1400px] mx-auto grid grid-cols-1 lg:grid-cols-12 h-full">
+                    <div className="grid grid-cols-1 lg:grid-cols-12 h-full w-full">
 
                       {/* MAIN CONTENT (LEFT) */}
-                      <div className="lg:col-span-8 p-6 md:p-12 space-y-10 border-r border-slate-800/50">
+                      <div className="lg:col-span-8 p-6 md:p-10 space-y-8 border-r border-slate-800/50">
                         <div className="space-y-3">
                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Název aktivity</label>
                           <input
@@ -1080,13 +1093,13 @@ function App() {
               </div>
             )}
           </AnimatePresence>
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:right-10 md:translate-x-0 z-[100]">
+          <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 ${editingTask ? 'md:left-72 md:right-auto md:translate-x-0' : 'md:left-auto md:right-10 md:translate-x-0'} z-[110] transition-all duration-500`}>
             <div className="relative">
               <AnimatePresence>
                 {isRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
               </AnimatePresence>
-              <button onClick={isRecording ? stopRecording : () => { setActiveVoiceUpdateId(null); startRecording(); }} disabled={isProcessing} className={`relative z-10 w-20 h-20 md:w-24 md:h-24 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}>
-                {isProcessing ? <div className="w-8 h-8 md:w-10 md:h-10 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (isRecording ? <MicOff className="w-8 h-8 md:w-10 md:h-10 text-white" /> : <Mic className="w-8 h-8 md:w-10 md:h-10 text-white" />)}
+              <button onClick={isRecording ? stopRecording : () => { setActiveVoiceUpdateId(null); startRecording(); }} disabled={isProcessing} className={`relative z-10 w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}>
+                {isProcessing ? <div className="w-6 h-6 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (isRecording ? <MicOff className="w-6 h-6 md:w-8 md:h-8 text-white" /> : <Mic className="w-6 h-6 md:w-8 md:h-8 text-white" />)}
               </button>
             </div>
           </div>
