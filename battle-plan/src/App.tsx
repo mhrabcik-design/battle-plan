@@ -373,6 +373,11 @@ function App() {
             else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) result.type = 'thought' as any;
           }
           await db.tasks.update(updateId, result as any);
+
+          // Pokud je tento úkol právě otevřen v editačním okně, aktualizujeme i jeho lokální stav
+          if (editingTask && editingTask.id === updateId) {
+            setEditingTask(prev => prev ? { ...prev, ...result } : null);
+          }
         } else {
           let finalType: Task['type'] = 'thought';
           const aiType = String(result.type || 'thought').toLowerCase();
@@ -895,7 +900,24 @@ function App() {
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none mt-1">Hluboká editace a detail záznamu</p>
                       </div>
                     </div>
-                    <button onClick={() => setEditingTask(null)} className="p-3 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition-all shadow-lg active:scale-95"><X className="w-6 h-6" /></button>
+                    <div className="flex items-center gap-3">
+                      {!editingTask.isGoogleTask && (
+                        <button
+                          onClick={() => {
+                            if (activeVoiceUpdateId === editingTask.id) {
+                              stopRecording();
+                            } else {
+                              setActiveVoiceUpdateId(editingTask.id!);
+                              startRecording();
+                            }
+                          }}
+                          className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 border ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-indigo-600/20 border-indigo-600/30 text-indigo-400 hover:bg-indigo-600/40'}`}
+                        >
+                          {activeVoiceUpdateId === editingTask.id ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                        </button>
+                      )}
+                      <button onClick={() => setEditingTask(null)} className="p-3 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition-all shadow-lg active:scale-95"><X className="w-6 h-6" /></button>
+                    </div>
                   </div>
 
                   {/* EDITOR CONTENT - SCROLLABLE AREA */}
@@ -1165,7 +1187,15 @@ function App() {
               <AnimatePresence>
                 {isRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
               </AnimatePresence>
-              <button onClick={isRecording ? stopRecording : () => { setActiveVoiceUpdateId(null); startRecording(); }} disabled={isProcessing} className={`relative z-10 w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}>
+              <button
+                onClick={isRecording ? stopRecording : () => {
+                  // Pokud je otevřený Focus Mode, automaticky měníme otevřený úkol
+                  setActiveVoiceUpdateId(editingTask?.id || null);
+                  startRecording();
+                }}
+                disabled={isProcessing}
+                className={`relative z-10 w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
+              >
                 {isProcessing ? <div className="w-6 h-6 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (isRecording ? <MicOff className="w-6 h-6 md:w-8 md:h-8 text-white" /> : <Mic className="w-6 h-6 md:w-8 md:h-8 text-white" />)}
               </button>
             </div>

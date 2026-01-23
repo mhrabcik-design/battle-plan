@@ -125,7 +125,9 @@ DŮLEŽITÉ POKYNY:
    - **PROJEKT**: Název projektu, kterého se to týká.
    - **KDY**: Přesný čas a den.
    Pokud některý z těchto 4 bodů v audiu chybí, přidej do internalNotes poznámku: "[!] Chybí info: [název chybějícího bodu]".
-2. **PŘI AKTUALIZACI**: Pokud uživatel doplňuje informace ("zapiš si ze schůzky...", "doplň k úkolu..."), ulož to primárně do "internalNotes". 
+2. **PŘI AKTUALIZACI (Inteligentní Merge)**: Pokud uživatel doplňuje informace k existujícímu záznamu:
+   - **internalNotes**: NEMAŽ původní poznámky. Nové informace logicky napoj nebo přidej na konec pod nadpis "DOPLNĚNÍ [aktuální čas]:".
+   - **Ostatní pole**: Pokud uživatel mění typ, datum nebo název, aktualizuj je. Pokud o nich nemluví, zachovej PŮVODNÍ hodnoty z kontextu.
 3. Zachovej původní title a description, pokud nejsou měněny.
 4. Pokud uživatel nadiktuje seznam věcí ("musím udělat A, B a C"), vytvoř z nich "subTasks".
 5. Vrať POUZE čistý JSON. Žádný text okolo.
