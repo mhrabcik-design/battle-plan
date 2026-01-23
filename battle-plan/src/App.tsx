@@ -41,23 +41,23 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const CALENDAR_HOURS = useMemo(() => Array.from({ length: 15 }, (_, i) => i + 6), []); // 6:00 to 20:00
+  const CALENDAR_HOURS = useMemo(() => Array.from({ length: 13 }, (_, i) => i + 7), []); // 7:00 to 19:00
   const ROW_HEIGHT = 80;
 
   const getTimePosition = (timeStr?: string) => {
     if (!timeStr) return 0;
     const [hours, minutes] = timeStr.split(':').map(Number);
     // Boundary checks
-    const h = Math.max(6, Math.min(20, hours));
-    const totalMinutes = (h - 6) * 60 + minutes;
+    const h = Math.max(7, Math.min(19, hours));
+    const totalMinutes = (h - 7) * 60 + minutes;
     return (totalMinutes / 60) * ROW_HEIGHT;
   };
 
   const currentHourPosition = useMemo(() => {
     const hours = currentTime.getHours();
     const minutes = currentTime.getMinutes();
-    if (hours < 6 || hours >= 21) return -1;
-    const totalMinutes = (hours - 6) * 60 + minutes;
+    if (hours < 7 || hours >= 20) return -1;
+    const totalMinutes = (hours - 7) * 60 + minutes;
     return (totalMinutes / 60) * ROW_HEIGHT;
   }, [currentTime]);
 
@@ -619,6 +619,19 @@ function App() {
                 </p>
               </div>
 
+              {viewMode === 'week' && (
+                <div className="flex items-center gap-4 bg-slate-900/40 px-4 py-1.5 rounded-xl border border-slate-800/60">
+                  <h2 className="text-[11px] font-black text-white uppercase tracking-[0.2em]">
+                    {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
+                  </h2>
+                  <div className="flex gap-1.5 border-l border-slate-800 ml-2 pl-4">
+                    <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => setWeekOffset(0)} className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-[8px] font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-all border border-slate-700/50">Dnes</button>
+                    <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronRight className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-4">
                 {viewMode === 'tasks' && googleAuth.isSignedIn && (
                   <div className="flex items-center gap-2 bg-slate-900/50 border border-slate-800 rounded-lg p-1">
@@ -673,29 +686,13 @@ function App() {
 
           {viewMode === 'week' && (
             <div className="flex-1 flex flex-col min-h-0 -mt-2">
-              <div className="flex justify-between items-center bg-slate-900/40 p-3 rounded-xl border border-slate-800/60 mb-4 shrink-0">
-                <div className="flex items-center gap-4">
-                  <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20">
-                    <LayoutGrid className="w-4 h-4 text-indigo-400" />
-                  </div>
-                  <h2 className="text-xs font-black text-white uppercase tracking-widest">
-                    {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
-                  </h2>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronLeft className="w-4 h-4" /></button>
-                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-800/50 text-[9px] font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-all border border-slate-700/50">Dnes</button>
-                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronRight className="w-4 h-4" /></button>
-                </div>
-              </div>
-
               <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative bg-slate-900/20 rounded-2xl border border-slate-800/40">
                 <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[1000px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
 
                   {/* TIME LABELS COLUMN */}
                   <div className="relative border-r border-slate-800/60 pt-10 bg-slate-950/20">
                     {CALENDAR_HOURS.map((hour) => (
-                      <div key={hour} className="absolute left-0 w-full flex items-start justify-center" style={{ top: `${(hour - 6) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}>
+                      <div key={hour} className="absolute left-0 w-full flex items-start justify-center" style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}>
                         <span className="text-[10px] font-black text-slate-600 tabular-nums">{hour}:00</span>
                       </div>
                     ))}
@@ -719,7 +716,7 @@ function App() {
                           <div
                             key={hour}
                             className="absolute left-0 w-full border-b border-slate-800/20"
-                            style={{ top: `${(hour - 6) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}
+                            style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}
                           />
                         ))}
 

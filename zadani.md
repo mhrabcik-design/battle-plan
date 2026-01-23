@@ -19,12 +19,12 @@ Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-F
    - Sync s Google Tasks probíhá na pozadí.
 
 2. **Vylepšený Týdenní Kalendář (Timeline View):**
-   - **Header Layout:** Lišta s měsícem a navigací (Dnes, <, >) přesunuta nahoru mezi nadpis "TÝDEN" a samotné sloupce.
-   - **Vertikální Časová Osa:** Přidat nalevo časovou osu od 06:00 do 20:00.
-   - **Dynamické Sloupce:** Sloupce dnů se roztahují dynamicky až dolů na konec stránky.
-   - **Pozicování dle Času:** Schůzky a úkoly s časem se zobrazují na příslušném místě v časové ose (absolutní pozicování nebo grid-based).
-   - **Indikátor Aktuálního Času:** Linka ukazující aktuální čas v rámci časové osy.
-   - **Vizuální Styl:** Zachovat profesionální "office" look s minimalizovanými mezerami.
+   - **Header Layout:** Lišta s měsícem a navigací (Dnes, <, >) integrována do hlavního záhlaví mezi název sekce a datum.
+   - **Vertikální Časová Osa:** Časová osa od **07:00 do 19:00**.
+   - **Dynamické Sloupce:** Sloupce dnů se roztahují dynamicky až dolů na konec stránky bez vnějšího scrollování stránky.
+   - **Pozicování dle Času:** Schůzky a úkoly s časem se zobrazují na příslušném místě v časové ose.
+   - **Indikátor Aktuálního Času:** Červená linka ukazující aktuální čas.
+   - **Vizuální Styl:** Profesionální "office" look, indigo pro schůzky, tmavý/oranžový styl pro úkoly.
 
 3. **Maximalizovaná Editace (Focus Mode):**
    - Při rozkliknutí úkolu nebo meetingu se otevře editační okno dynamicky přes celou obrazovku (Focus Mode).
@@ -32,15 +32,14 @@ Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-F
    - Odstranit zbytečné okraje a "mobilní" mezery.
 
 4. **Desktop Layout & Mezery:**
-   - Celkový vzhled musí působit jako nativní profesionální PC aplikace (Desktop-First).
+   - Celkový vzhled působí jako nativní profesionální PC aplikace (Desktop-First).
    - Minimalizovat mezery (paddingy/gaps) mezi panely pro maximální využití pracovní plochy.
-   - Barevné schéma a náhled PC verze se může lišit od mobilní (více "office/professional" look).
 
 ## Technické kroky (Aktualizováno)
-- Refaktorace `App.tsx` pro implementaci Timeline v `week` view.
-- Výpočet pozic pro úkoly na základě `startTime` a `duration`.
-- Implementace Time Indicatoru.
-- Reorganizace layoutu `week` view pro přesun navigační lišty.
-- Úprava CSS pro dynamic height a grid alignment.
+- ✅ Refaktorace `App.tsx` pro implementaci Timeline v `week` view.
+- ✅ Výpočet pozic pro úkoly na základě `startTime` (start 7:00) a `duration`.
+- ✅ Implementace Time Indicatoru.
+- ✅ Reorganizace layoutu: Přesun navigační lišty do hlavního headeru.
+- ✅ Fixace scrollování: V týdenním režimu je scrollovatelný pouze kalendář, nikoliv celý layout.
 
 
