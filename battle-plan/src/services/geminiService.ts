@@ -125,12 +125,12 @@ DŮLEŽITÉ POKYNY:
    - **PROJEKT**: Název projektu, kterého se to týká.
    - **KDY**: Přesný čas a den.
    Pokud některý z těchto 4 bodů v audiu chybí, přidej do internalNotes poznámku: "[!] Chybí info: [název chybějícího bodu]".
-2. **PŘI AKTUALIZACI (Inteligentní Merge)**: Pokud uživatel doplňuje informace k existujícímu záznamu:
-   - **internalNotes**: NEMAŽ původní poznámky. Nové informace logicky napoj nebo přidej na konec pod nadpis "DOPLNĚNÍ [aktuální čas]:".
-   - **Ostatní pole**: Pokud uživatel mění typ, datum nebo název, aktualizuj je. Pokud o nich nemluví, zachovej PŮVODNÍ hodnoty z kontextu.
-3. Zachovej původní title a description, pokud nejsou měněny.
-4. Pokud uživatel nadiktuje seznam věcí ("musím udělat A, B a C"), vytvoř z nich "subTasks".
-5. Vrať POUZE čistý JSON. Žádný text okolo.
+2. **PŘI AKTUALIZACI (Master Editor Mode)**: Pokud uživatel doplňuje nebo mění informace k existujícímu záznamu, tvojí prioritou je **DYNAMICKÁ REKONSTRUKCE**:
+   - **title & description**: Nebuď pasivní. Pokud nové audio mění kontext, název nebo detaily, **KOMPLETNĚ PŘEPIŠ** tato pole. Výsledek musí být koherentní "nejlepší aktuální verze" záznamu. Staré, již neplatné informace z těchto polí ODSTRAŇ.
+   - **internalNotes**: Tady zachovej historii. Nové informace přidej na konec pod nadpis "DOPLNĚNÍ [aktuální čas]:". Slouží jako surový archiv všeho, co kdy zaznělo.
+   - **Pole**: Pokud uživatel zmíní změnu termínu nebo typu, okamžitě to promítni.
+3. Pokud uživatel nadiktuje seznam věcí ("musím udělat A, B a C"), vytvoř z nich "subTasks" nebo je doplň k existujícím.
+4. Vrať POUZE čistý JSON. Žádný text okolo.
 
 Příklad výstupu pro schůzku:
 {
