@@ -1,34 +1,42 @@
-# Projekt: Bitevní Plán - Rozšíření pro Desktop
+# Projekt: Bitevní Plán - Desktop Transformation & Sync
 
 ## Stav
 ✅ Zvětšení pracovní plochy dokončeno.
-- Adaptivní grid (1-4 sloupce) aktivní.
-- Navigace sjednocena, texty odstraněny.
-- AI Indikátor (Klíč + Online) implementován.
+✅ Adaptivní grid (1-4 sloupce) aktivní.
+✅ AI Indikátor (Klíč + Online) implementován.
+✅ Škálování UI (Font Slider) funkční.
+✅ Multipart Google Drive Sync opraven (mobil i PC).
 
 ## Cíl
-Transformovat aplikaci z čistě mobilního zobrazení na adaptivní desktopové prostředí pro maximální pracovní efektivitu.
+Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-First aplikaci** s hlubokou integrací do Google ekosystému.
 
-## Požadavky (Aktualizováno)
-1. **Navigace (Header):**
-   - Horních 5 ikon zůstává, ale **bez textových popisků** (šetří místo na mobilu).
-   - Tlačítko **Settings (ozubené kolečko)** přesunuto do navigační lišty doprava.
-   - **AI Indikátor:** Zelené podsvícení/bod u ikon/settings, pokud je AI aktivní a připojeno.
-   - Odstranění velkého nápisu (H1) s názvem sekce pro zvětšení vertikální plochy.
+## Požadavky (Aktualizováno - Desktop Evolution Option A)
 
-2. **Pracovní plocha (Main Content):**
-   - **Desktop:** Roztáhnutí plochy na šířku.
-   - **Týdenní zobrazení:** Na PC zobrazit 7 dní pod sebou (vertikální seznam) pro lepší přehled.
-   - **Kontrast:** Zvýšení kontrastu textů (nahrazení text-slate-500/400 za světlejší varianty).
-   - **Editace (Modal):** Na PC zvětšit editační okno (šířka 4xl).
-   - **Podúkoly:** Přidat možnost editace/přidávání bullet pointů v modalu (pouze na PC/velké ploše).
+1. **Sjednocení úkolů (Task Merging):**
+   - Zrušit rozdělení na "Úkoly" a "G-Úkoly".
+   - V sidebaru bude pouze jedna kategorie "Úkoly".
+   - Systém se bude chovat jako sjednocený seznam, kde jsou lokální úkoly i Google Tasks na jednom místě (odlišené např. ikonou).
+   - Sync s Google Tasks probíhá na pozadí.
 
-3. **Budoucí kroky (Next Steps):**
-   - Integrace rychlých poznámek přímo do seznamu.
-   - Integrace kalendáře přímo do seznamu.
+2. **Desktop-First Kalendář (Vertical Columns):**
+   - Nahradit dlaždicové zobrazení týdne vertikálními sloupci (jako Outlook/Linear).
+   - Sloupce představují dny (např. 7 dní vedle sebe).
+   - V kalendáři se zobrazují Schůzky (Meetingy) i Deadliny úkolů.
+   - **Barevné rozlišení:** Jasně odlišit Meetingy (např. sytě modrá/fialová) od Úkolů (např. smaragdová/oranžová).
 
-## Technické poznámky
-- Úprava `max-w-md` na responzivní třídy (`max-w-7xl` nebo `w-full` s limity).
-- Refaktorování `<nav>` a `<header>` do sjednocené kompaktní lišty.
-- Implementace CSS Grid pro seznam úkolů.
-- Dynamický stav pro "AI status" (zelená barva).
+3. **Maximalizovaná Editace (Focus Mode):**
+   - Při rozkliknutí úkolu nebo meetingu se otevře editační okno dynamicky přes celou obrazovku (Focus Mode).
+   - Cílem je maximalizovat prostor pro psaní a editaci textu (text-area přes většinu šířky).
+   - Odstranit zbytečné okraje a "mobilní" mezery.
+
+4. **Desktop Layout & Mezery:**
+   - Celkový vzhled musí působit jako nativní profesionální PC aplikace (Desktop-First).
+   - Minimalizovat mezery (paddingy/gaps) mezi panely pro maximální využití pracovní plochy.
+   - Barevné schéma a náhled PC verze se může lišit od mobilní (více "office/professional" look).
+
+## Technické kroky (Aktualizováno)
+- Refaktorace `App.tsx` pro odstranění `google-tasks` view a integraci do hlavního seznamu.
+- Vytvoření nové komponenty `DesktopWeekView` s vertikálními sloupci.
+- Úprava `EditTaskModal` (nebo nový `TaskEditor`) pro full-screen zobrazení.
+- Globální úprava CSS pro snížení "vzdušnosti" (compact mode).
+

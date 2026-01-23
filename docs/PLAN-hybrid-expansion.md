@@ -43,4 +43,4 @@ Goal: Add subtasks, internal notes, and progress slider to the UI.
 - [x] Completed subtasks update the progress bar automatically.
 - [x] Manual override of progress slider works.
 - [x] Tasks/Meetings are color-coded correctly.
-- [ ] Completed tasks (>30 days) are auto-deleted. (Optional / Future)
+- [ ] Completed tasks (>30 days) are auto-deleted. (Optional / Future) i want to have possibility in PC version to delete completed tasks manually. 
