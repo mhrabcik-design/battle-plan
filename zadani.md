@@ -10,7 +10,7 @@
 ## Cíl
 Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-First aplikaci** s hlubokou integrací do Google ekosystému.
 
-## Požadavky (Aktualizováno - Desktop Evolution Option A)
+## Požadavky (Aktualizováno - Desktop Evolution Phase 2)
 
 1. **Sjednocení úkolů (Task Merging):**
    - Zrušit rozdělení na "Úkoly" a "G-Úkoly".
@@ -18,11 +18,13 @@ Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-F
    - Systém se bude chovat jako sjednocený seznam, kde jsou lokální úkoly i Google Tasks na jednom místě (odlišené např. ikonou).
    - Sync s Google Tasks probíhá na pozadí.
 
-2. **Desktop-First Kalendář (Vertical Columns):**
-   - Nahradit dlaždicové zobrazení týdne vertikálními sloupci (jako Outlook/Linear).
-   - Sloupce představují dny (např. 7 dní vedle sebe).
-   - V kalendáři se zobrazují Schůzky (Meetingy) i Deadliny úkolů.
-   - **Barevné rozlišení:** Jasně odlišit Meetingy (např. sytě modrá/fialová) od Úkolů (např. smaragdová/oranžová).
+2. **Vylepšený Týdenní Kalendář (Timeline View):**
+   - **Header Layout:** Lišta s měsícem a navigací (Dnes, <, >) přesunuta nahoru mezi nadpis "TÝDEN" a samotné sloupce.
+   - **Vertikální Časová Osa:** Přidat nalevo časovou osu od 06:00 do 20:00.
+   - **Dynamické Sloupce:** Sloupce dnů se roztahují dynamicky až dolů na konec stránky.
+   - **Pozicování dle Času:** Schůzky a úkoly s časem se zobrazují na příslušném místě v časové ose (absolutní pozicování nebo grid-based).
+   - **Indikátor Aktuálního Času:** Linka ukazující aktuální čas v rámci časové osy.
+   - **Vizuální Styl:** Zachovat profesionální "office" look s minimalizovanými mezerami.
 
 3. **Maximalizovaná Editace (Focus Mode):**
    - Při rozkliknutí úkolu nebo meetingu se otevře editační okno dynamicky přes celou obrazovku (Focus Mode).
@@ -35,8 +37,10 @@ Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-F
    - Barevné schéma a náhled PC verze se může lišit od mobilní (více "office/professional" look).
 
 ## Technické kroky (Aktualizováno)
-- Refaktorace `App.tsx` pro odstranění `google-tasks` view a integraci do hlavního seznamu.
-- Vytvoření nové komponenty `DesktopWeekView` s vertikálními sloupci.
-- Úprava `EditTaskModal` (nebo nový `TaskEditor`) pro full-screen zobrazení.
-- Globální úprava CSS pro snížení "vzdušnosti" (compact mode).
+- Refaktorace `App.tsx` pro implementaci Timeline v `week` view.
+- Výpočet pozic pro úkoly na základě `startTime` a `duration`.
+- Implementace Time Indicatoru.
+- Reorganizace layoutu `week` view pro přesun navigační lišty.
+- Úprava CSS pro dynamic height a grid alignment.
+
 

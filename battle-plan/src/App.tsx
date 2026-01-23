@@ -34,6 +34,32 @@ function App() {
   const [googleTaskLists, setGoogleTaskLists] = useState<any[]>([]);
   const [activeTaskList, setActiveTaskList] = useState<string>('@default');
   const [googleTasksRaw, setGoogleTasksRaw] = useState<any[]>([]);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const CALENDAR_HOURS = useMemo(() => Array.from({ length: 15 }, (_, i) => i + 6), []); // 6:00 to 20:00
+  const ROW_HEIGHT = 80;
+
+  const getTimePosition = (timeStr?: string) => {
+    if (!timeStr) return 0;
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    // Boundary checks
+    const h = Math.max(6, Math.min(20, hours));
+    const totalMinutes = (h - 6) * 60 + minutes;
+    return (totalMinutes / 60) * ROW_HEIGHT;
+  };
+
+  const currentHourPosition = useMemo(() => {
+    const hours = currentTime.getHours();
+    const minutes = currentTime.getMinutes();
+    if (hours < 6 || hours >= 21) return -1;
+    const totalMinutes = (hours - 6) * 60 + minutes;
+    return (totalMinutes / 60) * ROW_HEIGHT;
+  }, [currentTime]);
 
   useEffect(() => {
     document.documentElement.style.setProperty('--app-font-size', `${uiScale}px`);
@@ -576,8 +602,8 @@ function App() {
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 relative overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar bg-slate-950">
-        <div className="w-full h-full px-4 md:px-8 lg:px-10 py-6 md:py-8 pb-32 md:pb-12 max-w-[1600px] mx-auto">
+      <main className={`flex-1 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col no-scrollbar bg-slate-950`}>
+        <div className={`w-full ${viewMode === 'week' ? 'h-[calc(100vh-2rem)] flex flex-col' : 'h-full'} px-4 md:px-8 lg:px-10 py-6 md:py-8 ${viewMode === 'week' ? 'pb-4' : 'pb-32 md:pb-12'} max-w-[1600px] mx-auto`}>
 
           {/* DESKTOP HEADER - Office Style */}
           <header className="hidden md:flex flex-col gap-1 mb-6 border-b border-slate-900 pb-4">
@@ -646,61 +672,104 @@ function App() {
           </nav>
 
           {viewMode === 'week' && (
-            <div className="mb-8 space-y-6">
-              <div className="flex justify-between items-center bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+            <div className="flex-1 flex flex-col min-h-0 -mt-2">
+              <div className="flex justify-between items-center bg-slate-900/40 p-3 rounded-xl border border-slate-800/60 mb-4 shrink-0">
                 <div className="flex items-center gap-4">
-                  <LayoutGrid className="w-5 h-5 text-indigo-500" />
-                  <h2 className="text-sm font-black text-white uppercase tracking-widest">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20">
+                    <LayoutGrid className="w-4 h-4 text-indigo-400" />
+                  </div>
+                  <h2 className="text-xs font-black text-white uppercase tracking-widest">
                     {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
                   </h2>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-all"><ChevronLeft className="w-4 h-4" /></button>
-                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-xl bg-slate-800 text-[10px] font-bold text-white uppercase tracking-widest hover:bg-slate-700 transition-all">Dnes</button>
-                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-all"><ChevronRight className="w-4 h-4" /></button>
+                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronLeft className="w-4 h-4" /></button>
+                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-800/50 text-[9px] font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-all border border-slate-700/50">Dnes</button>
+                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronRight className="w-4 h-4" /></button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-7 gap-2 overflow-x-auto pb-4">
-                {getWeekDays(weekOffset).map((day) => {
-                  const dayTasks = tasks.filter(t => (t.date === day.full || t.deadline === day.full));
-                  return (
-                    <div key={day.full} className={`flex flex-col min-h-[500px] rounded-xl border transition-all ${day.isToday ? 'bg-indigo-600/5 border-indigo-500/20 shadow-sm' : 'bg-slate-900/40 border-slate-800/60'}`}>
-                      <div className={`p-3 border-b flex flex-col gap-0.5 ${day.isToday ? 'border-indigo-500/20 bg-indigo-500/5' : 'border-slate-800'}`}>
-                        <span className={`text-[8px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-400' : 'text-slate-500'}`}>{day.dayName}</span>
-                        <span className={`text-lg font-black leading-none ${day.isToday ? 'text-white' : 'text-slate-300'}`}>{day.dayNum}</span>
+              <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative bg-slate-900/20 rounded-2xl border border-slate-800/40">
+                <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[1000px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
+
+                  {/* TIME LABELS COLUMN */}
+                  <div className="relative border-r border-slate-800/60 pt-10 bg-slate-950/20">
+                    {CALENDAR_HOURS.map((hour) => (
+                      <div key={hour} className="absolute left-0 w-full flex items-start justify-center" style={{ top: `${(hour - 6) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}>
+                        <span className="text-[10px] font-black text-slate-600 tabular-nums">{hour}:00</span>
                       </div>
-                      <div className="p-2 space-y-2 flex-1 overflow-y-auto no-scrollbar">
-                        {dayTasks.length === 0 ? (
-                          <div className="h-full flex items-center justify-center opacity-20 py-20">
-                            <Clock className="w-10 h-10 text-slate-800 rotate-12" />
-                          </div>
-                        ) : dayTasks.map(t => (
-                          <button
-                            key={t.isGoogleTask ? `g-${t.googleId}` : `l-${t.id}`}
-                            onClick={() => setEditingTask(t)}
-                            className={`w-full text-left p-2.5 rounded-lg border transition-all flex flex-col gap-1 relative overflow-hidden group/item ${t.status === 'completed' ? 'opacity-40' : ''} ${t.type === 'meeting' ? 'bg-orange-500/5 border-orange-500/10 hover:border-orange-500/30' : 'bg-indigo-500/5 border-indigo-500/10 hover:border-indigo-500/30'}`}
-                          >
-                            <div className={`absolute top-0 left-0 bottom-0 w-1 ${t.type === 'meeting' ? 'bg-orange-500' : 'bg-indigo-500'} opacity-60`} />
-                            <div className="flex items-center justify-between gap-1 relative z-10">
-                              <span className="text-[10px] font-black uppercase tracking-tight text-white line-clamp-2 leading-tight">{t.title}</span>
-                              {t.isGoogleTask && <span className="text-[7px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30 shrink-0">G</span>}
-                            </div>
-                            {t.startTime && (
-                              <div className="flex items-center gap-1 opacity-60">
-                                <Clock className="w-2.5 h-2.5 text-slate-400" />
-                                <span className="text-[9px] font-bold text-slate-400">{t.startTime}</span>
-                              </div>
-                            )}
-                          </button>
+                    ))}
+                  </div>
+
+                  {/* DAYS COLUMNS */}
+                  {getWeekDays(weekOffset).map((day) => {
+                    const dayTasks = tasks.filter(t => (t.date === day.full || t.deadline === day.full));
+
+                    return (
+                      <div key={day.full} className={`relative border-r border-slate-800/40 last:border-r-0 pt-10 ${day.isToday ? 'bg-indigo-500/5' : ''}`}>
+
+                        {/* DAY HEADER */}
+                        <div className="absolute top-0 left-0 w-full h-10 border-b border-slate-800/60 flex flex-col items-center justify-center bg-slate-900/20 backdrop-blur-sm z-20">
+                          <span className={`text-[8px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-400' : 'text-slate-500'}`}>{day.dayName}</span>
+                          <span className={`text-sm font-black leading-none ${day.isToday ? 'text-white' : 'text-slate-300'}`}>{day.dayNum}</span>
+                        </div>
+
+                        {/* HOUR GRID LINES */}
+                        {CALENDAR_HOURS.map((hour) => (
+                          <div
+                            key={hour}
+                            className="absolute left-0 w-full border-b border-slate-800/20"
+                            style={{ top: `${(hour - 6) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}
+                          />
                         ))}
+
+                        {/* TASKS IN DAY */}
+                        <div className="relative h-full z-10 mx-1">
+                          {dayTasks.map(t => {
+                            const top = getTimePosition(t.startTime) + 40;
+                            const height = Math.max(40, (t.duration || 60) / 60 * ROW_HEIGHT);
+
+                            return (
+                              <button
+                                key={t.isGoogleTask ? `g-${t.googleId}` : `l-${t.id}`}
+                                onClick={() => setEditingTask(t)}
+                                className={`absolute left-0 right-0 p-2 rounded-lg border transition-all flex flex-col gap-0.5 overflow-hidden group/item ${t.status === 'completed' ? 'opacity-40' : 'hover:z-30 hover:scale-[1.02] shadow-lg shadow-black/20'} ${t.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'}`}
+                                style={{ top: `${top}px`, height: `${height}px` }}
+                              >
+                                <div className={`absolute top-0 left-0 bottom-0 w-1 ${t.type === 'meeting' ? 'bg-indigo-300' : 'bg-orange-500'} opacity-80`} />
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-[10px] font-black uppercase tracking-tight text-white line-clamp-1 leading-tight">{t.title}</span>
+                                  {t.isGoogleTask && <span className="text-[7px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30 shrink-0">G</span>}
+                                </div>
+                                {t.startTime && (
+                                  <div className="flex items-center gap-1 opacity-60">
+                                    <Clock className="w-2.5 h-2.5 text-slate-400" />
+                                    <span className="text-[9px] font-bold text-slate-400">{t.startTime} {t.duration ? `(${t.duration}m)` : ''}</span>
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* CURRENT TIME INDICATOR */}
+                        {day.isToday && currentHourPosition !== -1 && (
+                          <div
+                            className="absolute left-0 right-0 z-30 flex items-center pointer-events-none"
+                            style={{ top: `${currentHourPosition + 40}px` }}
+                          >
+                            <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)] -ml-1" />
+                            <div className="flex-1 h-px bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.4)]" />
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
+
 
           {viewMode !== 'week' && (
             <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-start">
