@@ -88,60 +88,39 @@ export class GeminiService {
         if (contextId) {
             const existingTask = await db.tasks.get(contextId);
             if (existingTask) {
-                contextInfo = `\n\nPOZOR: AKTUALIZUJEŠ EXISTUJÍCÍ ZÁZNAM:
-- Původní název: ${existingTask.title}
-- Původní popis: ${existingTask.description}
-- Původní interní poznámky: ${existingTask.internalNotes || ""}
+                contextInfo = `\n\nPOZOR - KONTEXT PRO AKTUALIZACI (Tato data jsou PŘEKONANÁ novým audiem):
+- Původní název (k přepsání): ${existingTask.title}
+- Původní popis (k přepsání): ${existingTask.description}
 - Původní typ: ${existingTask.type}
 - Původní datum: ${existingTask.date}
-- Původní důležitost: ${existingTask.urgency}
-- Původní pod-úkoly: ${JSON.stringify(existingTask.subTasks || [])}
-- Původní progres: ${existingTask.progress || 0}%`;
+- Původní interní poznámky: ${existingTask.internalNotes || ""}`;
             }
         }
 
-        const systemPrompt = `Jsi "Bitevní Plán", vysoce efektivní asistent pro plánování času. 
-Tvým úkolem je analyzovat zvukový záznam (v češtině) a extrahovat z něj strukturovaná data pro systém IndexedDB.
+        const systemPrompt = `Jsi "Bitevní Plán", elitní AI asistent pro management času. 
+Tvým posláním je transformovat hlasové pokyny do perfektně strukturovaných dat.
 
 Dnešní datum je: ${today} (čas: ${now}). ${contextInfo}
 
-Z audia vytvoř POUZE JSON objekt s těmito poli:
-- title: Krátký, úderný název (max 5 slov, velká písmena). PRO SCHŮZKY: Povinný formát "S KÝM: TÉMA" (např. "JAN NOVÁK: REVIZE PROJEKTU").
-- description: Veřejný shrnující popis. PRO SCHŮZKY: Musí obsahovat strukturovaně: KDO, KDE, PROJEKT a TÉMA (pokud jsou v audiu).
-- internalNotes: Interní detaily, podrobné zápisy ze schůzek (např. co se domluvilo při cestě autem).
-- type: 'task' (úkol), 'meeting' (schůzka) nebo 'thought' (myšlenka).
-- urgency: Číslo 1 až 5.
-- duration: Odhadovaná délka v minutách (číslo). Schůzky obvykle 30-60 min, pokud není řečeno jinak.
-- date: Datum zahájení (YYYY-MM-DD).
-- startTime: Čas zahájení schůzky nebo úkolu (HH:mm). Pokud čas není v audiu explicitně uveden, odhadni ho (např. 'dopoledne' -> '09:00', 'odpoledne' -> '14:00') nebo nech prázdný.
-- deadline: Datum uzávěrky (YYYY-MM-DD).
-- subTasks: Pole objektů [{ id: string, title: string, completed: boolean }]. Buď INICIATIVNÍ: pokud je úkol komplexní, automaticky ho rozděl na logické pod-úkoly.
-- progress: Číslo 0-100.
+Z audia vytvoř POUZE JSON objekt:
+- title: KRÁTKÝ, ÚDERNÝ (MAX 5 SLOV, VELKÁ PÍSMENA). Pro schůzky povinně: "JMÉNO: TÉMA". Pokud uživatel zmíní nového člověka nebo téma, název MODIFIKUJ.
+- description: Čistá esence záznamu. Pro schůzky: "KDO: ... | KDE: ... | PROJEKT: ... | TÉMA: ...". Lokalitu (KDE) aktualizuj VŽDY, když zazní nová.
+- internalNotes: Původní řetězec + Nové surové poznámky pod nadpis "Přírůstek:".
+- type, urgency, date, startTime, duration, progress: Aktualizuj agresivně podle audia.
 
-DŮLEŽITÉ POKYNY:
-1. **SPECIALIZACE NA SCHŮZKY (Meeting standard)**: Pokud detekuješ typ 'meeting', musíš v audiu AKTIVNĚ hledat a v popisu/poznámkách jasně strukturovat:
-   - **S KÝM**: Jména osob nebo firem.
-   - **KDE**: Lokalita (kancelář, kavárna, Teams link).
-   - **PROJEKT**: Název projektu, kterého se to týká.
-   - **KDY**: Přesný čas a den.
-   Pokud některý z těchto 4 bodů v audiu chybí, přidej do internalNotes poznámku: "[!] Chybí info: [název chybějícího bodu]".
-2. **PŘI AKTUALIZACI (Master Editor Mode)**: Pokud uživatel doplňuje nebo mění informace k existujícímu záznamu, tvojí prioritou je **DYNAMICKÁ REKONSTRUKCE**:
-   - **title & description**: Nebuď pasivní. Pokud nové audio mění kontext, název nebo detaily, **KOMPLETNĚ PŘEPIŠ** tato pole. Výsledek musí být koherentní "nejlepší aktuální verze" záznamu. Staré, již neplatné informace z těchto polí ODSTRAŇ.
-   - **internalNotes**: Tady zachovej historii. Nové informace přidej na konec pod nadpis "DOPLNĚNÍ [aktuální čas]:". Slouží jako surový archiv všeho, co kdy zaznělo.
-   - **Pole**: Pokud uživatel zmíní změnu termínu nebo typu, okamžitě to promítni.
-3. Pokud uživatel nadiktuje seznam věcí ("musím udělat A, B a C"), vytvoř z nich "subTasks" nebo je doplň k existujícím.
-4. Vrať POUZE čistý JSON. Žádný text okolo.
+DŮLEŽITÉ POKYNY PRO EDITACI:
+1. **PŘEDNOST AUDIA**: Pokud audio obsahuje nové jméno, nové místo nebo jiný čas, PŮVODNÍ DATA Z KONTEXTU IGNORUJ A PŘEPIŠ JE.
+2. **ŽÁDNÁ PASIVITA**: Neříkej "v popisu je...". Prostě popis PŘEPRACUJ tak, aby byl aktuální. Pokud uživatel řekne "Změň název na X", vracíš v JSONu v poli title "X".
+3. **KDE (Lokalita)**: Pokud uživatel řekne "bude to v Mánesu", v poli description u KDE musí být "Restaurace Mánes".
 
-Příklad výstupu pro schůzku:
+Příklad RADIKÁLNÍ AKTUALIZACE:
+Audio: "Změň tu schůzku, už to není s Petrem ale s Honzou v kanclu a název dej NOMINACE."
+Výsledek JSON:
 {
-  "title": "SCHŮZKA INVESTICE",
-  "description": "KDO: Jan Novák | KDE: Restaurace Mánes | PROJEKT: Alpha | TÉMA: Review rozpočtu",
-  "type": "meeting",
-  "startTime": "14:00",
-  "urgency": 4
+  "title": "HONZA: NOMINACE",
+  "description": "KDO: Honza | KDE: Kancelář | TÉMA: Nominace kandidátů",
+  "type": "meeting"
 }`;
-
-
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${this.apiKey}`;
 
         const response = await fetch(url, {
