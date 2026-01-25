@@ -392,7 +392,7 @@ function App() {
             description: result.description || "",
             internalNotes: result.internalNotes || "",
             type: finalType,
-            urgency: Number(result.urgency) as any || 3,
+            urgency: Number(result.urgency) as any || 2,
             status: 'pending',
             date: result.date || new Date().toISOString().split('T')[0],
             startTime: result.startTime || (finalType === 'meeting' ? "09:00" : undefined),
@@ -512,16 +512,16 @@ function App() {
 
   const getUrgencyColor = (urgency: number) => {
     switch (urgency) {
-      case 5: return 'text-red-400 border-red-400/30 bg-red-400/10';
-      case 4: return 'text-orange-400 border-orange-400/30 bg-orange-400/10';
-      case 3: return 'text-yellow-400 border-yellow-400/30 bg-yellow-400/10';
+      case 3: return 'text-red-400 border-red-400/30 bg-red-400/10';
+      case 2: return 'text-blue-400 border-blue-400/30 bg-blue-400/10';
+      case 1: return 'text-slate-400 border-slate-400/30 bg-slate-400/10';
       default: return 'text-blue-400 border-blue-400/30 bg-blue-400/10';
     }
   };
 
   const handleExport = (task: Task) => {
     const subTasksText = (task.subTasks || []).map(st => `${st.completed ? '✅' : '☐'} ${st.title}`).join('\n');
-    const body = `=== ${task.title} ===\nTermín: ${task.deadline || task.date || 'Neurčeno'} | Urgence: ${task.urgency}/5\nPokrok: ${task.progress || 0}%\n--------------------------------------\nPOPIS:\n${task.description || 'Bez popisu'}\n\n${subTasksText ? `PŘEHLED PODÚKOLŮ:\n${subTasksText}\n` : ''}INTERNÍ ZÁPIS:\n${task.internalNotes || 'Bez dodatečného zápisu'}\n\n--\nOdesláno z aplikace Bitevní Plán`.trim();
+    const body = `=== ${task.title} ===\nTermín: ${task.deadline || task.date || 'Neurčeno'} | Urgence: ${task.urgency}/3\nPokrok: ${task.progress || 0}%\n--------------------------------------\nPOPIS:\n${task.description || 'Bez popisu'}\n\n${subTasksText ? `PŘEHLED PODÚKOLŮ:\n${subTasksText}\n` : ''}INTERNÍ ZÁPIS:\n${task.internalNotes || 'Bez dodatečného zápisu'}\n\n--\nOdesláno z aplikace Bitevní Plán`.trim();
     const subject = `[BITEVNÍ PLÁN] ${task.title}`;
     const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailtoUrl;
@@ -795,7 +795,7 @@ function App() {
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center gap-2">
                           <div className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${getUrgencyColor(task.urgency)}`}>
-                            {task.isGoogleTask ? 'Google Task' : `Přednost ${task.urgency}`}
+                            {task.isGoogleTask ? 'Google Task' : task.urgency === 3 ? 'Urgentní' : task.urgency === 1 ? 'Bez urgentnosti' : 'Normální'}
                           </div>
                           {task.isGoogleTask && (
                             <div className="w-4 h-4 bg-blue-600 rounded flex items-center justify-center text-[8px] font-black text-white shadow-sm">G</div>
@@ -1008,10 +1008,10 @@ function App() {
                               <div className="space-y-3">
                                 <label className="text-[9px] font-black text-slate-500 uppercase flex justify-between">
                                   <span>Urgence / Priorita</span>
-                                  <span className="text-white">{editingTask.urgency}/5</span>
+                                  <span className="text-white">{editingTask.urgency}/3</span>
                                 </label>
                                 <input
-                                  type="range" min="1" max="5"
+                                  type="range" min="1" max="3"
                                   value={editingTask.urgency}
                                   onChange={(e) => setEditingTask({ ...editingTask, urgency: Number(e.target.value) as any })}
                                   className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"

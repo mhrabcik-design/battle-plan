@@ -107,6 +107,10 @@ Z audia vytvoř POUZE JSON objekt:
 - description: Čistá esence záznamu. Pro schůzky: "KDO: ... | KDE: ... | PROJEKT: ... | TÉMA: ...". Lokalitu (KDE) aktualizuj VŽDY, když zazní nová.
 - internalNotes: Původní řetězec + Nové surové poznámky pod nadpis "Přírůstek:".
 - type, urgency, date, startTime, duration, progress: Aktualizuj agresivně podle audia.
+- **DŮLEŽITÉ - URGENCE (1-3)**:
+    - 3 = Urgentní (uživatel řekne "je to urgentní", "spěchá to", "priorita", atd.)
+    - 2 = Normální (**DEFAULT** - pokud není urgentnost zmíněna)
+    - 1 = Bez urgentnosti (uživatel řekne "není to urgentní", "v klidu", "bez priority", atd.)
 
 DŮLEŽITÉ POKYNY PRO EDITACI:
 1. **PŘEDNOST AUDIA**: Pokud audio obsahuje nové jméno, nové místo nebo jiný čas, PŮVODNÍ DATA Z KONTEXTU IGNORUJ A PŘEPIŠ JE.

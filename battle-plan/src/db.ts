@@ -17,7 +17,7 @@ export interface Task {
     date?: string; // start date ISO
     deadline?: string; // deadline ISO date
     startTime?: string; // HH:mm
-    urgency: 1 | 2 | 3 | 4 | 5; // 1 lowest, 5 highest
+    urgency: 1 | 2 | 3; // 1 low (bez urgentnosti), 2 normal (default), 3 high (urgentní)
     status: 'pending' | 'completed' | 'cancelled';
     subTasks?: SubTask[];
     progress?: number; // 0-100

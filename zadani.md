@@ -35,11 +35,19 @@ Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-F
    - Celkový vzhled působí jako nativní profesionální PC aplikace (Desktop-First).
    - Minimalizovat mezery (paddingy/gaps) mezi panely pro maximální využití pracovní plochy.
 
+5. **Nové Urgentnosti (3 stupně):**
+   - Zjednodušení priorit na 3 stupně (1, 2, 3).
+   - **3 - Urgentní:** Nejvyšší priorita.
+   - **2 - Normální (Default):** Pokud není zmíněna naléhavost.
+   - **1 - Bez urgentnosti:** Nízká priorita.
+   - AI musí tyto stupně automaticky přiřazovat na základě kontextu diktátu.
+
 ## Technické kroky (Aktualizováno)
 - ✅ Refaktorace `App.tsx` pro implementaci Timeline v `week` view.
 - ✅ Výpočet pozic pro úkoly na základě `startTime` (start 7:00) a `duration`.
 - ✅ Implementace Time Indicatoru.
 - ✅ Reorganizace layoutu: Přesun navigační lišty do hlavního headeru.
 - ✅ Fixace scrollování: V týdenním režimu je scrollovatelný pouze kalendář, nikoliv celý layout.
+- ✅ Redefinice urgentnosti na 3 stupně (1-3) + Update AI promptu.
 
 
