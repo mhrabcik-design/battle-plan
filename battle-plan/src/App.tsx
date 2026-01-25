@@ -143,13 +143,15 @@ function App() {
     if (viewMode === 'battle') {
       return await db.tasks
         .where('status').equals('pending')
-        .and(t => (t.date || t.deadline || '') >= new Date().toISOString().split('T')[0])
         .and(t => t.type !== 'thought' && t.type !== 'note')
         .toArray()
         .then(all => all.sort((a, b) => {
           const dateA = a.date || a.deadline || '9999-12-31';
           const dateB = b.date || b.deadline || '9999-12-31';
           if (dateA !== dateB) return dateA.localeCompare(dateB);
+          const timeA = a.startTime || '23:59';
+          const timeB = b.startTime || '23:59';
+          if (timeA !== timeB) return timeA.localeCompare(timeB);
           return (b.urgency || 0) - (a.urgency || 0);
         }));
     }
@@ -205,6 +207,9 @@ function App() {
         const dateA = a.date || a.deadline || '9999-12-31';
         const dateB = b.date || b.deadline || '9999-12-31';
         if (dateA !== dateB) return dateA.localeCompare(dateB);
+        const timeA = a.startTime || '23:59';
+        const timeB = b.startTime || '23:59';
+        if (timeA !== timeB) return timeA.localeCompare(timeB);
         return (b.urgency || 0) - (a.urgency || 0);
       });
     }
@@ -715,25 +720,31 @@ function App() {
                 </div>
                 <h1 className="text-xl font-black text-white uppercase tracking-tight">Bitevní Plán</h1>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                {googleAuth.isSignedIn && (
+                  <button
+                    onClick={handleBackupToDrive}
+                    disabled={isSyncing}
+                    className={`p-2 rounded-xl transition-all ${isSyncing ? 'bg-indigo-600/20' : 'bg-emerald-500/10'}`}
+                  >
+                    {isSyncing ? (
+                      <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="text-indigo-400">
+                        <Save className="w-4 h-4" />
+                      </motion.div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <CloudUpload className="w-4 h-4 text-emerald-500" />
+                      </div>
+                    )}
+                  </button>
+                )}
                 <button
-                  onClick={handleBackupToDrive}
-                  disabled={isSyncing}
-                  className={`p-2 rounded-xl transition-all ${isSyncing ? 'bg-indigo-600/20' : googleAuth.isSignedIn ? 'bg-emerald-500/10' : 'bg-slate-800'}`}
+                  onClick={() => setShowSettings(true)}
+                  className="p-2 bg-slate-800 rounded-xl text-slate-400"
                 >
-                  {isSyncing ? (
-                    <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="text-indigo-400">
-                      <Save className="w-4 h-4" />
-                    </motion.div>
-                  ) : googleAuth.isSignedIn ? (
-                    <div className="flex items-center gap-1.5">
-                      <CloudUpload className="w-4 h-4 text-emerald-500" />
-                    </div>
-                  ) : (
-                    <Settings className="w-4 h-4 text-slate-400" />
-                  )}
+                  <Settings className="w-4 h-4" />
                 </button>
-                <div className={`w-2.5 h-2.5 rounded-full ${isAiActive ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-700'}`} />
+                <div className={`w-2 h-2 rounded-full ${isAiActive ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-700'}`} />
               </div>
             </div>
 
