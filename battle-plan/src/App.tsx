@@ -621,6 +621,18 @@ function App() {
                 </div>
               </div>
 
+              {/* BACKUP BUTTON */}
+              {googleAuth.isSignedIn && (
+                <button
+                  onClick={handleBackupToDrive}
+                  disabled={isSyncing}
+                  className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-emerald-500/10 text-emerald-500 rounded-xl transition-all font-black uppercase text-[9px] tracking-widest border border-emerald-500/10"
+                >
+                  <CloudUpload className={`w-4 h-4 ${isSyncing ? 'animate-bounce' : ''}`} />
+                  {isSyncing ? 'Synchronizace...' : 'Zálohovat Disk'}
+                </button>
+              )}
+
               <button
                 onClick={() => setShowSettings(true)}
                 className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-slate-400 hover:text-white rounded-xl transition-all font-bold uppercase text-[9px] tracking-widest"
