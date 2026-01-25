@@ -63,7 +63,7 @@ function App() {
 
   useEffect(() => {
     document.documentElement.style.setProperty('--app-font-size', `${uiScale}px`);
-    localStorage.setItem('ui_scale', uiScale.toString());
+    db.settings.put({ id: 'ui_scale', value: uiScale.toString() });
     // Auto-scroll to top when view changes on desktop
     document.querySelector('main')?.scrollTo(0, 0);
   }, [uiScale, viewMode]);
@@ -220,21 +220,41 @@ function App() {
     if (googleAuth.isSignedIn) {
       googleService.getTaskLists().then(setGoogleTaskLists);
       const checkSync = async () => {
-        const payload = await googleService.loadFromDrive();
-        if (payload && payload.data) {
-          const localCount = await db.tasks.count();
-          if (localCount === 0) {
-            const { tasks: driveTasks, settings: driveSettings } = payload.data;
-            if (driveTasks) await db.tasks.bulkAdd(driveTasks);
-            if (driveSettings) {
-              for (const s of driveSettings) {
-                await db.settings.put(s);
-                if (s.id === 'gemini_api_key') setApiKey(s.value);
-                if (s.id === 'gemini_model') setSelectedModel(s.value);
+        try {
+          const payload = await googleService.loadFromDrive();
+          if (payload && payload.data) {
+            const localCount = await db.tasks.count();
+            const hasApiKey = !!(await db.settings.get('gemini_api_key'));
+            const cloudTimestamp = payload.timestamp || 0;
+            const lastLocalSyncTs = Number(localStorage.getItem('last_drive_sync_ts')) || 0;
+
+            // Auto-restore if:
+            // 1. Local is essentially empty (new setup)
+            // 2. OR API key is missing (new device/cleared cache)
+            // 3. OR Cloud data is significantly newer and local has only 0-1 tasks
+            if (localCount === 0 || !hasApiKey || (cloudTimestamp > lastLocalSyncTs && localCount <= 1)) {
+              const { tasks: driveTasks, settings: driveSettings } = payload.data;
+              if (driveTasks) {
+                await db.tasks.clear();
+                await db.tasks.bulkAdd(driveTasks);
               }
+              if (driveSettings) {
+                for (const s of driveSettings) {
+                  await db.settings.put(s);
+                  if (s.id === 'gemini_api_key') setApiKey(s.value);
+                  if (s.id === 'gemini_model') setSelectedModel(s.value);
+                  if (s.id === 'ui_scale') setUiScale(Number(s.value));
+                }
+              }
+              const now = new Date().toLocaleString('cs-CZ');
+              setLastSync(now);
+              localStorage.setItem('last_drive_sync', now);
+              localStorage.setItem('last_drive_sync_ts', (payload.timestamp || Date.now()).toString());
+              console.log('Auto-restored from Drive (newer data or missing settings)');
             }
-            console.log('Auto-restored from Drive (local was empty)');
           }
+        } catch (e) {
+          console.error("Auto-sync check failed", e);
         }
       };
       checkSync();
@@ -255,10 +275,12 @@ function App() {
       try {
         const allTasks = await db.tasks.toArray();
         const allSettings = await db.settings.toArray();
+        const timestamp = Date.now();
         await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
         const now = new Date().toLocaleString('cs-CZ');
         setLastSync(now);
         localStorage.setItem('last_drive_sync', now);
+        localStorage.setItem('last_drive_sync_ts', timestamp.toString());
         console.log('Auto-backup completed');
       } catch (e) {
         console.error('Auto-backup failed', e);
@@ -274,6 +296,9 @@ function App() {
     });
     db.settings.get('gemini_model').then(setting => {
       if (setting) setSelectedModel(setting.value);
+    });
+    db.settings.get('ui_scale').then(setting => {
+      if (setting) setUiScale(Number(setting.value));
     });
   }, []);
 
@@ -303,13 +328,17 @@ function App() {
     try {
       const allTasks = await db.tasks.toArray();
       const allSettings = await db.settings.toArray();
+      const timestamp = Date.now();
       await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
       const now = new Date().toLocaleString('cs-CZ');
       setLastSync(now);
       localStorage.setItem('last_drive_sync', now);
-      alert('Záloha úspěšně uložena na Google Disk');
+      localStorage.setItem('last_drive_sync_ts', timestamp.toString());
+      console.log('Manual backup successful');
+      return true;
     } catch (e: any) {
       alert('Chyba při zálohování: ' + e.message);
+      return false;
     } finally {
       setIsSyncing(false);
     }
@@ -339,12 +368,14 @@ function App() {
           await db.settings.put(s);
           if (s.id === 'gemini_api_key') setApiKey(s.value);
           if (s.id === 'gemini_model') setSelectedModel(s.value);
+          if (s.id === 'ui_scale') setUiScale(Number(s.value));
         }
       }
 
       const now = new Date().toLocaleString('cs-CZ');
       setLastSync(now);
       localStorage.setItem('last_drive_sync', now);
+      localStorage.setItem('last_drive_sync_ts', (payload.timestamp || Date.now()).toString());
       alert('Data byla úspěšně obnovena z Google Disku.');
     } catch (e: any) {
       alert('Chyba při obnově dat: ' + e.message);
@@ -611,7 +642,6 @@ function App() {
       <main className={`flex-1 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col no-scrollbar bg-slate-950`}>
         <div className={`w-full ${viewMode === 'week' ? 'h-[calc(100vh-2rem)] flex flex-col' : 'h-full'} px-4 md:px-8 lg:px-10 py-6 md:py-8 ${viewMode === 'week' ? 'pb-4' : 'pb-32 md:pb-12'} max-w-[1600px] mx-auto`}>
 
-          {/* DESKTOP HEADER - Office Style */}
           <header className="hidden md:flex flex-col gap-1 mb-6 border-b border-slate-900 pb-4">
             <div className="flex items-center justify-between">
               <div>
@@ -639,6 +669,11 @@ function App() {
               )}
 
               <div className="flex items-center gap-4">
+                {isSyncing && (
+                  <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="text-indigo-400">
+                    <Save className="w-4 h-4" />
+                  </motion.div>
+                )}
                 {viewMode === 'tasks' && googleAuth.isSignedIn && (
                   <div className="flex items-center gap-2 bg-slate-900/50 border border-slate-800 rounded-lg p-1">
                     {googleTaskLists.slice(0, 3).map(list => (
@@ -671,9 +706,38 @@ function App() {
             </div>
           </header>
 
-          {/* MOBILE NAV (Hidden on Tablet/PC) */}
-          <nav className="md:hidden flex items-center justify-between bg-slate-900 p-2 mb-6 rounded-2xl border border-slate-800 shadow-xl">
-            <div className="flex gap-1 overflow-x-auto no-scrollbar">
+          {/* MOBILE HEADER & NAV */}
+          <div className="md:hidden flex flex-col gap-4 mb-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5 text-white" />
+                </div>
+                <h1 className="text-xl font-black text-white uppercase tracking-tight">Bitevní Plán</h1>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleBackupToDrive}
+                  disabled={isSyncing}
+                  className={`p-2 rounded-xl transition-all ${isSyncing ? 'bg-indigo-600/20' : googleAuth.isSignedIn ? 'bg-emerald-500/10' : 'bg-slate-800'}`}
+                >
+                  {isSyncing ? (
+                    <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="text-indigo-400">
+                      <Save className="w-4 h-4" />
+                    </motion.div>
+                  ) : googleAuth.isSignedIn ? (
+                    <div className="flex items-center gap-1.5">
+                      <CloudUpload className="w-4 h-4 text-emerald-500" />
+                    </div>
+                  ) : (
+                    <Settings className="w-4 h-4 text-slate-400" />
+                  )}
+                </button>
+                <div className={`w-2.5 h-2.5 rounded-full ${isAiActive ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-700'}`} />
+              </div>
+            </div>
+
+            <nav className="flex items-center justify-between bg-slate-900/80 backdrop-blur-md p-1.5 rounded-2xl border border-slate-800/60 shadow-xl overflow-x-auto no-scrollbar">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = viewMode === item.id;
@@ -681,19 +745,33 @@ function App() {
                   <button
                     key={item.id}
                     onClick={() => setViewMode(item.id as ViewMode)}
-                    className={`flex flex-col items-center gap-1 px-4 py-3 rounded-xl transition-all ${isActive ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}
+                    className={`flex flex-col items-center gap-1.5 px-5 py-3 rounded-xl transition-all ${isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-slate-500'}`}
                   >
-                    <Icon className="w-6 h-6" />
+                    <Icon className="w-5 h-5" />
+                    <span className="text-[8px] font-black uppercase tracking-widest">{item.label}</span>
                   </button>
                 );
               })}
-            </div>
-          </nav>
+            </nav>
+
+            {viewMode === 'week' && (
+              <div className="flex items-center justify-between bg-slate-900/40 px-4 py-2 rounded-xl border border-slate-800/60">
+                <h2 className="text-[10px] font-black text-white uppercase tracking-widest">
+                  {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'short', year: 'numeric' })}
+                </h2>
+                <div className="flex gap-2">
+                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-lg bg-slate-800 text-slate-400"><ChevronLeft className="w-4 h-4" /></button>
+                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-800 text-[9px] font-black text-white uppercase tracking-widest">Dnes</button>
+                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-lg bg-slate-800 text-slate-400"><ChevronRight className="w-4 h-4" /></button>
+                </div>
+              </div>
+            )}
+          </div>
 
           {viewMode === 'week' && (
             <div className="flex-1 flex flex-col min-h-0 -mt-2">
               <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative bg-slate-900/20 rounded-2xl border border-slate-800/40">
-                <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[1000px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
+                <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[700px] md:min-w-[1200px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
 
                   {/* TIME LABELS COLUMN */}
                   <div className="relative border-r border-slate-800/60 pt-10 bg-slate-950/20">
