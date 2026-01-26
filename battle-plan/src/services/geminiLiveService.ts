@@ -27,7 +27,8 @@ export class GeminiLiveService {
         }
 
         const host = "generativelanguage.googleapis.com";
-        const path = "ws/google.ai.generativelanguage.v1beta.GenerativeService.BiDiGenerateContent";
+        // Switching to v1alpha as it's often more compatible with experimental native-audio models
+        const path = "ws/google.ai.generativelanguage.v1alpha.GenerativeService.BiDiGenerateContent";
         const url = `wss://${host}/${path}?key=${this.apiKey}`;
 
         this.logCallback?.(`Připojování k Gemini Live: models/${this.model}`, 'info');

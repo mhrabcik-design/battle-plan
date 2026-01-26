@@ -1378,8 +1378,11 @@ function App() {
                   }
                 } : async () => {
                   setActiveVoiceUpdateId(editingTask?.id || null);
-                  if (selectedModel.includes('native-audio')) {
+                  const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
+
+                  if (isLiveModel) {
                     setIsProcessing(true);
+                    addLog(`Spouštím Live API pro: ${selectedModel}`);
                     await geminiLiveService.connect(
                       (result) => {
                         handleProcessLiveResult(result, editingTask?.id || null);
