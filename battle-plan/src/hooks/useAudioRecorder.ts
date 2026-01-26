@@ -48,7 +48,7 @@ export function useAudioRecorder() {
         setTimeout(() => ctx.close(), 300);
     };
 
-    const startRecording = useCallback(async (onPcmData?: (base64: string) => void, options: RecorderOptions = {}) => {
+    const startRecording = useCallback(async (options: RecorderOptions = {}) => {
         try {
             optionsRef.current = options;
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -75,72 +75,51 @@ export function useAudioRecorder() {
 
             mediaRecorder.start();
 
-            // Live PCM Processing if callback provided
-            if (onPcmData) {
-                const audioContext = new AudioContext({ sampleRate: 16000 });
-                audioContextRef.current = audioContext;
-                const source = audioContext.createMediaStreamSource(stream);
+            // Setup AudioContext for Silence Detection
+            const audioContext = new AudioContext();
+            audioContextRef.current = audioContext;
+            const source = audioContext.createMediaStreamSource(stream);
 
-                // ScriptProcessor for 16-bit PCM conversion
-                const processor = audioContext.createScriptProcessor(4096, 1, 1);
-                processorRef.current = processor;
+            // Silence Detection
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Float32Array(bufferLength);
 
-                processor.onaudioprocess = (e) => {
-                    const inputData = e.inputBuffer.getChannelData(0);
-                    // Convert Float32 to Int16
-                    const pcmData = new Int16Array(inputData.length);
-                    for (let i = 0; i < inputData.length; i++) {
-                        pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+            const threshold = options.silenceThreshold || -50;
+            const silDuration = options.silenceDuration || 3000;
+
+            const checkSilence = () => {
+                if (!isRecording && !streamRef.current) return;
+
+                analyser.getFloatTimeDomainData(dataArray);
+                let sumSquares = 0.0;
+                for (const amplitude of dataArray) {
+                    sumSquares += amplitude * amplitude;
+                }
+                const rms = Math.sqrt(sumSquares / dataArray.length);
+                const db = 20 * Math.log10(rms);
+
+                if (db < threshold) {
+                    if (!silenceTimerRef.current) {
+                        silenceTimerRef.current = setTimeout(() => {
+                            if (options.onSilence) options.onSilence();
+                        }, silDuration);
                     }
-                    // Convert to Base64
-                    const base64 = btoa(String.fromCharCode(...new Uint8Array(pcmData.buffer)));
-                    onPcmData(base64);
-                };
-
-                source.connect(processor);
-                processor.connect(audioContext.destination);
-
-                // Silence Detection
-                const analyser = audioContext.createAnalyser();
-                analyser.fftSize = 256;
-                source.connect(analyser);
-                const bufferLength = analyser.frequencyBinCount;
-                const dataArray = new Float32Array(bufferLength);
-
-                const threshold = options.silenceThreshold || -50;
-                const silDuration = options.silenceDuration || 3000;
-
-                const checkSilence = () => {
-                    if (!isRecording && !streamRef.current) return;
-
-                    analyser.getFloatTimeDomainData(dataArray);
-                    let sumSquares = 0.0;
-                    for (const amplitude of dataArray) {
-                        sumSquares += amplitude * amplitude;
+                } else {
+                    if (silenceTimerRef.current) {
+                        clearTimeout(silenceTimerRef.current);
+                        silenceTimerRef.current = null;
                     }
-                    const rms = Math.sqrt(sumSquares / dataArray.length);
-                    const db = 20 * Math.log10(rms);
+                }
 
-                    if (db < threshold) {
-                        if (!silenceTimerRef.current) {
-                            silenceTimerRef.current = setTimeout(() => {
-                                if (options.onSilence) options.onSilence();
-                            }, silDuration);
-                        }
-                    } else {
-                        if (silenceTimerRef.current) {
-                            clearTimeout(silenceTimerRef.current);
-                            silenceTimerRef.current = null;
-                        }
-                    }
+                if (streamRef.current) {
+                    requestAnimationFrame(checkSilence);
+                }
+            };
 
-                    if (streamRef.current) {
-                        requestAnimationFrame(checkSilence);
-                    }
-                };
-
-                checkSilence();
-            }
+            checkSilence();
 
             setIsRecording(true);
         } catch (err) {

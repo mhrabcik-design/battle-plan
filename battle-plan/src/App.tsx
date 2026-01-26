@@ -5,7 +5,6 @@ import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { geminiService } from './services/geminiService';
-import { geminiLiveService } from './services/geminiLiveService';
 import { googleService, type GoogleAuthStatus } from './services/googleService';
 
 type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts';
@@ -26,10 +25,10 @@ function App() {
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
   const availableModels = [
-    'gemini-2.0-flash',   // Default - best price/quality
-    'gemini-1.5-flash',   // Ultra cheap
-    'gemini-2.5-flash',   // Premium quality  
-    'gemini-1.5-pro'      // Complex analysis
+    'gemini-2.0-flash',   // Default - nejlepší poměr cena/výkon
+    'gemini-1.5-flash',   // Ultra levný
+    'gemini-2.5-flash',   // Premium kvalita
+    'gemini-1.5-pro'      // Komplexní analýza
   ];
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
@@ -331,8 +330,6 @@ function App() {
     db.settings.get('ui_scale').then(setting => {
       if (setting) setUiScale(Number(setting.value));
     });
-
-    geminiLiveService.setLogger((m, type) => addLog(m, type));
   }, []);
 
 
@@ -1051,7 +1048,7 @@ function App() {
                               } else {
                                 setActiveVoiceUpdateId(task.id!);
                                 activeVoiceUpdateIdRef.current = task.id!;
-                                startRecording(undefined, {
+                                startRecording({
                                   enableFeedback: true,
                                   onSilence: () => stopRecording(),
                                   silenceThreshold: -45,
@@ -1104,7 +1101,7 @@ function App() {
                             } else {
                               activeVoiceUpdateIdRef.current = editingTask.id!;
                               setActiveVoiceUpdateId(editingTask.id!);
-                              startRecording(undefined, {
+                              startRecording({
                                 enableFeedback: true,
                                 onSilence: () => stopRecording(),
                                 silenceThreshold: -45,
@@ -1402,7 +1399,7 @@ function App() {
                   const targetId = editingTask?.id || null;
                   activeVoiceUpdateIdRef.current = targetId;
                   setActiveVoiceUpdateId(targetId);
-                  startRecording(undefined, {
+                  startRecording({
                     enableFeedback: true,
                     onSilence: () => stopRecording(),
                     silenceThreshold: -45,

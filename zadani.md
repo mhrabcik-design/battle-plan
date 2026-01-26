@@ -76,21 +76,27 @@ Opravit a optimalizovat mobilní verzi tak, aby plně korespondovala s PC verzí
 - ✅ Implementace Quick Backup tlačítka do PC Sidebar.
 - ✅ Oprava řazení úkolů podle času a viditelnost "Pending" úkolů v Plánu.
 
-## Cíl (Phase 4 - Gemini Live Audio Integration) 🚀
-Implementace nativního audio modelu pro neomezené limity a plynulejší analýzu.
+## Cíl (Phase 4 - AI Audio Optimization & REST Stability) ✅
+Optimalizace stávajícího audio workflow pro maximální rychlost s využitím nových Flash modelů. Cesta přes Gemini Live (WebSockets) byla opuštěna ve prospěch stabilního REST API.
 
-1. **Neomezené limity:**
-   - Využití modelu `gemini-2.5-flash-native-audio-dialog`.
-   - Přechod na Multimodal Live API (WebSockets).
+1. **Efektivní nahrávání:** ✅
+   - Implementace Silence Detection pro automatické ukončení nahrávání.
+   - Audio a haptická zpětná vazba pro lepší UX (Pípnutí/Vibrace).
 
-2. **Plynulé nahrávání:**
-   - Streamování RAW PCM 16-bit audia v reálném čase.
-   - Odstranění latence při odesílání velkých souborů.
+2. **Výběr modelů (Audio/REST):** ✅
+   - Integrace 4 stabilních modelů:
+     - `gemini-2.0-flash` (Default - rychlá odezva)
+     - `gemini-1.5-flash` (Ekonomická varianta)
+     - `gemini-2.5-flash` (Premium/Experimentální)
+     - `gemini-1.5-pro` (Hluboká analýza)
 
-## Technické kroky (Aktuální priority)
-- ✅ Implementace Silence Detection (východisko pro Phase 4).
-- ✅ Audio/Haptická odezva (Pípnutí/Vibrace) při start/stop záznamu.
-- [ ] Implementace `GeminiLiveService.ts` pro WebSocket komunikaci.
-- [ ] Úprava `useAudioRecorder.ts` pro export RAW PCM dat.
-- [ ] Integrace Live Mode do Focus Mode v `App.tsx`.
-- [ ] Verifikace "Unlimited" stavu v Google AI Studio.
+## Technické kroky (Dokončeno)
+- ✅ Implementace Silence Detection a Audio/Haptické odezvy.
+- ✅ Stabilizace REST API s novým výběrem modelů.
+- ✅ Odstranění nepotřebného `geminiLiveService.ts` a čistka v `useAudioRecorder.ts`.
+- ✅ Odstranění WebSockets logiky z celé aplikace.
+- ✅ Finalizace AI promptů pro bleskovou extrakci JSON.
+
+---
+*Všechny cíle pro verzi 1.0 byly naplněny. Aplikace je plně funkční v Desktop-First režimu s robustním syncem a AI audio diktátem.*
+
