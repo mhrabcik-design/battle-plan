@@ -1095,7 +1095,13 @@ function App() {
                           {activeVoiceUpdateId === editingTask.id ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
                         </button>
                       )}
-                      <button onClick={() => setEditingTask(null)} className="p-3 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition-all shadow-lg active:scale-95"><X className="w-6 h-6" /></button>
+                      <button
+                        disabled={isRecording && activeVoiceUpdateId === editingTask.id}
+                        onClick={() => setEditingTask(null)}
+                        className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 text-slate-700 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+                      >
+                        <X className="w-6 h-6" />
+                      </button>
                     </div>
                   </div>
 
@@ -1257,8 +1263,9 @@ function App() {
                   {/* EDITOR FOOTER */}
                   <div className="p-6 md:px-12 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-4">
                     <button
+                      disabled={isRecording && activeVoiceUpdateId === editingTask.id}
                       onClick={() => { handleDeleteTask(editingTask); setEditingTask(null); }}
-                      className="px-6 py-3.5 rounded-xl bg-red-600/10 border border-red-500/20 text-red-500 text-[11px] font-black uppercase hover:bg-red-600 hover:text-white transition-all shadow-lg shadow-red-500/5"
+                      className={`px-6 py-3.5 rounded-xl border transition-all shadow-lg shadow-red-500/5 text-[11px] font-black uppercase ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 border-slate-700 text-slate-600 cursor-not-allowed' : 'bg-red-600/10 border-red-500/20 text-red-500 hover:bg-red-600 hover:text-white'}`}
                     >
                       Odstranit záznam
                     </button>
