@@ -36,6 +36,13 @@ function App() {
   const [activeTaskList, setActiveTaskList] = useState<string>('@default');
   const [googleTasksRaw, setGoogleTasksRaw] = useState<any[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [debugLogs, setDebugLogs] = useState<{ t: string, m: string, type: 'info' | 'error' }[]>([]);
+
+  const addLog = (message: string, type: 'info' | 'error' = 'info') => {
+    const time = new Date().toLocaleTimeString('cs-CZ');
+    setDebugLogs(prev => [{ t: time, m: message, type }, ...prev].slice(0, 50));
+    console.log(`[${type.toUpperCase()}] ${message}`);
+  };
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 30000);
@@ -256,6 +263,7 @@ function App() {
               setLastSync(now);
               localStorage.setItem('last_drive_sync', now);
               localStorage.setItem('last_drive_sync_ts', (payload.timestamp || Date.now()).toString());
+              addLog('Auto-obnova z Disku úspěšná (novější data)');
               console.log('Auto-restored from Drive (newer data or missing settings)');
             }
           }
@@ -287,6 +295,7 @@ function App() {
         setLastSync(now);
         localStorage.setItem('last_drive_sync', now);
         localStorage.setItem('last_drive_sync_ts', timestamp.toString());
+        addLog('Automatická záloha na Disk úspěšná');
         console.log('Auto-backup completed');
       } catch (e) {
         console.error('Auto-backup failed', e);
@@ -306,6 +315,8 @@ function App() {
     db.settings.get('ui_scale').then(setting => {
       if (setting) setUiScale(Number(setting.value));
     });
+
+    geminiLiveService.setLogger((m, type) => addLog(m, type));
   }, []);
 
   const fetchModels = async () => {
@@ -388,6 +399,7 @@ function App() {
       localStorage.setItem('last_drive_sync_ts', (payload.timestamp || Date.now()).toString());
       alert('Data byla úspěšně obnovena z Google Disku.');
     } catch (e: any) {
+      addLog('Chyba při obnově: ' + e.message, 'error');
       alert('Chyba při obnově dat: ' + e.message);
     } finally {
       setIsSyncing(false);
@@ -410,9 +422,11 @@ function App() {
     try {
       const result = await geminiService.processAudio(blob, updateId || undefined);
       if (result) {
+        addLog(`AI analýza úspěšná: ${result.title}`);
         await applyAiResult(result, updateId || null);
       }
     } catch (err: any) {
+      addLog('AI Chyba: ' + err.message, 'error');
       alert(err.message || "Chyba při zpracování AI");
     } finally {
       setIsProcessing(false);
@@ -660,6 +674,14 @@ function App() {
                 <Settings className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
                 Konfigurace
               </button>
+
+              <button
+                onClick={() => setViewMode('debug' as any)}
+                className={`mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold uppercase text-[9px] tracking-widest ${viewMode === ('debug' as any) ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+              >
+                <FileText className="w-4 h-4" />
+                Diagnostika
+              </button>
             </div>
           </div>
         </div>
@@ -889,6 +911,46 @@ function App() {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {viewMode === ('debug' as any) && (
+            <div className="flex-1 flex flex-col gap-4 min-h-0">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v3.0.0)</h2>
+                <button
+                  onClick={() => setDebugLogs([])}
+                  className="px-3 py-1 bg-slate-800 hover:bg-red-900/20 text-slate-400 hover:text-red-400 rounded-lg text-[9px] font-black uppercase transition-all"
+                >
+                  Smazat
+                </button>
+              </div>
+              <div className="flex-1 bg-slate-900/50 rounded-2xl border border-slate-800 overflow-y-auto p-4 font-mono text-[10px] space-y-1">
+                {debugLogs.length === 0 ? (
+                  <div className="text-slate-600 italic">Žádné logy k dispozici...</div>
+                ) : (
+                  debugLogs.map((log, i) => (
+                    <div key={i} className={`flex gap-3 ${log.type === 'error' ? 'text-red-400 bg-red-400/5' : 'text-slate-400'} py-1 px-2 rounded`}>
+                      <span className="opacity-50 shrink-0">[{log.t}]</span>
+                      <span className="break-all">{log.m}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase mb-2">Aktivní Konfigurace</h3>
+                <div className="grid grid-cols-2 gap-4 text-[10px]">
+                  <div>
+                    <span className="text-slate-500">Model:</span> <span className="text-white">{selectedModel}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">API Stav:</span> <span className={isAiActive ? 'text-emerald-400' : 'text-red-400'}>{isAiActive ? 'Aktivní' : 'Chybí klíč/Offline'}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-slate-500">Klíč:</span> <span className="text-white">...{apiKey.slice(-6)}</span>
+                  </div>
                 </div>
               </div>
             </div>

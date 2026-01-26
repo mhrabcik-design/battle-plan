@@ -3,7 +3,8 @@ import { db } from '../db';
 export class GeminiLiveService {
     private socket: WebSocket | null = null;
     private apiKey: string | null = null;
-    private model = 'gemini-2.0-flash-exp'; // Standard Live model, user screenshot showed 2.5 flash native audio dialog
+    private logCallback: ((m: string, type: 'info' | 'error') => void) | null = null;
+    private model = 'gemini-2.0-flash-exp';
 
     async init() {
         const setting = await db.settings.get('gemini_api_key');
@@ -14,6 +15,10 @@ export class GeminiLiveService {
         }
     }
 
+    setLogger(callback: (m: string, type: 'info' | 'error') => void) {
+        this.logCallback = callback;
+    }
+
     async connect(onMessage: (data: any) => void, onError: (err: any) => void) {
         if (!this.apiKey) await this.init();
         if (!this.apiKey) {
@@ -21,11 +26,16 @@ export class GeminiLiveService {
             return;
         }
 
-        const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BiDiGenerateContent?key=${this.apiKey}`;
+        const host = "generativelanguage.googleapis.com";
+        const path = "ws/google.ai.generativelanguage.v1beta.GenerativeService.BiDiGenerateContent";
+        const url = `wss://${host}/${path}?key=${this.apiKey}`;
 
+        this.logCallback?.(`Připojování k Gemini Live: models/${this.model}`, 'info');
+        console.log(`Connecting to Gemini Live: wss://${host}/${path}?key=***${this.apiKey.slice(-4)}`);
         this.socket = new WebSocket(url);
 
         this.socket.onopen = () => {
+            this.logCallback?.("WebSocket otevřen, posílám setup...", 'info');
             console.log("Gemini Live WebSocket connected");
 
             const today = new Date().toISOString().split('T')[0];
@@ -72,12 +82,20 @@ Vracíš POUZE čistý JSON.`;
         };
 
         this.socket.onerror = (err) => {
-            console.error("WebSocket error", err);
-            onError("Připojení k AI selhalo.");
+            this.logCallback?.(`WebSocket Error: ${JSON.stringify(err)}`, 'error');
+            console.error("Gemini Live WebSocket error:", err);
+            onError(`Spojení s AI selhalo. Zkontrolujte připojení k internetu nebo API klíč.`);
         };
 
-        this.socket.onclose = () => {
-            console.log("Gemini Live WebSocket closed");
+        this.socket.onclose = (event) => {
+            this.logCallback?.(`WebSocket Closed: ${event.code} ${event.reason}`, event.wasClean ? 'info' : 'error');
+            console.log("Gemini Live WebSocket closed", event.code, event.reason);
+            if (!event.wasClean) {
+                let detail = "";
+                if (event.code === 1006) detail = "(Abnormal Closure - často blokováno firewall/proxy nebo špatné URL)";
+                if (event.code === 4000) detail = "(Neplatný API klíč)";
+                onError(`AI spojení přerušeno: ${event.code} ${event.reason || detail}`);
+            }
         };
     }
 
