@@ -11,13 +11,7 @@ export class GeminiLiveService {
         this.apiKey = setting?.value || null;
         const modelSetting = await db.settings.get('gemini_model');
         if (modelSetting?.value) {
-            // Map display names to actual API model IDs
-            // gemini-2.5-flash-native-audio-dialog is a UI name, API uses gemini-2.0-flash-exp
-            if (modelSetting.value.includes('native-audio') || modelSetting.value.includes('flash-exp')) {
-                this.model = 'gemini-2.0-flash-exp'; // Known working model for Live API
-            } else {
-                this.model = modelSetting.value;
-            }
+            this.model = modelSetting.value;
         }
     }
 

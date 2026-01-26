@@ -67,24 +67,14 @@ export class GeminiService {
         }
     }
 
-    // Map display names to valid REST API model IDs
-    private mapModelForRest(modelName: string): string {
-        // These models don't work with REST generateContent
-        if (modelName.includes('native-audio')) {
-            return 'gemini-2.0-flash'; // Fallback for REST
-        }
-        return modelName;
-    }
-
     async processAudio(blob: Blob, contextId?: number): Promise<Partial<Task> | null> {
         if (!this.apiKey) await this.init();
         if (!this.apiKey) throw new Error("API klíč nebyl nalezen.");
 
         const savedModel = await db.settings.get('gemini_model');
-        const rawModel = (savedModel?.value || "gemini-1.5-flash").replace('models/', '');
-        const modelId = this.mapModelForRest(rawModel);
+        const modelId = (savedModel?.value || "gemini-1.5-flash").replace('models/', '');
 
-        console.log(`REST API using model: ${modelId} (original: ${rawModel})`);
+        console.log(`REST API using model: ${modelId}`);
 
         const base64Data = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();

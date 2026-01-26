@@ -315,7 +315,17 @@ function App() {
       if (setting) setApiKey(setting.value);
     });
     db.settings.get('gemini_model').then(setting => {
-      if (setting) setSelectedModel(setting.value);
+      if (setting) {
+        // Validate if the saved model is still in our allowed list
+        const isValid = availableModels.includes(setting.value);
+        if (isValid) {
+          setSelectedModel(setting.value);
+        } else {
+          // Reset to default if the model is no longer supported
+          setSelectedModel('gemini-2.0-flash');
+          db.settings.put({ id: 'gemini_model', value: 'gemini-2.0-flash' });
+        }
+      }
     });
     db.settings.get('ui_scale').then(setting => {
       if (setting) setUiScale(Number(setting.value));
