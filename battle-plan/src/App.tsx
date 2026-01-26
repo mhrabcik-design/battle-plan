@@ -413,7 +413,9 @@ function App() {
   }, [audioBlob]);
 
   const handleProcessAudio = async (blob: Blob) => {
-    if (selectedModel.includes('native-audio')) {
+    const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
+    if (isLiveModel) {
+      addLog(`Dokončeno Live nahrávání pro: ${selectedModel}`);
       clearAudio();
       return;
     }

@@ -39,12 +39,12 @@ export class GeminiLiveService {
             this.logCallback?.("WebSocket otevřen, posílám setup...", 'info');
             console.log("Gemini Live WebSocket connected");
 
-            this.logCallback?.(`Posílám setup pro model: models/${this.model}`, 'info');
+            this.logCallback?.(`Posílám setup pro: ${this.model}`, 'info');
 
-            // Send clean setup first
+            // Pure model name often works better in the setup frame itself
             const setup = {
                 setup: {
-                    model: `models/${this.model}`,
+                    model: this.model.startsWith('models/') ? this.model : `models/${this.model}`,
                     generation_config: {
                         response_modalities: ["text"]
                     }
