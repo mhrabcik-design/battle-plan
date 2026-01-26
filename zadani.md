@@ -88,6 +88,8 @@ Implementace nativního audio modelu pro neomezené limity a plynulejší analý
    - Odstranění latence při odesílání velkých souborů.
 
 ## Technické kroky (Aktuální priority)
+- ✅ Implementace Silence Detection (východisko pro Phase 4).
+- ✅ Audio/Haptická odezva (Pípnutí/Vibrace) při start/stop záznamu.
 - [ ] Implementace `GeminiLiveService.ts` pro WebSocket komunikaci.
 - [ ] Úprava `useAudioRecorder.ts` pro export RAW PCM dat.
 - [ ] Integrace Live Mode do Focus Mode v `App.tsx`.

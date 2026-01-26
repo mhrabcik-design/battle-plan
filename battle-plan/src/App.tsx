@@ -7,7 +7,6 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { geminiService } from './services/geminiService';
 import { geminiLiveService } from './services/geminiLiveService';
 import { googleService, type GoogleAuthStatus } from './services/googleService';
-import { audioFeedbackService } from './services/audioService';
 
 type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts';
 
@@ -1045,7 +1044,23 @@ function App() {
                           <FileText className="w-3.5 h-3.5" /> Detaily
                         </button>
                         {!task.isGoogleTask && (
-                          <button onClick={() => { if (activeVoiceUpdateId === task.id) { stopRecording(); } else { setActiveVoiceUpdateId(task.id!); startRecording(); } }} className={`h-9 px-3 rounded-lg transition-all border ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-600/10 border-indigo-600/20 text-indigo-400 hover:bg-indigo-600/20'}`}>
+                          <button
+                            onClick={() => {
+                              if (activeVoiceUpdateId === task.id) {
+                                stopRecording();
+                              } else {
+                                setActiveVoiceUpdateId(task.id!);
+                                activeVoiceUpdateIdRef.current = task.id!;
+                                startRecording(undefined, {
+                                  enableFeedback: true,
+                                  onSilence: () => stopRecording(),
+                                  silenceThreshold: -45,
+                                  silenceDuration: 4000
+                                });
+                              }
+                            }}
+                            className={`h-9 px-3 rounded-lg transition-all border ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-600/10 border-indigo-600/20 text-indigo-400 hover:bg-indigo-600/20'}`}
+                          >
                             <Mic className="w-3.5 h-3.5" />
                           </button>
                         )}
@@ -1085,13 +1100,16 @@ function App() {
                         <button
                           onClick={() => {
                             if (activeVoiceUpdateId === editingTask.id) {
-                              audioFeedbackService.playStop();
                               stopRecording();
                             } else {
-                              audioFeedbackService.playStart();
                               activeVoiceUpdateIdRef.current = editingTask.id!;
                               setActiveVoiceUpdateId(editingTask.id!);
-                              startRecording();
+                              startRecording(undefined, {
+                                enableFeedback: true,
+                                onSilence: () => stopRecording(),
+                                silenceThreshold: -45,
+                                silenceDuration: 4000
+                              });
                             }
                           }}
                           className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 border ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-indigo-600/20 border-indigo-600/30 text-indigo-400 hover:bg-indigo-600/40'}`}
@@ -1379,14 +1397,17 @@ function App() {
               </AnimatePresence>
               <button
                 onClick={isRecording ? () => {
-                  audioFeedbackService.playStop();
                   stopRecording();
                 } : async () => {
-                  audioFeedbackService.playStart();
                   const targetId = editingTask?.id || null;
                   activeVoiceUpdateIdRef.current = targetId;
                   setActiveVoiceUpdateId(targetId);
-                  startRecording();
+                  startRecording(undefined, {
+                    enableFeedback: true,
+                    onSilence: () => stopRecording(),
+                    silenceThreshold: -45,
+                    silenceDuration: 5000 // Longer for main mic as it might be dictating longer thoughts
+                  });
                 }}
                 disabled={isProcessing}
                 className={`relative z-10 w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
