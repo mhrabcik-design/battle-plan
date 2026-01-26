@@ -25,12 +25,12 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
-  const [availableModels, setAvailableModels] = useState<string[]>([
+  const availableModels = [
     'gemini-2.0-flash',   // Default - best price/quality
     'gemini-1.5-flash',   // Ultra cheap
     'gemini-2.5-flash',   // Premium quality  
     'gemini-1.5-pro'      // Complex analysis
-  ]);
+  ];
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -324,22 +324,6 @@ function App() {
     geminiLiveService.setLogger((m, type) => addLog(m, type));
   }, []);
 
-  const fetchModels = async () => {
-    if (!apiKey) return;
-    const res = await geminiService.listModels();
-    if (res.includes('Dostupné modely:')) {
-      const models = res.replace('Dostupné modely:\n', '').split('\n');
-      // Always ensure our native audio model is in the list
-      if (!models.includes('gemini-2.5-flash-native-audio-dialog')) {
-        models.push('gemini-2.5-flash-native-audio-dialog');
-      }
-      setAvailableModels(models);
-    }
-  };
-
-  useEffect(() => {
-    if (showSettings) fetchModels();
-  }, [showSettings, apiKey]);
 
   const saveSettings = async () => {
     await db.settings.put({ id: 'gemini_api_key', value: apiKey });
