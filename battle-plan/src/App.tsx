@@ -5,6 +5,7 @@ import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { geminiService } from './services/geminiService';
+import { geminiLiveService } from './services/geminiLiveService';
 import { googleService, type GoogleAuthStatus } from './services/googleService';
 
 type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts';
@@ -24,7 +25,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<string[]>(['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash-native-audio-dialog']);
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -312,6 +313,10 @@ function App() {
     const res = await geminiService.listModels();
     if (res.includes('Dostupné modely:')) {
       const models = res.replace('Dostupné modely:\n', '').split('\n');
+      // Always ensure our native audio model is in the list
+      if (!models.includes('gemini-2.5-flash-native-audio-dialog')) {
+        models.push('gemini-2.5-flash-native-audio-dialog');
+      }
       setAvailableModels(models);
     }
   };
@@ -396,62 +401,16 @@ function App() {
   }, [audioBlob]);
 
   const handleProcessAudio = async (blob: Blob) => {
+    if (selectedModel.includes('native-audio')) {
+      clearAudio();
+      return;
+    }
     setIsProcessing(true);
     const updateId = activeVoiceUpdateId;
     try {
       const result = await geminiService.processAudio(blob, updateId || undefined);
       if (result) {
-        if (updateId) {
-          if (result.type) {
-            const aiType = String(result.type).toLowerCase();
-            if (aiType.includes('task') || aiType.includes('úkol')) result.type = 'task' as any;
-            else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) result.type = 'meeting' as any;
-            else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) result.type = 'thought' as any;
-          }
-          await db.tasks.update(updateId, result as any);
-
-          // Pokud je tento úkol právě otevřen v editačním okně, aktualizujeme i jeho lokální stav
-          if (editingTask && editingTask.id === updateId) {
-            setEditingTask(prev => prev ? { ...prev, ...result } : null);
-          }
-        } else {
-          let finalType: Task['type'] = 'thought';
-          const aiType = String(result.type || 'thought').toLowerCase();
-          if (aiType.includes('task') || aiType.includes('úkol')) finalType = 'task';
-          else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) finalType = 'meeting';
-          else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) finalType = 'thought';
-
-          const defaultDuration = finalType === 'meeting' ? 60 : 30;
-
-          const newTaskId = await db.tasks.add({
-            title: result.title || "Nový záznam",
-            description: result.description || "",
-            internalNotes: result.internalNotes || "",
-            type: finalType,
-            urgency: Number(result.urgency) as any || 2,
-            status: 'pending',
-            date: result.date || new Date().toISOString().split('T')[0],
-            startTime: result.startTime || (finalType === 'meeting' ? "09:00" : undefined),
-            deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
-            duration: Number(result.duration) || defaultDuration,
-            totalDuration: Number(result.duration) || defaultDuration,
-            subTasks: result.subTasks || [],
-            progress: Number(result.progress) || 0,
-            createdAt: Date.now()
-          });
-
-          if (finalType === 'meeting' && googleAuth.isSignedIn) {
-            const addedTask = await db.tasks.get(newTaskId);
-            if (addedTask) {
-              try {
-                const eventId = await googleService.addToCalendar(addedTask);
-                if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
-              } catch (e) {
-                console.error("Auto Google sync failed", e);
-              }
-            }
-          }
-        }
+        await applyAiResult(result, updateId || null);
       }
     } catch (err: any) {
       alert(err.message || "Chyba při zpracování AI");
@@ -459,6 +418,67 @@ function App() {
       setIsProcessing(false);
       setActiveVoiceUpdateId(null);
       clearAudio();
+    }
+  };
+
+  const handleProcessLiveResult = async (result: any, updateId: number | null) => {
+    if (result) {
+      await applyAiResult(result, updateId);
+      setActiveVoiceUpdateId(null);
+    }
+  };
+
+  const applyAiResult = async (result: any, updateId: number | null) => {
+    if (updateId) {
+      if (result.type) {
+        const aiType = String(result.type).toLowerCase();
+        if (aiType.includes('task') || aiType.includes('úkol')) result.type = 'task' as any;
+        else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) result.type = 'meeting' as any;
+        else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) result.type = 'thought' as any;
+      }
+      await db.tasks.update(updateId, result as any);
+
+      // Pokud je tento úkol právě otevřen v editačním okně, aktualizujeme i jeho lokální stav
+      if (editingTask && editingTask.id === updateId) {
+        setEditingTask(prev => prev ? { ...prev, ...result } : null);
+      }
+    } else {
+      let finalType: Task['type'] = 'thought';
+      const aiType = String(result.type || 'thought').toLowerCase();
+      if (aiType.includes('task') || aiType.includes('úkol')) finalType = 'task';
+      else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) finalType = 'meeting';
+      else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) finalType = 'thought';
+
+      const defaultDuration = finalType === 'meeting' ? 60 : 30;
+
+      const newTaskId = await db.tasks.add({
+        title: result.title || "Nový záznam",
+        description: result.description || "",
+        internalNotes: result.internalNotes || "",
+        type: finalType,
+        urgency: Number(result.urgency) as any || 2,
+        status: 'pending',
+        date: result.date || new Date().toISOString().split('T')[0],
+        startTime: result.startTime || (finalType === 'meeting' ? "09:00" : undefined),
+        deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
+        duration: Number(result.duration) || defaultDuration,
+        totalDuration: Number(result.duration) || defaultDuration,
+        subTasks: result.subTasks || [],
+        progress: Number(result.progress) || 0,
+        createdAt: Date.now()
+      });
+
+      if (finalType === 'meeting' && googleAuth.isSignedIn) {
+        const addedTask = await db.tasks.get(newTaskId);
+        if (addedTask) {
+          try {
+            const eventId = await googleService.addToCalendar(addedTask);
+            if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
+          } catch (e) {
+            console.error("Auto Google sync failed", e);
+          }
+        }
+      }
     }
   };
 
@@ -582,7 +602,7 @@ function App() {
             </div>
             <span className="text-base font-black uppercase tracking-tight text-white leading-none">Bitevní Plán</span>
           </div>
-          <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase ml-10 opacity-70">Desktop Suite 2026</span>
+          <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase ml-10 opacity-70">Desktop Suite v3.0.0</span>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-6">
@@ -1289,10 +1309,30 @@ function App() {
                 {isRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
               </AnimatePresence>
               <button
-                onClick={isRecording ? stopRecording : () => {
-                  // Pokud je otevřený Focus Mode, automaticky měníme otevřený úkol
+                onClick={isRecording ? () => {
+                  stopRecording();
+                  if (selectedModel.includes('native-audio')) {
+                    geminiLiveService.disconnect();
+                  }
+                } : async () => {
                   setActiveVoiceUpdateId(editingTask?.id || null);
-                  startRecording();
+                  if (selectedModel.includes('native-audio')) {
+                    setIsProcessing(true);
+                    await geminiLiveService.connect(
+                      (result) => {
+                        handleProcessLiveResult(result, editingTask?.id || null);
+                        setIsProcessing(false);
+                      },
+                      (err) => {
+                        alert(err);
+                        stopRecording();
+                        setIsProcessing(false);
+                      }
+                    );
+                    startRecording((pcm) => geminiLiveService.sendAudio(pcm));
+                  } else {
+                    startRecording();
+                  }
                 }}
                 disabled={isProcessing}
                 className={`relative z-10 w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}

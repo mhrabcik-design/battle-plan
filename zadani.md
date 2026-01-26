@@ -50,25 +50,45 @@ Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-F
 - ✅ Fixace scrollování: V týdenním režimu je scrollovatelný pouze kalendář, nikoliv celý layout.
 - ✅ Redefinice urgentnosti na 3 stupně (1-3) + Update AI promptu.
 
-## Cíl (Phase 3 - Mobile Sync & UI Optimization)
+## Cíl (Phase 3 - Mobile Sync & UI Optimization) ✅
 Opravit a optimalizovat mobilní verzi tak, aby plně korespondovala s PC verzí a byla stoprocentně spolehlivá v synchronizaci.
 
-1. **Robustní Synchronizace:**
+1. **Robustní Synchronizace:** ✅
    - Synchronizace i globálního nastavení (Velikost písma, API klíče).
    - Oprava auto-restore: Pokud na mobilu chybí nastavení, aplikace si ho sama stáhne z Disku.
    - Indikátor stavu synchronizace přímo v mobilním UI.
 
-2. **Mobilní UX Fokus:**
+2. **Mobilní UX Fokus:** ✅
    - Přizpůsobení "Focus Mode" pro mobil (skutečný fullscreen).
    - Vylepšení Timeline view na mobilu (přehlednost sloupců).
    - Prémiový vzhled mobilní navigace odpovídající PC aplikaci.
 
-3. **Stabilizace dat:**
+3. **Stabilizace dat:** ✅
    - Kontrola ukládání 3 stupňů urgentnosti.
    - Prevence přepsání novějších dat staršími při synchronizaci z více zařízení.
+   - **Quick Access:** Tlačítko pro okamžitou zálohu v PC sidebaru.
 
-## Technické kroky (Aktuální priority)
+## Technické kroky (Dokončeno)
 - ✅ Přechod `uiScale` z localStorage do IndexDB (`db.settings`) pro sync.
-- ✅ Refaktorace `checkSync` pro lepší detekci "přázdného" stavu na mobilu (timestamp-based auto-restore).
+- ✅ Refaktorace `checkSync` pro lepší detekci "prázdného" stavu na mobilu (timestamp-based auto-restore).
 - ✅ Úprava UI `App.tsx` pro mobilní navigaci a Focus Mode (fullscreen).
 - ✅ Přidání Sync statusu a manuálního tlačítka na mobilní obrazovku.
+- ✅ Implementace Quick Backup tlačítka do PC Sidebar.
+- ✅ Oprava řazení úkolů podle času a viditelnost "Pending" úkolů v Plánu.
+
+## Cíl (Phase 4 - Gemini Live Audio Integration) 🚀
+Implementace nativního audio modelu pro neomezené limity a plynulejší analýzu.
+
+1. **Neomezené limity:**
+   - Využití modelu `gemini-2.5-flash-native-audio-dialog`.
+   - Přechod na Multimodal Live API (WebSockets).
+
+2. **Plynulé nahrávání:**
+   - Streamování RAW PCM 16-bit audia v reálném čase.
+   - Odstranění latence při odesílání velkých souborů.
+
+## Technické kroky (Aktuální priority)
+- [ ] Implementace `GeminiLiveService.ts` pro WebSocket komunikaci.
+- [ ] Úprava `useAudioRecorder.ts` pro export RAW PCM dat.
+- [ ] Integrace Live Mode do Focus Mode v `App.tsx`.
+- [ ] Verifikace "Unlimited" stavu v Google AI Studio.
