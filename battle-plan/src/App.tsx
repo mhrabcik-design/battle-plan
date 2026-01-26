@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Mic, MicOff, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail, CloudUpload, CloudDownload } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
@@ -42,6 +42,7 @@ function App() {
   const [googleTasksRaw, setGoogleTasksRaw] = useState<any[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string, m: string, type: 'info' | 'error' }[]>([]);
+  const activeVoiceUpdateIdRef = useRef<number | null>(null);
 
   const addLog = (message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
@@ -405,31 +406,37 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    if (audioBlob) {
-      handleProcessAudio(audioBlob);
-    }
-  }, [audioBlob]);
-
   const handleProcessAudio = async (blob: Blob) => {
+    if (isProcessing) return;
     setIsProcessing(true);
-    addLog(`Zpracovávám audio s modelem: ${selectedModel}`);
-    const updateId = activeVoiceUpdateId;
+
+    // Use the REF to get the correct ID even in an async/stale closure scenario
+    const updateId = activeVoiceUpdateIdRef.current;
+
+    addLog(`Zpracovávám audio s modelem: ${selectedModel} (Update ID: ${updateId || 'NOVÝ'})`);
+
     try {
       const result = await geminiService.processAudio(blob, updateId || undefined);
       if (result) {
-        addLog(`AI analýza úspěšná: ${result.title}`);
-        await applyAiResult(result, updateId || null);
+        addLog(`AI analýza úspěšná: ${result.title} (${updateId ? 'AKTUALIZACE' : 'NOVÝ'})`);
+        await applyAiResult(result, updateId);
       }
     } catch (err: any) {
       addLog('AI Chyba: ' + err.message, 'error');
       alert(err.message || "Chyba při zpracování AI");
     } finally {
       setIsProcessing(false);
+      activeVoiceUpdateIdRef.current = null;
       setActiveVoiceUpdateId(null);
       clearAudio();
     }
   };
+
+  useEffect(() => {
+    if (audioBlob) {
+      handleProcessAudio(audioBlob);
+    }
+  }, [audioBlob, selectedModel]);
 
   const applyAiResult = async (result: any, updateId: number | null) => {
     if (updateId) {
@@ -1363,7 +1370,9 @@ function App() {
                 onClick={isRecording ? () => {
                   stopRecording();
                 } : async () => {
-                  setActiveVoiceUpdateId(editingTask?.id || null);
+                  const targetId = editingTask?.id || null;
+                  activeVoiceUpdateIdRef.current = targetId;
+                  setActiveVoiceUpdateId(targetId);
                   startRecording();
                 }}
                 disabled={isProcessing}
