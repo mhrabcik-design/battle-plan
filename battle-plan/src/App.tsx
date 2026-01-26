@@ -37,6 +37,7 @@ function App() {
   const [googleTasksRaw, setGoogleTasksRaw] = useState<any[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string, m: string, type: 'info' | 'error' }[]>([]);
+  const [liveSuccess, setLiveSuccess] = useState(false);
 
   const addLog = (message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
@@ -414,11 +415,18 @@ function App() {
 
   const handleProcessAudio = async (blob: Blob) => {
     const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
-    if (isLiveModel) {
-      addLog(`Dokončeno Live nahrávání pro: ${selectedModel}`);
+
+    if (isLiveModel && liveSuccess) {
+      addLog(`Live API nahrávání bylo úspěšné, přeskakuji REST.`);
       clearAudio();
+      setIsProcessing(false);
       return;
     }
+
+    if (isLiveModel && !liveSuccess) {
+      addLog(`Live API selhalo nebo nebylo aktivní, zkouším REST fallback...`, 'info');
+    }
+
     setIsProcessing(true);
     const updateId = activeVoiceUpdateId;
     try {
@@ -439,6 +447,7 @@ function App() {
 
   const handleProcessLiveResult = async (result: any, updateId: number | null) => {
     if (result) {
+      setLiveSuccess(true);
       await applyAiResult(result, updateId);
       setActiveVoiceUpdateId(null);
     }
@@ -1375,11 +1384,13 @@ function App() {
               <button
                 onClick={isRecording ? () => {
                   stopRecording();
-                  if (selectedModel.includes('native-audio')) {
+                  const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
+                  if (isLiveModel) {
                     geminiLiveService.disconnect();
                   }
                 } : async () => {
                   setActiveVoiceUpdateId(editingTask?.id || null);
+                  setLiveSuccess(false);
                   const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
 
                   if (isLiveModel) {
@@ -1391,8 +1402,8 @@ function App() {
                         setIsProcessing(false);
                       },
                       (err) => {
-                        alert(err);
-                        stopRecording();
+                        addLog(`Live API Error (Fallback bude aktivován): ${err}`, 'error');
+                        // No alert here to not disrupt recording
                         setIsProcessing(false);
                       }
                     );
