@@ -24,8 +24,13 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
-  const [availableModels, setAvailableModels] = useState<string[]>(['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash-native-audio-dialog', 'gemini-2.0-flash-exp']);
+  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [availableModels, setAvailableModels] = useState<string[]>([
+    'gemini-2.0-flash',   // Default - best price/quality
+    'gemini-1.5-flash',   // Ultra cheap
+    'gemini-2.5-flash',   // Premium quality  
+    'gemini-1.5-pro'      // Complex analysis
+  ]);
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -37,7 +42,6 @@ function App() {
   const [googleTasksRaw, setGoogleTasksRaw] = useState<any[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string, m: string, type: 'info' | 'error' }[]>([]);
-  const [liveSuccess, setLiveSuccess] = useState(false);
 
   const addLog = (message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
@@ -414,20 +418,8 @@ function App() {
   }, [audioBlob]);
 
   const handleProcessAudio = async (blob: Blob) => {
-    const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
-
-    if (isLiveModel && liveSuccess) {
-      addLog(`Live API nahrávání bylo úspěšné, přeskakuji REST.`);
-      clearAudio();
-      setIsProcessing(false);
-      return;
-    }
-
-    if (isLiveModel && !liveSuccess) {
-      addLog(`Live API selhalo nebo nebylo aktivní, zkouším REST fallback...`, 'info');
-    }
-
     setIsProcessing(true);
+    addLog(`Zpracovávám audio s modelem: ${selectedModel}`);
     const updateId = activeVoiceUpdateId;
     try {
       const result = await geminiService.processAudio(blob, updateId || undefined);
@@ -442,14 +434,6 @@ function App() {
       setIsProcessing(false);
       setActiveVoiceUpdateId(null);
       clearAudio();
-    }
-  };
-
-  const handleProcessLiveResult = async (result: any, updateId: number | null) => {
-    if (result) {
-      setLiveSuccess(true);
-      await applyAiResult(result, updateId);
-      setActiveVoiceUpdateId(null);
     }
   };
 
@@ -1384,33 +1368,9 @@ function App() {
               <button
                 onClick={isRecording ? () => {
                   stopRecording();
-                  const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
-                  if (isLiveModel) {
-                    geminiLiveService.disconnect();
-                  }
                 } : async () => {
                   setActiveVoiceUpdateId(editingTask?.id || null);
-                  setLiveSuccess(false);
-                  const isLiveModel = selectedModel.includes('native-audio') || selectedModel.includes('flash-exp');
-
-                  if (isLiveModel) {
-                    setIsProcessing(true);
-                    addLog(`Spouštím Live API pro: ${selectedModel}`);
-                    await geminiLiveService.connect(
-                      (result) => {
-                        handleProcessLiveResult(result, editingTask?.id || null);
-                        setIsProcessing(false);
-                      },
-                      (err) => {
-                        addLog(`Live API Error (Fallback bude aktivován): ${err}`, 'error');
-                        // No alert here to not disrupt recording
-                        setIsProcessing(false);
-                      }
-                    );
-                    startRecording((pcm) => geminiLiveService.sendAudio(pcm));
-                  } else {
-                    startRecording();
-                  }
+                  startRecording();
                 }}
                 disabled={isProcessing}
                 className={`relative z-10 w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
