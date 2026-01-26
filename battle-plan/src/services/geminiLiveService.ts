@@ -10,7 +10,7 @@ export class GeminiLiveService {
         const setting = await db.settings.get('gemini_api_key');
         this.apiKey = setting?.value || null;
         const modelSetting = await db.settings.get('gemini_model');
-        if (modelSetting?.value.includes('native-audio')) {
+        if (modelSetting?.value) {
             this.model = modelSetting.value;
         }
     }
@@ -38,10 +38,36 @@ export class GeminiLiveService {
             this.logCallback?.("WebSocket otevřen, posílám setup...", 'info');
             console.log("Gemini Live WebSocket connected");
 
-            const today = new Date().toISOString().split('T')[0];
-            const now = new Date().toTimeString().split(' ')[0];
+            this.logCallback?.(`Posílám setup pro model: models/${this.model}`, 'info');
 
-            const systemPrompt = `Jsi "Bitevní Plán", elitní AI asistent pro management času. 
+            // Send clean setup first
+            const setup = {
+                setup: {
+                    model: `models/${this.model}`,
+                    generation_config: {
+                        response_modalities: ["text"]
+                    }
+                }
+            };
+            this.socket?.send(JSON.stringify(setup));
+            this.logCallback?.("Setup odeslán (minimal).", 'info');
+
+            // Optional: System prompt can be sent as an initial content if needed, 
+            // but let's see if the connection holds first.
+        };
+
+        this.socket.onmessage = (event) => {
+            this.logCallback?.(`Přijata zpráva: ${event.data.length > 200 ? event.data.length + ' bajtů' : event.data}`, 'info');
+            try {
+                const data = JSON.parse(event.data);
+
+                // Handle setup completion
+                if (data.setupComplete) {
+                    this.logCallback?.("Setup potvrzen serverem. Posílám instrukce...", 'info');
+
+                    const today = new Date().toISOString().split('T')[0];
+                    const now = new Date().toTimeString().split(' ')[0];
+                    const systemPrompt = `Jsi "Bitevní Plán", elitní AI asistent pro management času. 
 Dnešní datum je: ${today} (čas: ${now}).
 Z audia vytvoř POUZE JSON objekt:
 - title: KRÁTKÝ, ÚDERNÝ (MAX 5 SLOV, VELKÁ PÍSMENA).
@@ -50,24 +76,21 @@ Z audia vytvoř POUZE JSON objekt:
 - URGENCE (1-3): 3=Urgentní, 2=Normální (DEFAULT), 1=Bez urgentnosti.
 Vracíš POUZE čistý JSON.`;
 
-            // Send setup message
-            const setup = {
-                setup: {
-                    model: `models/${this.model}`,
-                    generation_config: {
-                        response_modalities: ["text"]
-                    },
-                    system_instruction: {
-                        parts: [{ text: systemPrompt }]
-                    }
+                    const firstMessage = {
+                        client_content: {
+                            turns: [
+                                {
+                                    role: "user",
+                                    parts: [{ text: systemPrompt }]
+                                }
+                            ],
+                            turn_complete: true
+                        }
+                    };
+                    this.socket?.send(JSON.stringify(firstMessage));
+                    return;
                 }
-            };
-            this.socket?.send(JSON.stringify(setup));
-        };
 
-        this.socket.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
                 // The Live API returns delta updates or final responses
                 if (data.serverContent?.modelTurn?.parts?.[0]?.text) {
                     const text = data.serverContent.modelTurn.parts[0].text;
