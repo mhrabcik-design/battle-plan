@@ -7,6 +7,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { geminiService } from './services/geminiService';
 import { geminiLiveService } from './services/geminiLiveService';
 import { googleService, type GoogleAuthStatus } from './services/googleService';
+import { audioFeedbackService } from './services/audioService';
 
 type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts';
 
@@ -1084,8 +1085,11 @@ function App() {
                         <button
                           onClick={() => {
                             if (activeVoiceUpdateId === editingTask.id) {
+                              audioFeedbackService.playStop();
                               stopRecording();
                             } else {
+                              audioFeedbackService.playStart();
+                              activeVoiceUpdateIdRef.current = editingTask.id!;
                               setActiveVoiceUpdateId(editingTask.id!);
                               startRecording();
                             }
@@ -1375,8 +1379,10 @@ function App() {
               </AnimatePresence>
               <button
                 onClick={isRecording ? () => {
+                  audioFeedbackService.playStop();
                   stopRecording();
                 } : async () => {
+                  audioFeedbackService.playStart();
                   const targetId = editingTask?.id || null;
                   activeVoiceUpdateIdRef.current = targetId;
                   setActiveVoiceUpdateId(targetId);
