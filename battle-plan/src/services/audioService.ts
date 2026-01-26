@@ -1,14 +1,17 @@
 export class AudioFeedbackService {
     private audioContext: AudioContext | null = null;
 
-    private init() {
+    private async init() {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         }
+        if (this.audioContext.state === 'suspended') {
+            await this.audioContext.resume();
+        }
     }
 
-    private playTone(startFreq: number, endFreq: number, duration: number = 0.15) {
-        this.init();
+    private async playTone(startFreq: number, endFreq: number, duration: number = 0.15) {
+        await this.init();
         if (!this.audioContext) return;
 
         const osc = this.audioContext.createOscillator();
@@ -31,11 +34,19 @@ export class AudioFeedbackService {
     playStart() {
         // Ascending tone: 440Hz to 880Hz
         this.playTone(440, 880, 0.1);
+        // Haptic feedback for mobile
+        if ('vibrate' in navigator) {
+            navigator.vibrate(50);
+        }
     }
 
     playStop() {
         // Descending tone: 880Hz to 440Hz
         this.playTone(880, 440, 0.1);
+        // Haptic feedback for mobile (two short pulses)
+        if ('vibrate' in navigator) {
+            navigator.vibrate([30, 30, 30]);
+        }
     }
 }
 
