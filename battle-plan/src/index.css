@@ -108,4 +108,28 @@
   .custom-scrollbar::-webkit-scrollbar-thumb {
     @apply bg-slate-800 rounded-full hover:bg-slate-700;
   }
+
+  .animate-pulse-red {
+    animation: pulse-red 2s infinite;
+  }
+
+  @keyframes pulse-red {
+    0% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+      background-color: rgba(239, 68, 68, 0.05);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+
+    70% {
+      box-shadow: 0 0 15px 5px rgba(239, 68, 68, 0);
+      background-color: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.8);
+    }
+
+    100% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+      background-color: rgba(239, 68, 68, 0.05);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+  }
 }

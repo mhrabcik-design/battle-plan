@@ -48,10 +48,9 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 ### Inteligentní funkce
 - **Detekce ticha:** Stačí mluvit. Jakmile se na pár sekund odmlčíte, aplikace nahrávání sama ukončí a odešle k analýze.
 - **Zpětná vazba:** Start nahrávání je potvrzen krátkým pípnutím a vibrací (na podporovaných zařízeních).
-- **Urgentnost (1-3):** AI automaticky rozpozná prioritu:
-    - **3 (Urgentní):** "Spěchá to", "Priorita", "Musím hned".
-    - **2 (Normální):** Výchozí stav.
-    - **1 (Bez priority):** "V klidu", "Někdy potom".
+- **Urgentnost (1-3):** AI automaticky rozpozná prioritu (3-Urgentní, 2-Normální, 1-Nízká).
+- **Capacity Guardian (Strážce kapacity):** Pokud úkol vyžaduje více času, než kolik zbývá v pracovní době (7:00-19:00) do jeho termínu, začne v seznamu **červeně pulsovat**. To vás varuje, že termín není reálné stihnout bez přesčasů.
+- **Deadline-First:** Pro úkoly (Tasks) je nejdůležitějším údajem **termín dokončení (deadline)**. V přehledu uvidíte ikonu přesýpacích hodin a přesný odpočet času, který vám do termínu zbývá.
 
 ---
 
@@ -59,13 +58,13 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 
 ### Sekce aplikace
 - **Plán:** Váš strategický přehled pro dnešní den. Zobrazuje vše, co vyžaduje pozornost.
-- **Týden:** Profesionální časová osa (7:00 – 19:00). Zde vidíte své schůzky a úkoly v kontextu celého týdne.
+- **Týden:** Profesionální časová osa (7:00 – 19:00). Úkoly se v tomto pohledu zobrazují přesně v den svého **deadline**.
 - **Úkoly / Schůzky / Myšlenky:** Filtrované seznamy pro hloubkovou práci.
 
 ### Focus Mode (Detailní editace)
 Kliknutím na jakýkoliv úkol otevřete **Focus Mode**. Ten maximalizuje prostor pro psaní poznámek a umožňuje detailní nastavení:
 - Změna typu (Úkol vs. Schůzka).
-- Přesné nastavení času a trvání.
+- **Nastavení termínu (Deadline):** Pokud zadáte pouze datum, systém automaticky nastaví čas na **15:00**.
 - Správa **Checklistu** (podúkolů).
 
 ---

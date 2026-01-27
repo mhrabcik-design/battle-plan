@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Mic, MicOff, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail, CloudUpload, CloudDownload } from 'lucide-react';
+import { Mic, MicOff, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail, CloudUpload, CloudDownload, Hourglass } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
@@ -42,6 +42,70 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string, m: string, type: 'info' | 'error' }[]>([]);
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
+
+  // Helper: Format remaining time to deadline
+  const formatTimeLeft = (targetDateStr?: string, targetTimeStr?: string) => {
+    if (!targetDateStr) return "";
+    const end = new Date(targetDateStr);
+    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
+    end.setHours(h, m, 0, 0);
+
+    const diffMs = end.getTime() - currentTime.getTime();
+    if (diffMs < 0) return "po termínu";
+
+    const diffMins = Math.floor(diffMs / 60000);
+    const days = Math.floor(diffMins / (24 * 60));
+    const hours = Math.floor((diffMins % (24 * 60)) / 60);
+
+    if (days > 0) return `${days}d ${hours}h`;
+    return `${hours}h ${diffMins % 60}m`;
+  };
+
+  // Helper: Available working minutes (07:00-19:00) until deadline
+  const getAvailableWorkingMinutes = (targetDateStr?: string, targetTimeStr?: string) => {
+    if (!targetDateStr) return 0;
+    const end = new Date(targetDateStr);
+    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
+    end.setHours(h, m, 0, 0);
+
+    let totalMinutes = 0;
+    let current = new Date(currentTime);
+
+    // If it's already past the deadline, No time left
+    if (current >= end) return 0;
+
+    while (current < end) {
+      const todayEnd = new Date(current);
+      todayEnd.setHours(19, 0, 0, 0);
+
+      const todayStart = new Date(current);
+      todayStart.setHours(7, 0, 0, 0);
+
+      // Current interval is between current time and either 19:00 today or the deadline
+      let currentStart = new Date(current);
+      if (currentStart < todayStart) currentStart = todayStart;
+
+      let currentEnd = todayEnd;
+      if (end < currentEnd) currentEnd = end;
+
+      if (currentStart < currentEnd) {
+        totalMinutes += Math.floor((currentEnd.getTime() - currentStart.getTime()) / 60000);
+      }
+
+      // Move to next day at 07:00
+      current.setDate(current.getDate() + 1);
+      current.setHours(7, 0, 0, 0);
+    }
+
+    return totalMinutes;
+  };
+
+  const isOverCapacity = (task: UnifiedTask) => {
+    if (task.type !== 'task' || task.status === 'completed') return false;
+    const duration = task.duration || 0;
+    const available = getAvailableWorkingMinutes(task.deadline, task.startTime);
+    return duration > available;
+  };
 
   const addLog = (message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
@@ -159,11 +223,11 @@ function App() {
         .and(t => t.type !== 'thought' && t.type !== 'note')
         .toArray()
         .then(all => all.sort((a, b) => {
-          const dateA = a.date || a.deadline || '9999-12-31';
-          const dateB = b.date || b.deadline || '9999-12-31';
+          const dateA = a.deadline || a.date || '9999-12-31';
+          const dateB = b.deadline || b.date || '9999-12-31';
           if (dateA !== dateB) return dateA.localeCompare(dateB);
-          const timeA = a.startTime || '23:59';
-          const timeB = b.startTime || '23:59';
+          const timeA = a.startTime || '15:00';
+          const timeB = b.startTime || '15:00';
           if (timeA !== timeB) return timeA.localeCompare(timeB);
           return (b.urgency || 0) - (a.urgency || 0);
         }));
@@ -174,10 +238,17 @@ function App() {
       const start = days[0].full;
       const end = days[6].full;
       const all = await db.tasks
-        .where('date').between(start, end, true, true)
-        .or('deadline').between(start, end, true, true)
+        .where('deadline').between(start, end, true, true)
+        .or('date').between(start, end, true, true)
         .toArray();
-      return all.filter(t => t.status !== 'completed' && t.type !== 'thought' && t.type !== 'note');
+
+      // Pivot: Tasks only by deadline, Meetings by date/startTime
+      return all.filter(t => {
+        if (t.status === 'completed' || t.type === 'thought' || t.type === 'note') return false;
+        // Strict deadline policy for duplication removal
+        if (t.type === 'task') return t.deadline && t.deadline >= start && t.deadline <= end;
+        return t.date && t.date >= start && t.date <= end;
+      });
     }
 
     let collection;
@@ -217,11 +288,11 @@ function App() {
 
     if (viewMode === 'battle' || viewMode === 'week') {
       return combined.sort((a, b) => {
-        const dateA = a.date || a.deadline || '9999-12-31';
-        const dateB = b.date || b.deadline || '9999-12-31';
+        const dateA = a.deadline || a.date || '9999-12-31';
+        const dateB = b.deadline || b.date || '9999-12-31';
         if (dateA !== dateB) return dateA.localeCompare(dateB);
-        const timeA = a.startTime || '23:59';
-        const timeB = b.startTime || '23:59';
+        const timeA = a.startTime || '15:00';
+        const timeB = b.startTime || '15:00';
         if (timeA !== timeB) return timeA.localeCompare(timeB);
         return (b.urgency || 0) - (a.urgency || 0);
       });
@@ -856,7 +927,10 @@ function App() {
 
                   {/* DAYS COLUMNS */}
                   {getWeekDays(weekOffset).map((day) => {
-                    const dayTasks = tasks.filter(t => (t.date === day.full || t.deadline === day.full));
+                    const dayTasks = tasks.filter(t => {
+                      if (t.type === 'task') return t.deadline === day.full;
+                      return t.date === day.full;
+                    });
 
                     return (
                       <div key={day.full} className={`relative border-r border-slate-800/40 last:border-r-0 pt-10 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-amber-950/30' : ''}`}>
@@ -886,20 +960,30 @@ function App() {
                               <button
                                 key={t.isGoogleTask ? `g-${t.googleId}` : `l-${t.id}`}
                                 onClick={() => setEditingTask(t)}
-                                className={`absolute left-0 right-0 p-2 rounded-lg border transition-all flex flex-col gap-0.5 overflow-hidden group/item ${t.status === 'completed' ? 'opacity-40' : 'hover:z-30 hover:scale-[1.02] shadow-lg shadow-black/20'} ${t.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'}`}
+                                className={`absolute left-0 right-0 p-2 rounded-lg border transition-all flex flex-col gap-0.5 overflow-hidden group/item ${t.status === 'completed' ? 'opacity-40' : 'hover:z-30 hover:scale-[1.02] shadow-lg shadow-black/20'} ${t.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : isOverCapacity(t) ? 'bg-red-950/40 border-red-500/40 animate-pulse-red' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'}`}
                                 style={{ top: `${top}px`, height: `${height}px` }}
                               >
-                                <div className={`absolute top-0 left-0 bottom-0 w-1 ${t.type === 'meeting' ? 'bg-indigo-300' : 'bg-orange-500'} opacity-80`} />
+                                <div className={`absolute top-0 left-0 bottom-0 w-1 ${t.type === 'meeting' ? 'bg-indigo-300' : isOverCapacity(t) ? 'bg-red-500' : 'bg-orange-500'} opacity-80`} />
                                 <div className="flex items-center justify-between gap-1">
                                   <span className="text-[10px] font-black uppercase tracking-tight text-white line-clamp-1 leading-tight">{t.title}</span>
                                   {t.isGoogleTask && <span className="text-[7px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30 shrink-0">G</span>}
                                 </div>
-                                {t.startTime && (
-                                  <div className="flex items-center gap-1 opacity-60">
-                                    <Clock className="w-2.5 h-2.5 text-slate-400" />
-                                    <span className="text-[9px] font-bold text-slate-400">{t.startTime} {t.duration ? `(${t.duration}m)` : ''}</span>
-                                  </div>
-                                )}
+                                <div className="flex flex-col gap-1 mt-auto">
+                                  {t.startTime && (
+                                    <div className="flex items-center gap-1 opacity-60">
+                                      <Clock className="w-2.5 h-2.5 text-slate-400" />
+                                      <span className="text-[9px] font-bold text-slate-400">{t.startTime} {t.duration ? `(${t.duration}m)` : ''}</span>
+                                    </div>
+                                  )}
+                                  {t.type === 'task' && t.deadline && (
+                                    <div className="flex items-center gap-1 opacity-80">
+                                      <Hourglass className={`w-2.5 h-2.5 ${isOverCapacity(t) ? 'text-red-400' : 'text-slate-400'}`} />
+                                      <span className={`text-[8px] font-black uppercase tracking-tight ${isOverCapacity(t) ? 'text-red-400' : 'text-slate-500'}`}>
+                                        {formatTimeLeft(t.deadline, t.startTime)}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
                               </button>
                             );
                           })}
@@ -980,8 +1064,15 @@ function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.98 }}
-                      className={`office-card group relative ${task.status === 'completed' ? 'opacity-50 grayscale-[0.3]' : ''}`}
+                      className={`office-card group relative ${task.status === 'completed' ? 'opacity-50 grayscale-[0.3]' : ''} ${isOverCapacity(task) ? 'animate-pulse-red border-red-500/40 bg-red-950/20' : ''}`}
                     >
+                      {isOverCapacity(task) && (
+                        <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 bg-red-500/20 border border-red-500/40 rounded-full text-red-400 z-20">
+                          <AlertCircle className="w-3 h-3" />
+                          <span className="text-[8px] font-black uppercase tracking-widest">Nedostatek kapacity</span>
+                        </div>
+                      )}
+
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center gap-2">
                           <div className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${getUrgencyColor(task.urgency)}`}>
@@ -1010,7 +1101,19 @@ function App() {
                           </div>
                           <div className="flex-1 min-w-0">
                             <h3 className="text-sm font-black text-white uppercase tracking-tight leading-tight mb-1 group-hover:text-indigo-400 transition-colors">{task.title}</h3>
-                            <p className="text-xs text-slate-500 line-clamp-2 font-medium leading-relaxed">{task.description}</p>
+                            <p className="text-xs text-slate-500 line-clamp-2 font-medium leading-relaxed mb-3">{task.description}</p>
+
+                            {task.type === 'task' && task.deadline && (
+                              <div className={`mt-2 flex items-center gap-2 p-2 rounded-lg border ${isOverCapacity(task) ? 'bg-red-500/10 border-red-500/30' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                <Hourglass className={`w-3.5 h-3.5 ${isOverCapacity(task) ? 'text-red-400' : 'text-slate-400'}`} />
+                                <div className="flex flex-col">
+                                  <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Do termínu zbývá</span>
+                                  <span className={`text-[10px] font-black uppercase tracking-tight ${isOverCapacity(task) ? 'text-red-400' : 'text-slate-200'}`}>
+                                    {formatTimeLeft(task.deadline, task.startTime)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
