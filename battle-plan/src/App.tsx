@@ -520,12 +520,17 @@ function App() {
         else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) result.type = 'thought' as any;
       }
 
-      // Consistency: If date changes but deadline is missing from AI result, 
-      // and they were identical before, move both.
-      if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
-        result.deadline = result.date;
-      } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
-        result.date = result.deadline;
+      // Consistency: For Tasks, always prioritize deadline and keep date in sync
+      if (existing.type === 'task' || result.type === 'task') {
+        if (result.deadline && !result.date) result.date = result.deadline;
+        if (result.date && !result.deadline) result.deadline = result.date;
+      } else {
+        // For meetings/others, keep previous loose sync logic
+        if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
+          result.deadline = result.date;
+        } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
+          result.date = result.deadline;
+        }
       }
 
       await db.tasks.update(updateId, result as any);
@@ -551,7 +556,7 @@ function App() {
         urgency: Number(result.urgency) as any || 2,
         status: 'pending',
         date: result.date || new Date().toISOString().split('T')[0],
-        startTime: result.startTime || (finalType === 'meeting' ? "09:00" : undefined),
+        startTime: result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined)),
         deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
         duration: Number(result.duration) || defaultDuration,
         totalDuration: Number(result.duration) || defaultDuration,
@@ -953,8 +958,10 @@ function App() {
                         {/* TASKS IN DAY */}
                         <div className="relative h-full z-10 mx-1">
                           {dayTasks.map(t => {
-                            const top = getTimePosition(t.startTime) + 40;
                             const height = Math.max(40, (t.duration || 60) / 60 * ROW_HEIGHT);
+                            const basePos = getTimePosition(t.startTime);
+                            // Pivot: Task ends at startTime (deadline), Meeting starts at startTime
+                            const top = (t.type === 'task' ? (basePos - height) : basePos) + 40;
 
                             return (
                               <button
@@ -1309,7 +1316,7 @@ function App() {
                                 <label className="text-[9px] font-black text-slate-500 uppercase">Datum</label>
                                 <input
                                   type="date"
-                                  value={editingTask.date || editingTask.deadline || ''}
+                                  value={(editingTask.type === 'task' ? (editingTask.deadline || editingTask.date) : (editingTask.date || editingTask.deadline)) || ''}
                                   onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value })}
                                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none"
                                 />
