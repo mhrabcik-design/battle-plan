@@ -437,12 +437,26 @@ function App() {
 
   const applyAiResult = async (result: any, updateId: number | null) => {
     if (updateId) {
+      // Fetch existing task to ensure consistency between date and deadline
+      const existing = await db.tasks.get(updateId);
+      if (!existing) return;
+
+      // Type normalization
       if (result.type) {
         const aiType = String(result.type).toLowerCase();
         if (aiType.includes('task') || aiType.includes('úkol')) result.type = 'task' as any;
         else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) result.type = 'meeting' as any;
         else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) result.type = 'thought' as any;
       }
+
+      // Consistency: If date changes but deadline is missing from AI result, 
+      // and they were identical before, move both.
+      if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
+        result.deadline = result.date;
+      } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
+        result.date = result.deadline;
+      }
+
       await db.tasks.update(updateId, result as any);
 
       // Pokud je tento úkol právě otevřen v editačním okně, aktualizujeme i jeho lokální stav
