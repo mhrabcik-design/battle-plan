@@ -484,7 +484,11 @@ function App() {
     addLog(`Zpracovávám audio s modelem: ${selectedModel} (Update ID: ${updateId || 'NOVÝ'})`);
 
     try {
-      const result = await geminiService.processAudio(blob, updateId || undefined);
+      const result = await geminiService.processAudio(
+        blob,
+        updateId || undefined,
+        (attempt, delay) => addLog(`AI Přetíženo - Pokus č. ${attempt} (čekám ${delay / 1000}s)...`, 'info')
+      );
       if (result) {
         addLog(`AI analýza úspěšná: ${result.title} (${updateId ? 'AKTUALIZACE' : 'NOVÝ'})`);
         await applyAiResult(result, updateId);

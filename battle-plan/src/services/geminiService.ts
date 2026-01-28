@@ -1,5 +1,7 @@
 import { db, type Task } from '../db';
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export class GeminiService {
     private apiKey: string | null = null;
 
@@ -67,7 +69,7 @@ export class GeminiService {
         }
     }
 
-    async processAudio(blob: Blob, contextId?: number): Promise<Partial<Task> | null> {
+    async processAudio(blob: Blob, contextId?: number, onRetry?: (attempt: number, delay: number) => void): Promise<Partial<Task> | null> {
         if (!this.apiKey) await this.init();
         if (!this.apiKey) throw new Error("API klíč nebyl nalezen.");
 
@@ -127,36 +129,69 @@ Výsledek JSON:
 }`;
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${this.apiKey}`;
 
-        const response = await fetch(url, {
+        const maxAttempts = 4;
+        let lastError: any = null;
 
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [
-                        { text: systemPrompt },
-                        { inline_data: { mime_type: blob.type || "audio/webm", data: base64Data } }
-                    ]
-                }]
-            })
-        });
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: systemPrompt },
+                                { inline_data: { mime_type: blob.type || "audio/webm", data: base64Data } }
+                            ]
+                        }]
+                    })
+                });
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`AI Chyba: ${errorData.error?.message || 'Neznámý problém'}`);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    const msg = errorData.error?.message || 'Neznámý problém';
+
+                    // Pokud je to chyba přetížení (429) nebo serveru (5xx), zkusíme to znovu
+                    if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts) {
+                        const delay = attempt * 2000; // 2s, 4s, 6s
+                        console.warn(`Attempt ${attempt} failed (status ${response.status}). Retrying in ${delay}ms...`);
+                        if (onRetry) onRetry(attempt, delay);
+                        await sleep(delay);
+                        continue;
+                    }
+
+                    throw new Error(`AI Chyba: ${msg}`);
+                }
+
+                const data = await response.json();
+                const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!responseText) throw new Error("AI nevrátila žádnou odpověď.");
+
+                try {
+                    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+                    return JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
+                } catch (e) {
+                    console.error("JSON parse error", responseText);
+                    throw new Error("Chyba při parsování dat od AI.");
+                }
+
+            } catch (err: any) {
+                lastError = err;
+                // Pokud to nebyla chyba, kterou chceme opakovat (nebo už jsme na konci), vyhodíme ji
+                if (attempt === maxAttempts) throw err;
+
+                // Síťové chyby (Failed to fetch) taky zkusíme znovu
+                if (err.message?.includes('fetch') || err.message?.includes('Network')) {
+                    const delay = attempt * 2000;
+                    if (onRetry) onRetry(attempt, delay);
+                    await sleep(delay);
+                    continue;
+                }
+                throw err;
+            }
         }
 
-        const data = await response.json();
-        const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!responseText) throw new Error("AI nevrátila žádnou odpověď.");
-
-        try {
-            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-            return JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
-        } catch (e) {
-            console.error("JSON parse error", responseText);
-            throw new Error("Chyba při parsování dat od AI.");
-        }
+        throw lastError || new Error("AI zpracování selhalo po opakovaných pokusech.");
     }
 }
 
