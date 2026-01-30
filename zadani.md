@@ -97,6 +97,22 @@ Optimalizace stávajícího audio workflow pro maximální rychlost s využitím
 - ✅ Odstranění WebSockets logiky z celé aplikace.
 - ✅ Finalizace AI promptů pro bleskovou extrakci JSON.
 
----
-*Všechny cíle pro verzi 1.0 byly naplněny. Aplikace je plně funkční v Desktop-First režimu s robustním syncem a AI audio diktátem.*
+## Cíl (Phase 5 - Advanced AI Intelligence & Relative Dates) ✅
+Vylepšit schopnost AI pracovat s relativními časovými údaji pro přesnější plánování na základě aktuálního dne.
 
+1. **Relativní termíny:** ✅
+   - AI interpretuje "v pondělí", "příští úterý" atd. na základě dnešního data.
+   - Pravidlo: Pokud je dnes pondělí a řekne "v pondělí", myslí se příští týden (+7).
+   - Podpora pro "příští týden v [den]" (+7 k nadcházejícímu).
+   
+2. **Upgrade Modelu:** ✅
+   - Přechod na `gemini-2.0-flash` jako výchozí model pro bleskové zpracování.
+
+## Technické kroky (Dokončeno)
+- ✅ Úprava `geminiService.ts`: Předávání názvu dne v týdnu do kontextu AI.
+- ✅ Implementace robustní logiky termínů do systémového promptu (4 základní pravidla).
+- ✅ Aktualizace JSON příkladu pro AI (přidání polí `date` a `deadline`).
+- ✅ Nastavení `gemini-2.0-flash` jako default fallbacku v kódu.
+
+---
+*Všechny cíle pro verzi 1.0 byly naplněny a rozšířeny o pokročilou inteligenci.*

@@ -46,7 +46,7 @@ export class GeminiService {
             if (!this.apiKey) return "Chybí API klíč.";
 
             const savedModel = await db.settings.get('gemini_model');
-            const modelId = (forcedModel || savedModel?.value || "gemini-1.5-flash").replace('models/', '');
+            const modelId = (forcedModel || savedModel?.value || "gemini-2.0-flash").replace('models/', '');
 
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${this.apiKey}`;
 
@@ -74,7 +74,7 @@ export class GeminiService {
         if (!this.apiKey) throw new Error("API klíč nebyl nalezen.");
 
         const savedModel = await db.settings.get('gemini_model');
-        const modelId = (savedModel?.value || "gemini-1.5-flash").replace('models/', '');
+        const modelId = (savedModel?.value || "gemini-2.0-flash").replace('models/', '');
 
         console.log(`REST API using model: ${modelId}`);
 
@@ -85,8 +85,11 @@ export class GeminiService {
             reader.readAsDataURL(blob);
         });
 
-        const today = new Date().toISOString().split('T')[0];
-        const now = new Date().toTimeString().split(' ')[0];
+        const nowObj = new Date();
+        const today = nowObj.toISOString().split('T')[0];
+        const now = nowObj.toTimeString().split(' ')[0];
+        const dayNames = ["neděle", "pondělí", "úterý", "středa", "čtvrtek", "pátek", "sobota"];
+        const dayName = dayNames[nowObj.getDay()];
 
         let contextInfo = "";
         if (contextId) {
@@ -104,9 +107,19 @@ export class GeminiService {
         const systemPrompt = `Jsi "Bitevní Plán", elitní AI asistent pro management času a strategické myšlení. 
 Tvým posláním je transformovat hlasové pokyny do perfektně strukturovaných dat podle tvého "AI Intelligence Manifestu".
 
-Dnešní datum je: ${today} (čas: ${now}). ${contextInfo}
+Dnešní datum je: ${dayName} ${today} (čas: ${now}). ${contextInfo}
 
-Z audia vytvoř POUZE JSON objekt s následující logikou podle typu záznamu:
+Z audia vytvoř POUZE JSON objekt s následující logikou:
+
+### 📅 LOGIKA TERMÍNŮ (VÝPOČET DATA):
+V poli \`date\` nebo \`deadline\` VŽDY vrať absolutní datum ve formátu YYYY-MM-DD.
+- **Pravidlo 1**: "Dnes" = ${today}.
+- **Pravidlo 2**: "Zítra" = +1 den, "Pozítří" = +2 dny.
+- **Pravidlo 3**: "V [den]" (např. "v úterý"):
+  - Pokud je dnes úterý -> PŘÍŠTÍ úterý (+7 dní).
+  - Pokud dnes NENÍ úterý -> NEJBLIŽŠÍ BUDOUCÍ úterý.
+- **Pravidlo 4**: "Příští [den]" nebo "Příští týden v [den]" -> Přičti 7 dní k výsledku z Pravidla 3.
+- Relativní výrazy (za měsíc, za 3 týdny) nepodporuj. Podporuj jen tento a příští týden.
 
 ### 👔 PROFIL: MANAŽER (vše co zní jako úkol)
 - **title**: "[ÚKOL] " + KRÁTKÝ POPIS (VELKÁ PÍSMENA).
@@ -134,8 +147,10 @@ Příklad JSON struktury:
   "title": "NÁZEV",
   "description": "Strukturovaný text...",
   "internalNotes": "--- RAW PŘEPIS ---\\nDoslovný text z audia...",
-  "type": "thought",
+  "type": "task",
   "urgency": 2,
+  "date": "${today}",
+  "deadline": "${today}",
   "subTasks": [{"id": "1", "title": "Krok 1", "completed": false}]
 }`;
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${this.apiKey}`;
