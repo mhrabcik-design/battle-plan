@@ -26,7 +26,8 @@ Vytvoření souboru `docs/AI_MANIFEST.md`, který bude obsahovat:
 - **Test C (Zpětná kompatibilita):** Ověření, že změna nerozbila stávající funkce.
 
 ## 🏁 Akceptační kritéria
-- [ ] Existuje soubor `docs/AI_MANIFEST.md`.
-- [ ] AI u myšlenek aktivně navrhuje rozšíření a souvislosti.
-- [ ] Původní diktát je vždy dohledatelný v `internalNotes`.
+- [x] Existuje soubor `docs/AI_MANIFEST.md`.
+- [x] AI u myšlenek aktivně navrhuje rozšíření a souvislosti.
+- [x] Původní diktát je vždy dohledatelný v `internalNotes`.
+- [x] AI zvládá relativní termíny (v pondělí, příští týden). ✅
 - [ ] Lze se snadno vrátit k původnímu chování (Classic mode) změnou jedné konstanty v kódu.

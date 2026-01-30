@@ -61,4 +61,17 @@ Tento dokument definuje, jak umělá inteligence v aplikaci **Bitevní Plán** z
 ## 🔄 4. Protokol změn (Versioning)
 Pokud uživatel pocítí, že AI je "příliš kreativní" nebo naopak "málo iniciativní", upraví se tento manifest a následně promítne do systémového promptu v `geminiService.ts`.
 
-**Aktuální verze promptu v kódu:** `v2.0-manifest` (v přípravě)
+**Aktuální verze promptu v kódu:** `v2.1-dates`
+
+---
+
+## 📅 5. Pokročilá práce s termíny (Relativní data)
+AI musí být schopna přepočítat relativní výrazy na absolutní data ve formátu `YYYY-MM-DD`.
+
+- **Referenční bod:** AI je vždy předáno aktuální datum a název dne v týdnu.
+- **Relativní výrazy:**
+  - **Dnes**: Aktuální datum.
+  - **V [den]** (např. "v pátek" - pokud je dnes čtvrtek) -> Zítra (+1 den).
+  - **V [den]** (pokud je dnes ten samý den) -> Příští výskyt (+7 dní).
+  - **Příští [den]** nebo **Příští týden v [den]** -> Nejbližší výskyt + 7 dní.
+- **Omezení:** Relativní termíny se podporují primárně pro aktuální a příští týden. Pro delší horizonty (za měsíc atd.) se řiď kontextem nebo ponech dnešek.
