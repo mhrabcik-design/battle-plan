@@ -967,10 +967,10 @@ function App() {
                 <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[700px] md:min-w-[1200px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
 
                   {/* TIME LABELS COLUMN */}
-                  <div className="relative border-r border-slate-800/60 pt-10 bg-slate-950/20">
+                  <div className="relative border-r border-white/10 pt-10 bg-slate-950/40 z-20">
                     {CALENDAR_HOURS.map((hour) => (
                       <div key={hour} className="absolute left-0 w-full flex items-start justify-center" style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}>
-                        <span className="text-[10px] font-black text-slate-600 tabular-nums">{hour}:00</span>
+                        <span className="text-[10px] font-black text-slate-400 tabular-nums">{hour}:00</span>
                       </div>
                     ))}
                   </div>
@@ -983,19 +983,19 @@ function App() {
                     });
 
                     return (
-                      <div key={day.full} className={`relative border-r border-slate-800/40 last:border-r-0 pt-10 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-amber-950/30' : ''}`}>
+                      <div key={day.full} className={`relative border-r border-white/10 last:border-r-0 pt-10 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-amber-950/20' : ''}`}>
 
-                        {/* DAY HEADER */}
-                        <div className={`absolute top-0 left-0 w-full h-10 border-b border-slate-800/60 flex flex-col items-center justify-center backdrop-blur-sm z-20 ${day.isToday ? 'bg-indigo-500/10' : day.isWeekend ? 'bg-amber-900/20' : 'bg-slate-900/20'}`}>
-                          <span className={`text-[8px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-400' : day.isWeekend ? 'text-slate-500' : 'text-slate-500'}`}>{day.dayName}</span>
-                          <span className={`text-sm font-black leading-none ${day.isToday ? 'text-white' : day.isWeekend ? 'text-slate-400' : 'text-slate-300'}`}>{day.dayNum}</span>
+                        {/* DAY HEADER - STICKY */}
+                        <div className={`sticky top-0 left-0 w-full h-10 border-b border-white/10 flex flex-col items-center justify-center backdrop-blur-md z-30 transition-colors ${day.isToday ? 'bg-indigo-600/25' : day.isWeekend ? 'bg-amber-900/40' : 'bg-slate-900/60'}`}>
+                          <span className={`text-[8px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-300' : 'text-slate-400'}`}>{day.dayName}</span>
+                          <span className={`text-sm font-black leading-none ${day.isToday ? 'text-white' : 'text-slate-200'}`}>{day.dayNum}</span>
                         </div>
 
                         {/* HOUR GRID LINES */}
                         {CALENDAR_HOURS.map((hour) => (
                           <div
                             key={hour}
-                            className="absolute left-0 w-full border-b border-slate-800/20"
+                            className="absolute left-0 w-full border-b border-white/5"
                             style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}
                           />
                         ))}
