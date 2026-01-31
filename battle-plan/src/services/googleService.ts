@@ -16,9 +16,13 @@ export interface GoogleAuthStatus {
 class GoogleService {
     private tokenClient: any = null;
     private accessToken: string | null = null;
+    private expiresAt: number = 0;
+    private userEmail: string | null = null;
 
     constructor() {
         this.accessToken = localStorage.getItem('google_access_token');
+        this.expiresAt = Number(localStorage.getItem('google_token_expires_at')) || 0;
+        this.userEmail = localStorage.getItem('google_user_email');
     }
 
     async init() {
@@ -50,11 +54,23 @@ class GoogleService {
                     scope: SCOPES,
                     callback: (response: any) => {
                         if (response.error !== undefined) {
-                            throw response;
+                            console.error('GIS Error:', response);
+                            return;
                         }
                         this.accessToken = response.access_token;
+                        const expiresIn = response.expires_in || 3600;
+                        this.expiresAt = Date.now() + (expiresIn * 1000);
+
                         localStorage.setItem('google_access_token', response.access_token);
+                        localStorage.setItem('google_token_expires_at', this.expiresAt.toString());
+
                         window.gapi.client.setToken({ access_token: response.access_token });
+
+                        // Check for user info to get email if not present
+                        if (!this.userEmail) {
+                            this.fetchUserInfo();
+                        }
+
                         window.dispatchEvent(new CustomEvent('google-auth-change', {
                             detail: { isSignedIn: true, accessToken: this.accessToken }
                         }));
@@ -73,22 +89,64 @@ class GoogleService {
         });
     }
 
+    async trySilentRefresh() {
+        if (!this.tokenClient || !this.userEmail) return false;
+
+        return new Promise<boolean>((resolve) => {
+            try {
+                // If it fails, GIS will trigger the callback with an error
+                this.tokenClient.requestAccessToken({
+                    prompt: 'none',
+                    login_hint: this.userEmail
+                });
+                // We give it a short time to succeed
+                setTimeout(() => resolve(!!this.accessToken), 2000);
+            } catch (err) {
+                console.error('Silent refresh failed', err);
+                resolve(false);
+            }
+        });
+    }
+
+    async fetchUserInfo() {
+        try {
+            const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { 'Authorization': `Bearer ${this.accessToken}` }
+            });
+            const data = await response.json();
+            if (data.email) {
+                this.userEmail = data.email;
+                localStorage.setItem('google_user_email', data.email);
+            }
+        } catch (e) {
+            console.error('Failed to fetch user info', e);
+        }
+    }
+
     getAuthStatus(): GoogleAuthStatus {
+        const isExpired = Date.now() > (this.expiresAt - 60000); // 1 minute buffer
         return {
-            isSignedIn: !!this.accessToken,
+            isSignedIn: !!this.accessToken && !isExpired,
             accessToken: this.accessToken
         };
     }
 
     signIn() {
         if (this.tokenClient) {
-            this.tokenClient.requestAccessToken({ prompt: '' });
+            // Using logic to pre-fill email if we know it
+            const options: any = { prompt: '' };
+            if (this.userEmail) options.login_hint = this.userEmail;
+            this.tokenClient.requestAccessToken(options);
         }
     }
 
     signOut() {
         this.accessToken = null;
+        this.expiresAt = 0;
+        this.userEmail = null;
         localStorage.removeItem('google_access_token');
+        localStorage.removeItem('google_token_expires_at');
+        localStorage.removeItem('google_user_email');
         window.dispatchEvent(new CustomEvent('google-auth-change', {
             detail: { isSignedIn: false, accessToken: null }
         }));

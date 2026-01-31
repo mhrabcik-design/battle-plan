@@ -16,10 +16,10 @@ Specifically:
 ## 2. Proposed Fixes
 
 ### A. Settings & Sync
-- [ ] **Sync UI Scale:** Move `uiScale` from `localStorage` to `db.settings` so it syncs via Google Drive.
-- [ ] **Smarter Auto-Restore:** If the application is signed in but has no API Key or very few tasks, suggest or auto-trigger a restore if cloud data is newer.
-- [ ] **Manual Sync Visibility:** Add a sync indicator/button to the mobile view (currently only in Desktop sidebar or Settings modal).
-- [ ] **Timestamp-based Merge (Optional/Future):** For now, improve the overwrite logic to at least respect `timestamp` in the payload.
+- [x] **Sync UI Scale:** Moved `uiScale` to `db.settings`.
+- [x] **Smarter Auto-Restore:** Proactive restore implemented based on timestamps and focus triggers.
+- [x] **Manual Sync Visibility:** Sync status and backup/restore buttons are present in mobile settings.
+- [x] **Timestamp-based Merge:** Implemented "Newer Wins" strategy.
 
 ### B. Mobile UI Transformation
 - [ ] **Mobile Premium Look:** Update the mobile navigation and header to match the new "Professional Office" style.
@@ -27,15 +27,18 @@ Specifically:
 - [ ] **Timeline Mobile Polish:** The week view currently has `min-w-[1000px]`. This is fine for scrolling, but ensure the day headers are sticky and clear.
 
 ### C. Urgency & Saving
-- [ ] Verify that the 3-level urgency (1, 2, 3) is consistent everywhere and doesn't get reset.
-- [ ] Fix potential "saving" issues where `db.tasks.update` might mismatch with the synced payload schema.
+- [x] Verify that the 3-level urgency (1, 2, 3) is consistent everywhere and doesn't get reset.
+- [x] Fix potential "saving" issues where `db.tasks.update` might mismatch with the synced payload schema.
+- [x] **Silent Refresh:** Implemented for Google Auth to prevent frequent logouts.
+- [x] **Timestamp Sync:** Implemented "Newer Wins" logic triggering on app focus.
 
 ## 3. Implementation Steps
 
-1. **Phase 1: Sync & Settings**
+1. **Phase 1: Sync & Settings** ✅
    - Update `App.tsx` to handle `uiScale` via `db.settings`.
    - Update `checkSync` to be more proactive if settings are missing.
    - Ensure all settings (API Key, Model, UI Scale) are correctly synced.
+   - Implement Silent Refresh for Google Auth.
 
 2. **Phase 2: Mobile UI Updates**
    - Redesign mobile navigation bar.

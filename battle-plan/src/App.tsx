@@ -312,6 +312,15 @@ function App() {
 
     const checkSync = async () => {
       try {
+        // 1. Check if token is expired and try silent refresh
+        const status = googleService.getAuthStatus();
+        if (!status.isSignedIn && localStorage.getItem('google_access_token')) {
+          const success = await googleService.trySilentRefresh();
+          if (success) {
+            setGoogleAuth(googleService.getAuthStatus());
+          }
+        }
+
         const payload = await googleService.loadFromDrive();
         if (payload && payload.data) {
           const localCount = await db.tasks.count();
