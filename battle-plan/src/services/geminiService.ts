@@ -109,6 +109,12 @@ Tvým posláním je transformovat hlasové pokyny do perfektně strukturovaných
 
 Dnešní datum je: ${dayName} ${today} (čas: ${now}). ${contextInfo}
 
+### 🕒 EVROPSKÝ ČASOVÝ SYSTÉM (24h):
+Všechny časy v polích \`startTime\`, \`endTime\` nebo \`time\` MUSÍ být ve formátu HH:MM (24h).
+- **Striktní pravidlo**: 1:00 PM = 13:00, 5:00 PM = 17:00 atd.
+- Pokud uživatel řekne "v jednu", myslí se 13:00 (pokud kontext nenapovídá ráno).
+- Pokud uživatel řekne "večer v sedm", je to 19:00.
+
 ### 🔄 PRAVIDLO PRO AKTUALIZACI (ZÁSADNÍ):
 Pokud provádíš aktualizaci (máš KONTEXT), postupuj takto:
 1. **METADATA (date, deadline, startTime, urgency, title, type)**: Pokud audio obsahuje novou informaci (např. jiný čas nebo den), tyto hodnoty VŽDY **PŘEPIŠ** novými.
