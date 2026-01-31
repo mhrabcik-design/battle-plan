@@ -975,7 +975,9 @@ function App() {
                   <div className="relative border-r border-white/10 bg-slate-950/40 z-20 ml-6 md:ml-10">
                     {CALENDAR_HOURS.map((hour) => (
                       <div key={hour} className="absolute left-0 w-full flex items-center justify-center -translate-y-1/2" style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `20px` }}>
-                        <span className="text-[10px] font-black text-slate-400 tabular-nums">{hour}:00</span>
+                        <span className="text-[10px] font-black text-slate-400 tabular-nums">
+                          {hour < 10 ? `0${hour}:00` : `${hour}:00`}
+                        </span>
                       </div>
                     ))}
                   </div>
