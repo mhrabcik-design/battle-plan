@@ -341,11 +341,12 @@ function App() {
           const cloudTimestamp = payload.timestamp || 0;
           const lastLocalSyncTs = Number(localStorage.getItem('last_drive_sync_ts')) || 0;
 
-          // Auto-restore if:
-          // 1. Local is essentially empty (new setup)
+          // Auto-restore logic:
+          // 1. If local is empty AND we never synced before (new install)
           // 2. OR API key is missing (new device/cleared cache)
-          // 3. OR Cloud data is strictly newer than our last known sync
-          if (localCount === 0 || !hasApiKey || cloudTimestamp > lastLocalSyncTs) {
+          // 3. OR Cloud data is strictly newer than our last successful sync
+          const isFreshInstall = localCount === 0 && lastLocalSyncTs === 0;
+          if (isFreshInstall || !hasApiKey || cloudTimestamp > lastLocalSyncTs) {
             const { tasks: driveTasks, settings: driveSettings } = payload.data;
 
             // Critical check: only replace if there's actual data to replace with
@@ -400,19 +401,21 @@ function App() {
 
   // Auto-backup on change
   useEffect(() => {
-    if (!googleAuth.isSignedIn || tasks.length === 0) return;
+    if (!googleAuth.isSignedIn) return;
 
     const timer = setTimeout(async () => {
       try {
         const allTasks = await db.tasks.toArray();
         const allSettings = await db.settings.toArray();
-        const timestamp = Date.now();
-        await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
-        const now = new Date().toLocaleString('cs-CZ');
-        setLastSync(now);
-        localStorage.setItem('last_drive_sync', now);
-        localStorage.setItem('last_drive_sync_ts', timestamp.toString());
-        addLog('Automatická záloha na Disk úspěšná');
+        const savedTimestamp = await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
+
+        if (savedTimestamp) {
+          const now = new Date().toLocaleString('cs-CZ');
+          setLastSync(now);
+          localStorage.setItem('last_drive_sync', now);
+          localStorage.setItem('last_drive_sync_ts', savedTimestamp.toString());
+          addLog('Automatická záloha na Disk úspěšná');
+        }
         console.log('Auto-backup completed');
       } catch (e) {
         console.error('Auto-backup failed', e);
@@ -458,14 +461,16 @@ function App() {
     try {
       const allTasks = await db.tasks.toArray();
       const allSettings = await db.settings.toArray();
-      const timestamp = Date.now();
-      await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
-      const now = new Date().toLocaleString('cs-CZ');
-      setLastSync(now);
-      localStorage.setItem('last_drive_sync', now);
-      localStorage.setItem('last_drive_sync_ts', timestamp.toString());
-      console.log('Manual backup successful');
-      return true;
+      const savedTimestamp = await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
+
+      if (savedTimestamp) {
+        const now = new Date().toLocaleString('cs-CZ');
+        setLastSync(now);
+        localStorage.setItem('last_drive_sync', now);
+        localStorage.setItem('last_drive_sync_ts', savedTimestamp.toString());
+        console.log('Manual backup successful');
+        return true;
+      }
     } catch (e: any) {
       alert('Chyba při zálohování: ' + e.message);
       return false;

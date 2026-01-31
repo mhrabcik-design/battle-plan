@@ -345,7 +345,7 @@ class GoogleService {
             if (response.status !== 200 && response.status !== 201) {
                 throw new Error(`Sync failed: ${response.statusText || response.status}`);
             }
-            return true;
+            return payload.timestamp;
         } catch (err: any) {
             console.error('Error saving to Drive', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
