@@ -1,6 +1,15 @@
 # Logika záznamů a charakter AI „Bitevní Plán“ 🛡️🧠
 
-Tento dokument shrnuje vnitřní logiku, nastavení osobnosti a způsoby, jakými umělá inteligence (Gemini 2.0 Flash) v aplikaci zpracovává vaše hlasové vstupy.
+Tento dokument shrnuje vnitřní logiku, nastavení osobnosti a způsoby, jakými umělá inteligence (Gemini 2.0 Flash) v aplikaci zpracovává vaše hlasové vstupy. Celý systém je striktně nastaven na **evropské standardy (24hodinový formát)**.
+
+---
+
+## 🕒 Evropský časový systém (24h)
+Všechny časové údaje v aplikaci i při komunikaci s AI používají výhradně 24hodinový formát.
+- **Odpolední časy:** 1:00 PM = **13:00**, 5:30 PM = **17:30** atd.
+- **Půlnoc:** 00:00.
+- **Dopoledne:** 00:00 - 12:00.
+- AI v promptu dostává instrukci, že jakýkoliv čas zmíněný slovy (např. „v jednu odpoledne“) musí okamžitě převést na 24h ekvivalent.
 
 ---
 
@@ -49,7 +58,7 @@ AI pracuje s absolutním časem na základě dnešního data:
    - **3 (Urgentní):** Kritické úkoly.
    - **2 (Normální):** Výchozí nastavení.
    - **1 (Nízká):** Úkoly bez časového tlaku.
-4. **Capacity Guardian:** Pokud AI (nebo systém) zjistí, že úkol nelze stihnout v pracovní době (7:00-19:00), vizuálně vás varuje.
+4. **Preservace dat při aktualizaci:** AI při hlasové změně (např. „posuň to na 12:00“) nesmí smazat původní bohatý popis. Technická pole (čas/datum) se přepisují, ale hlavní text se inteligentně slučuje a zachovává.
 
 ---
-*Bitevní Plán v3.0.0 – Vždy o krok napřed.*
+*Bitevní Plán v3.0.0+ – Vždy o krok napřed.*

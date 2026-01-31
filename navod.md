@@ -1,6 +1,6 @@
 # Uživatelská příručka: Bitevní Plán 🛡️
 
-Vítejte v aplikaci **Bitevní Plán** – vašem profesionálním desktopovém centru pro správu času, úkolů a schůzek s využitím pokročilé umělé inteligence Gemini.
+Vítejte v aplikaci **Bitevní Plán** – vašem profesionálním desktopovém centru pro správu času, úkolů a schůzek s využitím pokročilé umělé inteligence Gemini. Vše v aplikaci se řídí **evropskými standardy (24hodinový časový systém)**.
 
 ---
 
@@ -67,7 +67,7 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 ### Focus Mode (Detailní editace)
 Kliknutím na jakýkoliv úkol otevřete **Focus Mode**. Ten maximalizuje prostor pro psaní poznámek a umožňuje detailní nastavení:
 - Změna typu (Úkol vs. Schůzka).
-- **Nastavení termínu (Deadline):** Pokud zadáte pouze datum, systém automaticky nastaví čas na **15:00**.
+- **Nastavení času (24h):** Pole pro čas je nyní **vlastní textový vstup**, který ignoruje nastavení systému (žádné AM/PM). Stačí napsat např. `1300` a systém automaticky doplní dvojtečku na `13:00`.
 - Správa **Checklistu** (podúkolů).
 
 ---
