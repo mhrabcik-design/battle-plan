@@ -894,7 +894,7 @@ function App() {
                   <button
                     onClick={handleBackupToDrive}
                     disabled={isSyncing}
-                    className={`p-2 rounded-xl transition-all ${isSyncing ? 'bg-indigo-600/20' : 'bg-emerald-500/10'}`}
+                    className={`p-2 rounded-xl transition-all ${isSyncing ? 'bg-indigo-600/20' : 'bg-indigo-600/10 border border-white/5'}`}
                   >
                     {isSyncing ? (
                       <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="text-indigo-400">
@@ -909,15 +909,15 @@ function App() {
                 )}
                 <button
                   onClick={() => setShowSettings(true)}
-                  className="p-2 bg-slate-800 rounded-xl text-slate-400"
+                  className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400"
                 >
                   <Settings className="w-4 h-4" />
                 </button>
-                <div className={`w-2 h-2 rounded-full ${isAiActive ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-700'}`} />
+                <div className={`w-2 h-2 rounded-full ${isAiActive ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-800 border border-white/5'}`} />
               </div>
             </div>
 
-            <nav className="flex items-center justify-between bg-slate-900/80 backdrop-blur-md p-1.5 rounded-2xl border border-slate-800/60 shadow-xl overflow-x-auto no-scrollbar">
+            <nav className="flex items-center justify-between bg-[#0d1117]/80 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 shadow-xl overflow-x-auto no-scrollbar">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = viewMode === item.id;
@@ -935,14 +935,14 @@ function App() {
             </nav>
 
             {viewMode === 'week' && (
-              <div className="flex items-center justify-between bg-slate-900/40 px-4 py-2 rounded-xl border border-slate-800/60">
+              <div className="flex items-center justify-between bg-slate-900/40 px-4 py-2 rounded-xl border border-white/5">
                 <h2 className="text-[10px] font-black text-white uppercase tracking-widest">
                   {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'short', year: 'numeric' })}
                 </h2>
                 <div className="flex gap-2">
-                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-lg bg-slate-800 text-slate-400"><ChevronLeft className="w-4 h-4" /></button>
-                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-800 text-[9px] font-black text-white uppercase tracking-widest">Dnes</button>
-                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-lg bg-slate-800 text-slate-400"><ChevronRight className="w-4 h-4" /></button>
+                  <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-lg bg-slate-900 border border-white/5 text-slate-400"><ChevronLeft className="w-4 h-4" /></button>
+                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-900 border border-white/5 text-[9px] font-black text-white uppercase tracking-widest">Dnes</button>
+                  <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-lg bg-slate-900 border border-white/5 text-slate-400"><ChevronRight className="w-4 h-4" /></button>
                 </div>
               </div>
             )}
@@ -1440,9 +1440,9 @@ function App() {
                     <button
                       disabled={isRecording && activeVoiceUpdateId === editingTask.id}
                       onClick={() => { handleDeleteTask(editingTask); setEditingTask(null); }}
-                      className={`px-6 py-3.5 rounded-xl border transition-all shadow-lg shadow-red-500/5 text-[11px] font-black uppercase ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 border-slate-700 text-slate-600 cursor-not-allowed' : 'bg-red-600/10 border-red-500/20 text-red-500 hover:bg-red-600 hover:text-white'}`}
+                      className={`px-4 md:px-6 py-3.5 rounded-xl border transition-all shadow-lg shadow-red-500/5 text-[10px] md:text-[11px] font-black uppercase ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 border-slate-700 text-slate-600 cursor-not-allowed' : 'bg-red-600/10 border-red-500/20 text-red-500 hover:bg-red-600 hover:text-white'}`}
                     >
-                      Odstranit záznam
+                      {window.innerWidth < 768 ? 'Smazat' : 'Odstranit záznam'}
                     </button>
 
                     <div className="flex items-center gap-4">
@@ -1456,13 +1456,39 @@ function App() {
                         </button>
                       )}
 
-                      <button
-                        onClick={handleSaveEdit}
-                        className="px-16 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-xs rounded-xl shadow-xl shadow-indigo-600/30 transition-all active:scale-95 whitespace-nowrap"
-                      >
-                        <Save className="w-4 h-4 mr-2 inline" />
-                        Uložit změny
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {!editingTask.isGoogleTask && (
+                          <button
+                            onClick={() => {
+                              if (activeVoiceUpdateId === editingTask.id) {
+                                stopRecording();
+                              } else {
+                                activeVoiceUpdateIdRef.current = editingTask.id!;
+                                setActiveVoiceUpdateId(editingTask.id!);
+                                startRecording({
+                                  enableFeedback: true,
+                                  onSilence: () => stopRecording(),
+                                  silenceThreshold: -45,
+                                  silenceDuration: 4000
+                                });
+                              }
+                            }}
+                            className={`h-11 px-4 rounded-xl transition-all border flex items-center gap-2 font-black uppercase text-[10px] ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-indigo-600/10 border-indigo-600/20 text-indigo-400 hover:bg-indigo-600/20'}`}
+                          >
+                            <Mic className="w-4 h-4" />
+                            {activeVoiceUpdateId === editingTask.id ? 'Zastavit' : 'Diktovat'}
+                          </button>
+                        )}
+
+                        <button
+                          onClick={handleSaveEdit}
+                          className="px-6 md:px-12 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-xs rounded-xl shadow-xl shadow-indigo-600/30 transition-all active:scale-95 whitespace-nowrap"
+                        >
+                          <Save className="w-4 h-4 md:mr-2 inline" />
+                          <span className="hidden md:inline">Uložit změny</span>
+                          <span className="md:hidden">Uložit</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </motion.div>
@@ -1543,35 +1569,39 @@ function App() {
               </div>
             )}
           </AnimatePresence>
-          <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 ${editingTask ? 'md:left-72 md:right-auto md:translate-x-0' : 'md:left-auto md:right-10 md:translate-x-0'} z-[110] transition-all duration-500`}>
-            <div className="relative">
-              <AnimatePresence>
-                {isRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
-              </AnimatePresence>
-              <button
-                onClick={isRecording ? () => {
-                  stopRecording();
-                } : async () => {
-                  const targetId = editingTask?.id || null;
-                  activeVoiceUpdateIdRef.current = targetId;
-                  setActiveVoiceUpdateId(targetId);
-                  startRecording({
-                    enableFeedback: true,
-                    onSilence: () => stopRecording(),
-                    silenceThreshold: -45,
-                    silenceDuration: 5000 // Longer for main mic as it might be dictating longer thoughts
-                  });
-                }}
-                disabled={isProcessing}
-                className={`relative z-10 w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
-              >
-                {isProcessing ? <div className="w-6 h-6 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (isRecording ? <MicOff className="w-6 h-6 md:w-8 md:h-8 text-white" /> : <Mic className="w-6 h-6 md:w-8 md:h-8 text-white" />)}
-              </button>
-            </div>
-          </div>
+          <AnimatePresence>
+            {!editingTask && (
+              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:right-10 md:translate-x-0 z-[110] transition-all duration-500">
+                <div className="relative">
+                  <AnimatePresence>
+                    {isRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
+                  </AnimatePresence>
+                  <button
+                    onClick={isRecording ? () => {
+                      stopRecording();
+                    } : async () => {
+                      const targetId = null;
+                      activeVoiceUpdateIdRef.current = targetId;
+                      setActiveVoiceUpdateId(targetId);
+                      startRecording({
+                        enableFeedback: true,
+                        onSilence: () => stopRecording(),
+                        silenceThreshold: -45,
+                        silenceDuration: 5000 // Longer for main mic as it might be dictating longer thoughts
+                      });
+                    }}
+                    disabled={isProcessing}
+                    className={`relative z-10 w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
+                  >
+                    {isProcessing ? <div className="w-5 h-5 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (isRecording ? <MicOff className="w-5 h-5 md:w-8 md:h-8 text-white" /> : <Mic className="w-5 h-5 md:w-8 md:h-8 text-white" />)}
+                  </button>
+                </div>
+              </div>
+            )}
+          </AnimatePresence>
         </div>
-      </main >
-    </div >
+      </main>
+    </div>
   );
 }
 

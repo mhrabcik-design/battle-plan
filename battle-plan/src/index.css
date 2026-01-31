@@ -12,16 +12,16 @@
   --color-office-text: #323130;
   --color-office-text-muted: #605E5C;
 
-  /* Dark Mode Office (Outlook-style) */
-  --color-office-dark-bg: #111111;
-  --color-office-dark-surface: #1B1B1B;
-  --color-office-dark-border: #2B2B2B;
-  --color-office-dark-text: #F3F2F1;
-  --color-office-dark-text-muted: #A19F9D;
+  /* Dark Mode Office (Outlook-style) - Premium Tweaks */
+  --color-office-dark-bg: #05070a;
+  --color-office-dark-surface: #0d1117;
+  --color-office-dark-border: rgba(255, 255, 255, 0.08);
+  --color-office-dark-text: #f8fafc;
+  --color-office-dark-text-muted: #94a3b8;
 
-  --color-glass-bg: rgba(255, 255, 255, 0.05);
-  --color-glass-border: rgba(255, 255, 255, 0.1);
-  --color-glass-accent: rgba(59, 130, 246, 0.5);
+  --color-glass-bg: rgba(13, 17, 23, 0.7);
+  --color-glass-border: rgba(255, 255, 255, 0.06);
+  --color-glass-accent: rgba(99, 102, 241, 0.4);
 
   --font-display: "Outfit", system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
@@ -60,17 +60,19 @@
 
   /* Office Like Components - Compact for PC */
   .office-card {
-    @apply bg-slate-900/40 border border-slate-800/60 rounded-xl shadow-sm hover:shadow-md transition-all duration-200;
+    @apply bg-slate-900/40 border border-white/5 rounded-xl shadow-lg hover:shadow-indigo-500/5 transition-all duration-300;
+    backdrop-filter: blur(12px);
     padding: var(--card-padding);
   }
 
   .office-panel {
-    @apply bg-slate-900/60 border border-slate-800 rounded-2xl;
+    @apply bg-slate-900/60 border border-white/5 rounded-2xl;
+    backdrop-filter: blur(20px);
     padding: var(--desktop-gap);
   }
 
   .office-button-primary {
-    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20;
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25;
   }
 
   .office-btn-ghost {
@@ -78,7 +80,10 @@
   }
 
   .glass-card {
-    @apply bg-[var(--color-glass-bg)] border border-[var(--color-glass-border)] backdrop-blur-xl rounded-3xl shadow-2xl;
+    background: var(--color-glass-bg);
+    border: 1px solid var(--color-glass-border);
+    backdrop-filter: blur(24px);
+    @apply rounded-3xl shadow-2xl;
   }
 
   .premium-gradient-text {
