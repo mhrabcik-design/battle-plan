@@ -61,6 +61,19 @@ function App() {
     return `${hours}h ${diffMins % 60}m`;
   };
 
+  const getDeadlineColor = (targetDateStr?: string, targetTimeStr?: string) => {
+    if (!targetDateStr) return "text-slate-500";
+    const end = new Date(targetDateStr);
+    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
+    end.setHours(h, m, 0, 0);
+
+    const diffMs = end.getTime() - currentTime.getTime();
+    if (diffMs < 0) return "text-red-500"; // Past deadline
+    if (diffMs < 3 * 3600 * 1000) return "text-red-400"; // Very close (< 3h)
+    if (diffMs < 24 * 3600 * 1000) return "text-amber-400"; // Today (< 24h)
+    return "text-emerald-400"; // Plenty of time
+  };
+
   // Helper: Available working minutes (07:00-19:00) until deadline
   const getAvailableWorkingMinutes = (targetDateStr?: string, targetTimeStr?: string) => {
     if (!targetDateStr) return 0;
@@ -1015,9 +1028,9 @@ function App() {
                                     </div>
                                   )}
                                   {t.type === 'task' && t.deadline && (
-                                    <div className="flex items-center gap-1 opacity-80">
-                                      <Hourglass className={`w-2.5 h-2.5 ${isOverCapacity(t) ? 'text-red-400' : 'text-slate-400'}`} />
-                                      <span className={`text-[8px] font-black uppercase tracking-tight ${isOverCapacity(t) ? 'text-red-400' : 'text-slate-500'}`}>
+                                    <div className="flex items-center gap-1 opacity-90">
+                                      <Hourglass className={`w-2.5 h-2.5 ${isOverCapacity(t) ? 'text-red-400' : getDeadlineColor(t.deadline, t.startTime)}`} />
+                                      <span className={`text-[8px] font-black uppercase tracking-tight ${isOverCapacity(t) ? 'text-red-400' : getDeadlineColor(t.deadline, t.startTime)}`}>
                                         {formatTimeLeft(t.deadline, t.startTime)}
                                       </span>
                                     </div>
@@ -1144,10 +1157,10 @@ function App() {
 
                             {task.type === 'task' && task.deadline && (
                               <div className={`mt-2 flex items-center gap-2 p-2 rounded-lg border ${isOverCapacity(task) ? 'bg-red-500/10 border-red-500/30' : 'bg-slate-800/40 border-slate-700/60'}`}>
-                                <Hourglass className={`w-3.5 h-3.5 ${isOverCapacity(task) ? 'text-red-400' : 'text-slate-400'}`} />
+                                <Hourglass className={`w-3.5 h-3.5 ${isOverCapacity(task) ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`} />
                                 <div className="flex flex-col">
                                   <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Do termínu zbývá</span>
-                                  <span className={`text-[10px] font-black uppercase tracking-tight ${isOverCapacity(task) ? 'text-red-400' : 'text-slate-200'}`}>
+                                  <span className={`text-[10px] font-black uppercase tracking-tight ${isOverCapacity(task) ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`}>
                                     {formatTimeLeft(task.deadline, task.startTime)}
                                   </span>
                                 </div>
@@ -1376,6 +1389,18 @@ function App() {
                                   onChange={(e) => setEditingTask({ ...editingTask, urgency: Number(e.target.value) as any })}
                                   className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                                 />
+                              </div>
+                            )}
+
+                            {editingTask.type === 'task' && (editingTask.deadline || editingTask.date) && (
+                              <div className={`p-4 rounded-2xl border flex items-center gap-3 transition-colors ${isOverCapacity(editingTask) ? 'bg-red-500/10 border-red-500/20 shadow-lg shadow-red-500/5' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                <Hourglass className={`w-5 h-5 ${isOverCapacity(editingTask) ? 'text-red-400 animate-pulse' : getDeadlineColor(editingTask.deadline || editingTask.date, editingTask.startTime)}`} />
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Do termínu zbývá</span>
+                                  <span className={`text-sm font-black uppercase tracking-tight ${isOverCapacity(editingTask) ? 'text-red-400' : getDeadlineColor(editingTask.deadline || editingTask.date, editingTask.startTime)}`}>
+                                    {formatTimeLeft(editingTask.deadline || editingTask.date, editingTask.startTime)}
+                                  </span>
+                                </div>
                               </div>
                             )}
                           </div>
