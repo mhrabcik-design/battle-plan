@@ -1374,12 +1374,20 @@ function App() {
                                 />
                               </div>
                               <div className="space-y-2">
-                                <label className="text-[9px] font-black text-slate-500 uppercase">Čas</label>
+                                <label className="text-[9px] font-black text-slate-500 uppercase">Čas (24h)</label>
                                 <input
-                                  type="time"
+                                  type="text"
+                                  placeholder="13:00"
+                                  maxLength={5}
                                   value={editingTask.startTime || ''}
-                                  onChange={(e) => setEditingTask({ ...editingTask, startTime: e.target.value })}
-                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none"
+                                  onChange={(e) => {
+                                    let val = e.target.value.replace(/[^\d:]/g, '');
+                                    if (val.length === 2 && !val.includes(':') && e.target.value.length > (editingTask.startTime?.length || 0)) {
+                                      val += ':';
+                                    }
+                                    setEditingTask({ ...editingTask, startTime: val });
+                                  }}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600"
                                 />
                               </div>
                             </div>
