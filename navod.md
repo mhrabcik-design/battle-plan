@@ -47,10 +47,13 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 
 ### Inteligentní funkce
 - **Detekce ticha:** Stačí mluvit. Jakmile se na pár sekund odmlčíte, aplikace nahrávání sama ukončí a odešle k analýze.
-- **Zpětná vazba:** Start nahrávání je potvrzen krátkým pípnutím a vibrací (na podporovaných zařízeních).
+- **Zpětná vazba:** Start nahrávání je potvrzen krátkým pípnutím a vibrací. **Diktovací tlačítka mají cihlovou barvu** pro okamžitou rozpoznatelnost.
 - **Urgentnost (1-3):** AI automaticky rozpozná prioritu (3-Urgentní, 2-Normální, 1-Nízká).
-- **Capacity Guardian (Strážce kapacity):** Pokud úkol vyžaduje více času, než kolik zbývá v pracovní době (7:00-19:00) do jeho termínu, začne v seznamu **červeně pulsovat**. To vás varuje, že termín není reálné stihnout bez přesčasů.
-- **Deadline-First:** Pro úkoly (Tasks) je nejdůležitějším údajem **termín dokončení (deadline)**. V přehledu uvidíte ikonu přesýpacích hodin a přesný odpočet času, který vám do termínu zbývá.
+- **Capacity Guardian (Strážce kapacity):** Pokud úkol vyžaduje více času, než kolik zbývá v pracovní době (7:00-19:00) do jeho termínu, začne v seznamu **červeně pulsovat**.
+- **Inteligentní Deadline:** U úkolů uvidíte ikonu přesýpacích hodin s barevným odpočtem:
+  - 🟢 **Zelená:** Zbývá více než 24 hodin.
+  - 🟡 **Oranžová:** Termín je dnes (méně než 24 hod).
+  - 🔴 **Červená:** Kritický čas (méně než 3 hodiny nebo po termínu).
 
 ---
 
@@ -73,7 +76,7 @@ Kliknutím na jakýkoliv úkol otevřete **Focus Mode**. Ten maximalizuje prosto
 
 Vaše data jsou v bezpečí a dostupná všude.
 
-- **Google Drive:** Aplikace automaticky zálohuje vaše data i nastavení na váš Google Disk. Při prvním spuštění na novém zařízení (nebo mobilu) se data automaticky obnoví.
+- **Google Drive:** Aplikace automaticky zálohuje vaše data i nastavení na váš Google Disk. **Přihlášení je nyní stabilní** – aplikace si obnovuje přístup na pozadí, abyste se nemuseli každou hodinu znovu přihlašovat.
 - **Google Kalendář:** U schůzek (Meetingů) se v detailu úkolu objeví tlačítko **Odeslat do Kalendáře**.
 - **Google Tasks:** Úkoly jsou obousměrně synchronizovány. Co splníte v Bitevním Plánu, odškrtne se i v Google Tasks a naopak.
 
@@ -86,4 +89,4 @@ Vaše data jsou v bezpečí a dostupná všude.
 3. **Diagnostika:** Pokud něco nefunguje, sekce **Diagnostika** v sidebaru vám ukáže technické logy a stav připojení k AI.
 
 ---
-*Vytvořeno pro verzi 1.0 – Bitevní Plán: Vždy o krok napřed.*
+*Vytvořeno pro verzi 3.0.0 – Bitevní Plán: Vždy o krok napřed.*

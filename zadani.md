@@ -114,5 +114,30 @@ Vylepšit schopnost AI pracovat s relativními časovými údaji pro přesnějš
 - ✅ Aktualizace JSON příkladu pro AI (přidání polí `date` a `deadline`).
 - ✅ Nastavení `gemini-2.0-flash` jako default fallbacku v kódu.
 
+## Cíl (Phase 6 - Visual Polish & Legibility) ✅
+Dokončit vizuální ladění, sjednotit designové prvky a zajistit maximální čitelnost na všech zařízeních.
+
+1. **Prémiové vizuály:** ✅
+   - Sjednocení barevné palety (tmavé "Office" téma #0d1117).
+   - Skleněné efekty (Glassmorphism) v navigaci.
+   - **Barevné zvýraznění:** Tlačítka pro diktování mají výraznou cihlovou barvu pro snadnou orientaci.
+   - Změna velikosti a chování mikrofonu na mobilu (automatické skrývání v editoru).
+
+2. **Dynamické termíny:** ✅
+   - Barevné kódování času do deadline (Zelená > 24h, Oranžová < 24h, Červená < 3h).
+   - Integrace odpočtu do Focus Módu i týdenního přehledu.
+
+3. **Čitelnost a UX:** ✅
+   - Zvýšení kontrastu u šedých textů v tmavém režimu pro mobilní displeje.
+   - Těsné propojení týdenního kalendáře (Sticky hlavičky, fixace mezer).
+   - "Silent Refresh" pro Google Auth (konec neustálého odhlašování).
+
+## Technické kroky (Dokončeno)
+- ✅ Implementace `getDeadlineColor` a integrace do komponent.
+- ✅ Refaktorace CSS pro zvýšení kontrastu textů (mobile-first overrides).
+- ✅ Úprava `App.tsx`: Sticky hlavičky dnů a zarovnání časové osy na 7:00.
+- ✅ Implementace Silent Refresh a Login Hint v `googleService.ts`.
+- ✅ Barevná úprava mikrofonu (Brick color theme).
+
 ---
-*Všechny cíle pro verzi 1.0 byly naplněny a rozšířeny o pokročilou inteligenci.*
+*Všechny cíle pro verzi 3.0.0 byly naplněny. Aplikace je připravena k ostrému nasazení.*
