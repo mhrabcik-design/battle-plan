@@ -17,7 +17,8 @@
   --color-office-dark-surface: #0d1117;
   --color-office-dark-border: rgba(255, 255, 255, 0.08);
   --color-office-dark-text: #f8fafc;
-  --color-office-dark-text-muted: #94a3b8;
+  --color-office-dark-text-muted: #cbd5e1;
+  /* Brightened for better legibility */
 
   --color-glass-bg: rgba(13, 17, 23, 0.7);
   --color-glass-border: rgba(255, 255, 255, 0.06);
@@ -116,6 +117,27 @@
 
   .animate-pulse-red {
     animation: pulse-red 2s infinite;
+  }
+
+  /* Accessibility boost for mobile dark mode */
+  @media (max-width: 768px) {
+    .text-slate-500 {
+      color: #94a3b8 !important;
+      /* Brighter slate for mobile readability */
+    }
+
+    .text-slate-600 {
+      color: #cbd5e1 !important;
+    }
+
+    .text-slate-400 {
+      color: #f1f5f9 !important;
+    }
+
+    label {
+      color: #cbd5e1 !important;
+      font-weight: 700 !important;
+    }
   }
 
   @keyframes pulse-red {
