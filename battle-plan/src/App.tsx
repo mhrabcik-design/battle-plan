@@ -827,9 +827,9 @@ function App() {
 
       {/* MAIN CONTENT AREA */}
       <main className={`flex-1 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col no-scrollbar bg-slate-950`}>
-        <div className={`w-full ${viewMode === 'week' ? 'h-full flex flex-col px-0 md:px-4' : 'h-full px-4 md:px-8 lg:px-10 py-6 md:py-8'} ${viewMode === 'week' ? 'pb-0' : 'pb-32 md:pb-12'} max-w-[1600px] mx-auto`}>
+        <div className={`w-full h-full flex flex-col ${viewMode === 'week' ? 'px-0 py-0 max-w-full' : 'px-4 md:px-8 lg:px-10 py-6 md:py-8 max-w-[1600px] mx-auto'} ${viewMode === 'week' ? 'pb-0' : 'pb-32 md:pb-12'}`}>
 
-          <header className={`hidden md:flex flex-col gap-1 border-b border-slate-900 ${viewMode === 'week' ? 'mb-0 pb-4 pt-6 px-4 md:px-6' : 'mb-6 pb-4'}`}>
+          <header className={`hidden md:flex flex-col gap-1 border-b border-slate-900 ${viewMode === 'week' ? 'mb-0 pb-4 pt-8 px-6 md:px-10' : 'mb-6 pb-4'}`}>
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-black text-white uppercase tracking-tight">
