@@ -304,51 +304,70 @@ function App() {
     });
   }, [localTasks, googleTasksMapped, viewMode]);
 
-  // Auto-sync check on start
+  // Auto-sync check on start AND on focus/visibility change
   useEffect(() => {
-    if (googleAuth.isSignedIn) {
-      googleService.getTaskLists().then(setGoogleTaskLists);
-      const checkSync = async () => {
-        try {
-          const payload = await googleService.loadFromDrive();
-          if (payload && payload.data) {
-            const localCount = await db.tasks.count();
-            const hasApiKey = !!(await db.settings.get('gemini_api_key'));
-            const cloudTimestamp = payload.timestamp || 0;
-            const lastLocalSyncTs = Number(localStorage.getItem('last_drive_sync_ts')) || 0;
+    if (!googleAuth.isSignedIn) return;
 
-            // Auto-restore if:
-            // 1. Local is essentially empty (new setup)
-            // 2. OR API key is missing (new device/cleared cache)
-            // 3. OR Cloud data is significantly newer and local has only 0-1 tasks
-            if (localCount === 0 || !hasApiKey || (cloudTimestamp > lastLocalSyncTs && localCount <= 1)) {
-              const { tasks: driveTasks, settings: driveSettings } = payload.data;
-              if (driveTasks) {
-                await db.tasks.clear();
-                await db.tasks.bulkAdd(driveTasks);
-              }
-              if (driveSettings) {
-                for (const s of driveSettings) {
-                  await db.settings.put(s);
-                  if (s.id === 'gemini_api_key') setApiKey(s.value);
-                  if (s.id === 'gemini_model') setSelectedModel(s.value);
-                  if (s.id === 'ui_scale') setUiScale(Number(s.value));
-                }
-              }
-              const now = new Date().toLocaleString('cs-CZ');
-              setLastSync(now);
-              localStorage.setItem('last_drive_sync', now);
-              localStorage.setItem('last_drive_sync_ts', (payload.timestamp || Date.now()).toString());
-              addLog('Auto-obnova z Disku úspěšná (novější data)');
-              console.log('Auto-restored from Drive (newer data or missing settings)');
+    googleService.getTaskLists().then(setGoogleTaskLists);
+
+    const checkSync = async () => {
+      try {
+        const payload = await googleService.loadFromDrive();
+        if (payload && payload.data) {
+          const localCount = await db.tasks.count();
+          const hasApiKey = !!(await db.settings.get('gemini_api_key'));
+          const cloudTimestamp = payload.timestamp || 0;
+          const lastLocalSyncTs = Number(localStorage.getItem('last_drive_sync_ts')) || 0;
+
+          // Auto-restore if:
+          // 1. Local is essentially empty (new setup)
+          // 2. OR API key is missing (new device/cleared cache)
+          // 3. OR Cloud data is strictly newer than our last known sync
+          if (localCount === 0 || !hasApiKey || cloudTimestamp > lastLocalSyncTs) {
+            const { tasks: driveTasks, settings: driveSettings } = payload.data;
+
+            // Critical check: only replace if there's actual data to replace with
+            if (driveTasks) {
+              await db.tasks.clear();
+              await db.tasks.bulkAdd(driveTasks);
             }
+            if (driveSettings) {
+              for (const s of driveSettings) {
+                await db.settings.put(s);
+                if (s.id === 'gemini_api_key') setApiKey(s.value);
+                if (s.id === 'gemini_model') setSelectedModel(s.value);
+                if (s.id === 'ui_scale') setUiScale(Number(s.value));
+              }
+            }
+            const now = new Date().toLocaleString('cs-CZ');
+            setLastSync(now);
+            localStorage.setItem('last_drive_sync', now);
+            localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
+            addLog(`Automatická obnova: Cloud (${new Date(cloudTimestamp).toLocaleTimeString()}) je novější než lokál.`);
           }
-        } catch (e) {
-          console.error("Auto-sync check failed", e);
         }
-      };
-      checkSync();
-    }
+      } catch (e) {
+        console.error("Auto-sync check failed", e);
+      }
+    };
+
+    // Run on mount
+    checkSync();
+
+    // Run whenever app becomes visible (e.g. unlocking phone or switching tabs)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkSync();
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', checkSync); // Backup for some mobile browsers
+
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', checkSync);
+    };
   }, [googleAuth.isSignedIn]);
 
   useEffect(() => {
@@ -376,7 +395,7 @@ function App() {
       } catch (e) {
         console.error('Auto-backup failed', e);
       }
-    }, 10000); // Debounce 10s
+    }, 3000); // Faster Debounce: 3s
 
     return () => clearTimeout(timer);
   }, [tasks, googleAuth.isSignedIn]);
