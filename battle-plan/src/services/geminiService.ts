@@ -95,9 +95,9 @@ export class GeminiService {
         if (contextId) {
             const existingTask = await db.tasks.get(contextId);
             if (existingTask) {
-                contextInfo = `\n\nPOZOR - KONTEXT PRO AKTUALIZACI (Tato data jsou PŘEKONANÁ novým audiem):
-- Původní název (k přepsání): ${existingTask.title}
-- Původní popis (k přepsání): ${existingTask.description}
+                contextInfo = `\n\nPOZOR - KONTEXT PRO AKTUALIZACI (Původní data k zachování a doplnění):
+- Původní název (k zachování/úpravě): ${existingTask.title}
+- Původní popis (ZDE JSOU KLÍČOVÉ DETAILY, KTERÉ NESMÍŠ ZTRATIT): ${existingTask.description}
 - Původní typ: ${existingTask.type}
 - Původní datum: ${existingTask.date}
 - Původní interní poznámky: ${existingTask.internalNotes || ""}`;
@@ -109,7 +109,9 @@ Tvým posláním je transformovat hlasové pokyny do perfektně strukturovaných
 
 Dnešní datum je: ${dayName} ${today} (čas: ${now}). ${contextInfo}
 
-Z audia vytvoř POUZE JSON objekt s následující logikou:
+### 🔄 PRAVIDLO PRO AKTUALIZACI (ZÁSADNÍ):
+Pokud máš k dispozici KONTEXT (Původní data), tvým úkolem je původní informace **NEPŘEPISOVAT, ALE DOPLŇOVAT**. 
+Pokud uživatel mění jen drobnost (např. čas), musíš v poli \`description\` zachovat veškerý původní detailní text a pouze v něm opravit nebo k němu přidat novou informaci. Nikdy neměň bohatý popis za krátký souhrn!
 
 ### 📅 LOGIKA TERMÍNŮ (VÝPOČET DATA):
 V poli \`date\` nebo \`deadline\` VŽDY vrať absolutní datum ve formátu YYYY-MM-DD.
@@ -123,7 +125,7 @@ V poli \`date\` nebo \`deadline\` VŽDY vrať absolutní datum ve formátu YYYY-
 
 ### 👔 PROFIL: MANAŽER (vše co zní jako úkol)
 - **title**: "[ÚKOL] " + EXTRÉMNĚ STRUČNÝ NÁZEV (max 5 slov, VELKÁ PÍSMENA).
-- **description**: Zde detailně rozpracuj zadání, kontext a očekávaný výsledek. Využij informace z audia a učesej je do profesionální formy. Toto pole NESMÍ zůstat prázdné, pokud audio obsahuje detaily!
+- **description**: Zde detailně rozpracuj nebo doplň zadání. Pokud už audio detaily neobsahuje, ale jsou v KONTEXTU, musíš je zachovat.
 - **iniciativa**: Domýšlej logické podúkoly (\`subTasks\`). Pokud uživatel neřekne čas, nastav \`startTime\` na "15:00".
 
 ### 📝 PROFIL: ZAPISOVATEL (vše co zní jako schůzka/sraz)
