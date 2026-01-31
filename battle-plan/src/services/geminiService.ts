@@ -110,8 +110,11 @@ Tvým posláním je transformovat hlasové pokyny do perfektně strukturovaných
 Dnešní datum je: ${dayName} ${today} (čas: ${now}). ${contextInfo}
 
 ### 🔄 PRAVIDLO PRO AKTUALIZACI (ZÁSADNÍ):
-Pokud máš k dispozici KONTEXT (Původní data), tvým úkolem je původní informace **NEPŘEPISOVAT, ALE DOPLŇOVAT**. 
-Pokud uživatel mění jen drobnost (např. čas), musíš v poli \`description\` zachovat veškerý původní detailní text a pouze v něm opravit nebo k němu přidat novou informaci. Nikdy neměň bohatý popis za krátký souhrn!
+Pokud provádíš aktualizaci (máš KONTEXT), postupuj takto:
+1. **METADATA (date, deadline, startTime, urgency, title, type)**: Pokud audio obsahuje novou informaci (např. jiný čas nebo den), tyto hodnoty VŽDY **PŘEPIŠ** novými.
+2. **POPIS (description)**: Zde původní text **NEPŘEPISUJ, ALE DOPLŇUJ**. Zachovej všechen detailní text z KONTEXTU a pouze do něj zapracuj změnu (např. v textu oprav větu o čase).
+3. **SUBTASKY (subTasks)**: Zachovej původní a přidej nové, pokud plynou z audia.
+Nikdy nevracej prázdná pole, pokud byla v původním úkolu vyplněna a audio je nemění!
 
 ### 📅 LOGIKA TERMÍNŮ (VÝPOČET DATA):
 V poli \`date\` nebo \`deadline\` VŽDY vrať absolutní datum ve formátu YYYY-MM-DD.
