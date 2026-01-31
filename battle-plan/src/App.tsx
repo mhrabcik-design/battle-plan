@@ -827,9 +827,9 @@ function App() {
 
       {/* MAIN CONTENT AREA */}
       <main className={`flex-1 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col no-scrollbar bg-slate-950`}>
-        <div className={`w-full ${viewMode === 'week' ? 'h-[calc(100vh-2rem)] flex flex-col' : 'h-full'} px-4 md:px-8 lg:px-10 py-6 md:py-8 ${viewMode === 'week' ? 'pb-4' : 'pb-32 md:pb-12'} max-w-[1600px] mx-auto`}>
+        <div className={`w-full ${viewMode === 'week' ? 'h-full flex flex-col px-0 md:px-4' : 'h-full px-4 md:px-8 lg:px-10 py-6 md:py-8'} ${viewMode === 'week' ? 'pb-0' : 'pb-32 md:pb-12'} max-w-[1600px] mx-auto`}>
 
-          <header className="hidden md:flex flex-col gap-1 mb-6 border-b border-slate-900 pb-4">
+          <header className={`hidden md:flex flex-col gap-1 border-b border-slate-900 ${viewMode === 'week' ? 'mb-0 pb-4 pt-6 px-4 md:px-6' : 'mb-6 pb-4'}`}>
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-black text-white uppercase tracking-tight">
@@ -962,8 +962,8 @@ function App() {
           </div>
 
           {viewMode === 'week' && (
-            <div className="flex-1 flex flex-col min-h-0 -mt-2">
-              <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative bg-slate-900/20 rounded-2xl border border-slate-800/40">
+            <div className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative">
                 <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[700px] md:min-w-[1200px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
 
                   {/* TIME LABELS COLUMN */}
