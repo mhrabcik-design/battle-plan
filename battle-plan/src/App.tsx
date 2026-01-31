@@ -829,7 +829,7 @@ function App() {
       <main className={`flex-1 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col no-scrollbar bg-slate-950`}>
         <div className={`w-full h-full flex flex-col ${viewMode === 'week' ? 'px-0 py-0 max-w-full' : 'px-4 md:px-8 lg:px-10 py-6 md:py-8 max-w-[1600px] mx-auto'} ${viewMode === 'week' ? 'pb-0' : 'pb-32 md:pb-12'}`}>
 
-          <header className={`hidden md:flex flex-col gap-1 border-b border-slate-900 ${viewMode === 'week' ? 'mb-0 pb-0 pt-8 px-6 md:px-10' : 'mb-6 pb-4'}`}>
+          <header className={`hidden md:flex flex-col gap-1 border-b border-slate-900 ${viewMode === 'week' ? 'mb-0 pb-0 pt-4 px-6 md:px-10' : 'mb-6 pb-4'}`}>
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-black text-white uppercase tracking-tight">
@@ -967,9 +967,9 @@ function App() {
                 <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[700px] md:min-w-[1200px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
 
                   {/* TIME LABELS COLUMN */}
-                  <div className="relative border-r border-white/10 pt-10 bg-slate-950/40 z-20 ml-6 md:ml-10">
+                  <div className="relative border-r border-white/10 bg-slate-950/40 z-20 ml-6 md:ml-10">
                     {CALENDAR_HOURS.map((hour) => (
-                      <div key={hour} className="absolute left-0 w-full flex items-start justify-center" style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}>
+                      <div key={hour} className="absolute left-0 w-full flex items-center justify-center -translate-y-1/2" style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `20px` }}>
                         <span className="text-[10px] font-black text-slate-400 tabular-nums">{hour}:00</span>
                       </div>
                     ))}
@@ -983,7 +983,7 @@ function App() {
                     });
 
                     return (
-                      <div key={day.full} className={`relative border-r border-white/10 last:border-r-0 pt-10 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-amber-950/20' : ''}`}>
+                      <div key={day.full} className={`relative border-r border-white/10 last:border-r-0 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-amber-950/20' : ''}`}>
 
                         {/* DAY HEADER - STICKY */}
                         <div className={`sticky top-0 left-0 w-full h-10 border-b border-white/10 flex flex-col items-center justify-center backdrop-blur-md z-30 transition-colors ${day.isToday ? 'bg-indigo-600/25' : day.isWeekend ? 'bg-amber-900/40' : 'bg-slate-900/60'}`}>
