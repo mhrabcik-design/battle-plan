@@ -1225,7 +1225,7 @@ function App() {
                                 });
                               }
                             }}
-                            className={`h-9 px-3 rounded-lg transition-all border ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-600/10 border-indigo-600/20 text-indigo-400 hover:bg-indigo-600/20'}`}
+                            className={`h-9 px-3 rounded-lg transition-all border ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-orange-600/10 border-orange-500/20 text-orange-500 hover:bg-orange-600/20'}`}
                           >
                             <Mic className="w-3.5 h-3.5" />
                           </button>
@@ -1278,7 +1278,7 @@ function App() {
                               });
                             }
                           }}
-                          className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 border ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-indigo-600/20 border-indigo-600/30 text-indigo-400 hover:bg-indigo-600/40'}`}
+                          className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 border ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-orange-600/20 border-orange-600/30 text-orange-500 hover:bg-orange-600/40'}`}
                         >
                           {activeVoiceUpdateId === editingTask.id ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
                         </button>
@@ -1498,7 +1498,7 @@ function App() {
                                 });
                               }
                             }}
-                            className={`h-11 px-4 rounded-xl transition-all border flex items-center gap-2 font-black uppercase text-[10px] ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-indigo-600/10 border-indigo-600/20 text-indigo-400 hover:bg-indigo-600/20'}`}
+                            className={`h-11 px-4 rounded-xl transition-all border flex items-center gap-2 font-black uppercase text-[10px] ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-orange-600/10 border-orange-500/30 text-orange-500 hover:bg-orange-600/20 shadow-lg shadow-orange-950/10'}`}
                           >
                             <Mic className="w-4 h-4" />
                             {activeVoiceUpdateId === editingTask.id ? 'Zastavit' : 'Diktovat'}
