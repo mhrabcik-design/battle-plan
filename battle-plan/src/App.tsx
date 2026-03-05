@@ -1,19 +1,25 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Mic, MicOff, CheckCircle2, AlertCircle, FileText, Share2, List, Users, Lightbulb, Save, X, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, Mail, CloudUpload, CloudDownload, Hourglass } from 'lucide-react';
+import { Mic, MicOff, CheckCircle2, AlertCircle, List, Users, Lightbulb, Save, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CloudUpload } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { geminiService } from './services/geminiService';
-import { googleService, type GoogleAuthStatus } from './services/googleService';
-
-type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts';
-
-type UnifiedTask = Task & {
-  isGoogleTask?: boolean;
-  googleListId?: string;
-  googleId?: string;
-};
+import { googleService } from './services/googleService';
+import type { ViewMode, UnifiedTask, GoogleAuthStatus } from './types';
+import { Sidebar } from './components/Sidebar';
+import { TaskCard } from './components/TaskCard';
+import { FocusEditor } from './components/FocusEditor';
+import { SettingsModal } from './components/SettingsModal';
+import { WeeklyCalendar } from './components/WeeklyCalendar';
+import {
+  formatTimeLeft,
+  getDeadlineColor,
+  isOverCapacity,
+  getWeekDays,
+  getUrgencyColor
+} from './utils/calendarUtils';
+import { applySemanticResult } from './services/semanticEngine';
 
 function App() {
   const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
@@ -43,87 +49,10 @@ function App() {
   const [debugLogs, setDebugLogs] = useState<{ t: string, m: string, type: 'info' | 'error' }[]>([]);
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
 
-  // Helper: Format remaining time to deadline
-  const formatTimeLeft = (targetDateStr?: string, targetTimeStr?: string) => {
-    if (!targetDateStr) return "";
-    const end = new Date(targetDateStr);
-    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
-    end.setHours(h, m, 0, 0);
-
-    const diffMs = end.getTime() - currentTime.getTime();
-    if (diffMs < 0) return "po termínu";
-
-    const diffMins = Math.floor(diffMs / 60000);
-    const days = Math.floor(diffMins / (24 * 60));
-    const hours = Math.floor((diffMins % (24 * 60)) / 60);
-
-    if (days > 0) return `${days}d ${hours}h`;
-    return `${hours}h ${diffMins % 60}m`;
-  };
-
-  const getDeadlineColor = (targetDateStr?: string, targetTimeStr?: string) => {
-    if (!targetDateStr) return "text-slate-500";
-    const end = new Date(targetDateStr);
-    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
-    end.setHours(h, m, 0, 0);
-
-    const diffMs = end.getTime() - currentTime.getTime();
-    if (diffMs < 0) return "text-red-500"; // Past deadline
-    if (diffMs < 3 * 3600 * 1000) return "text-red-400"; // Very close (< 3h)
-    if (diffMs < 24 * 3600 * 1000) return "text-amber-400"; // Today (< 24h)
-    return "text-emerald-400"; // Plenty of time
-  };
-
-  // Helper: Available working minutes (07:00-19:00) until deadline
-  const getAvailableWorkingMinutes = (targetDateStr?: string, targetTimeStr?: string) => {
-    if (!targetDateStr) return 0;
-    const end = new Date(targetDateStr);
-    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
-    end.setHours(h, m, 0, 0);
-
-    let totalMinutes = 0;
-    let current = new Date(currentTime);
-
-    // If it's already past the deadline, No time left
-    if (current >= end) return 0;
-
-    while (current < end) {
-      const todayEnd = new Date(current);
-      todayEnd.setHours(19, 0, 0, 0);
-
-      const todayStart = new Date(current);
-      todayStart.setHours(7, 0, 0, 0);
-
-      // Current interval is between current time and either 19:00 today or the deadline
-      let currentStart = new Date(current);
-      if (currentStart < todayStart) currentStart = todayStart;
-
-      let currentEnd = todayEnd;
-      if (end < currentEnd) currentEnd = end;
-
-      if (currentStart < currentEnd) {
-        totalMinutes += Math.floor((currentEnd.getTime() - currentStart.getTime()) / 60000);
-      }
-
-      // Move to next day at 07:00
-      current.setDate(current.getDate() + 1);
-      current.setHours(7, 0, 0, 0);
-    }
-
-    return totalMinutes;
-  };
-
-  const isOverCapacity = (task: UnifiedTask) => {
-    if (task.type !== 'task' || task.status === 'completed') return false;
-    const duration = task.duration || 0;
-    const available = getAvailableWorkingMinutes(task.deadline, task.startTime);
-    return duration > available;
-  };
-
   const addLog = (message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
     setDebugLogs(prev => [{ t: time, m: message, type }, ...prev].slice(0, 50));
-    console.log(`[${type.toUpperCase()}] ${message}`);
+    console.log(`[${type.toUpperCase()}] ${message} `);
   };
 
   useEffect(() => {
@@ -134,15 +63,6 @@ function App() {
   const CALENDAR_HOURS = useMemo(() => Array.from({ length: 13 }, (_, i) => i + 7), []); // 7:00 to 19:00
   const ROW_HEIGHT = 80;
 
-  const getTimePosition = (timeStr?: string) => {
-    if (!timeStr) return 0;
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    // Boundary checks
-    const h = Math.max(7, Math.min(19, hours));
-    const totalMinutes = (h - 7) * 60 + minutes;
-    return (totalMinutes / 60) * ROW_HEIGHT;
-  };
-
   const currentHourPosition = useMemo(() => {
     const hours = currentTime.getHours();
     const minutes = currentTime.getMinutes();
@@ -152,7 +72,7 @@ function App() {
   }, [currentTime]);
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--app-font-size', `${uiScale}px`);
+    document.documentElement.style.setProperty('--app-font-size', `${uiScale} px`);
     db.settings.put({ id: 'ui_scale', value: uiScale.toString() });
     // Auto-scroll to top when view changes on desktop
     document.querySelector('main')?.scrollTo(0, 0);
@@ -171,31 +91,12 @@ function App() {
 
   const isAiActive = !!apiKey && isOnline;
 
-  const getWeekDays = (offset: number) => {
-    const today = new Date();
-    const day = today.getDay();
-    const diff = today.getDate() - day + (day === 0 ? -6 : 1) + (offset * 7);
-    const start = new Date(today.setDate(diff));
-
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(start);
-      d.setDate(d.getDate() + i);
-      return {
-        full: d.toISOString().split('T')[0],
-        dayName: d.toLocaleDateString('cs-CZ', { weekday: 'short' }),
-        dayNum: d.getDate(),
-        isToday: d.toISOString().split('T')[0] === new Date().toISOString().split('T')[0],
-        isWeekend: d.getDay() === 0 || d.getDay() === 6
-      };
-    });
-  };
-
   useEffect(() => {
     const cleanup = async () => {
       const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+      // Delete tasks that were completed OR soft-deleted more than 30 days ago
       const toDelete = await db.tasks
-        .where('status').equals('completed')
-        .and(t => t.createdAt < thirtyDaysAgo)
+        .filter(t => (t.status === 'completed' || !!t.isDeleted) && (t.updatedAt || t.createdAt) < thirtyDaysAgo)
         .primaryKeys();
       if (toDelete.length > 0) {
         await db.tasks.bulkDelete(toDelete);
@@ -253,6 +154,7 @@ function App() {
       const all = await db.tasks
         .where('deadline').between(start, end, true, true)
         .or('date').between(start, end, true, true)
+        .filter(t => !t.isDeleted)
         .toArray();
 
       // Pivot: Tasks only by deadline, Meetings by date/startTime
@@ -265,10 +167,10 @@ function App() {
     }
 
     let collection;
-    if (viewMode === 'tasks') collection = db.tasks.where('type').equals('task');
-    else if (viewMode === 'meetings') collection = db.tasks.where('type').equals('meeting');
-    else if (viewMode === 'thoughts') collection = db.tasks.where('type').anyOf(['thought', 'note']);
-    else collection = db.tasks.toCollection();
+    if (viewMode === 'tasks') collection = db.tasks.where('type').equals('task').and(t => !t.isDeleted);
+    else if (viewMode === 'meetings') collection = db.tasks.where('type').equals('meeting').and(t => !t.isDeleted);
+    else if (viewMode === 'thoughts') collection = db.tasks.where('type').anyOf(['thought', 'note']).and(t => !t.isDeleted);
+    else collection = db.tasks.filter(t => !t.isDeleted);
 
     const all = await collection.toArray();
     return all.sort((a, b) => {
@@ -292,7 +194,8 @@ function App() {
       createdAt: new Date(gt.updated).getTime(),
       isGoogleTask: true,
       googleId: gt.id,
-      googleListId: activeTaskList
+      googleListId: activeTaskList,
+      updatedAt: new Date(gt.updated).getTime()
     }));
   }, [googleTasksRaw, googleAuth.isSignedIn, viewMode, activeTaskList]);
 
@@ -325,7 +228,6 @@ function App() {
 
     const checkSync = async () => {
       try {
-        // 1. Check if token is expired and try silent refresh
         const status = googleService.getAuthStatus();
         if (!status.isSignedIn && localStorage.getItem('google_access_token')) {
           const success = await googleService.trySilentRefresh();
@@ -336,38 +238,50 @@ function App() {
 
         const payload = await googleService.loadFromDrive();
         if (payload && payload.data) {
-          const localCount = await db.tasks.count();
-          const hasApiKey = !!(await db.settings.get('gemini_api_key'));
           const cloudTimestamp = payload.timestamp || 0;
-          const lastLocalSyncTs = Number(localStorage.getItem('last_drive_sync_ts')) || 0;
 
-          // Auto-restore logic:
-          // 1. If local is empty AND we never synced before (new install)
-          // 2. OR API key is missing (new device/cleared cache)
-          // 3. OR Cloud data is strictly newer than our last successful sync
-          const isFreshInstall = localCount === 0 && lastLocalSyncTs === 0;
-          if (isFreshInstall || !hasApiKey || cloudTimestamp > lastLocalSyncTs) {
-            const { tasks: driveTasks, settings: driveSettings } = payload.data;
+          const { tasks: driveTasks, settings: driveSettings } = payload.data;
 
-            // Critical check: only replace if there's actual data to replace with
-            if (driveTasks) {
-              await db.tasks.clear();
-              await db.tasks.bulkAdd(driveTasks);
+          if (driveSettings) {
+            for (const s of driveSettings) {
+              await db.settings.put(s);
+              if (s.id === 'gemini_api_key') setApiKey(s.value);
+              if (s.id === 'gemini_model') setSelectedModel(s.value);
+              if (s.id === 'ui_scale') setUiScale(Number(s.value));
             }
-            if (driveSettings) {
-              for (const s of driveSettings) {
-                await db.settings.put(s);
-                if (s.id === 'gemini_api_key') setApiKey(s.value);
-                if (s.id === 'gemini_model') setSelectedModel(s.value);
-                if (s.id === 'ui_scale') setUiScale(Number(s.value));
+          }
+
+          if (driveTasks && Array.isArray(driveTasks)) {
+            let changesMade = false;
+            for (const cloudTask of driveTasks) {
+              if (!cloudTask.id) continue;
+              const localTask = await db.tasks.get(cloudTask.id);
+
+              if (!localTask) {
+                // New task from cloud
+                await db.tasks.add(cloudTask);
+                changesMade = true;
+              } else {
+                // Compare versions
+                const cloudUpdated = cloudTask.updatedAt || cloudTask.createdAt || 0;
+                const localUpdated = localTask.updatedAt || localTask.createdAt || 0;
+
+                if (cloudUpdated > localUpdated) {
+                  await db.tasks.put(cloudTask);
+                  changesMade = true;
+                }
               }
             }
-            const now = new Date().toLocaleString('cs-CZ');
-            setLastSync(now);
-            localStorage.setItem('last_drive_sync', now);
-            localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
-            addLog(`Automatická obnova: Cloud (${new Date(cloudTimestamp).toLocaleTimeString()}) je novější než lokál.`);
+
+            if (changesMade) {
+              addLog(`Synchronizace: Staženy novější změny z cloudu.`);
+            }
           }
+
+          const now = new Date().toLocaleString('cs-CZ');
+          setLastSync(now);
+          localStorage.setItem('last_drive_sync', now);
+          localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
         }
       } catch (e) {
         console.error("Auto-sync check failed", e);
@@ -533,7 +447,7 @@ function App() {
       const result = await geminiService.processAudio(
         blob,
         updateId || undefined,
-        (attempt, delay) => addLog(`AI Přetíženo - Pokus č. ${attempt} (čekám ${delay / 1000}s)...`, 'info')
+        (attempt, delay) => addLog(`AI Přetíženo - Pokus č.${attempt} (čekám ${delay / 1000}s)...`, 'info')
       );
       if (result) {
         addLog(`AI analýza úspěšná: ${result.title} (${updateId ? 'AKTUALIZACE' : 'NOVÝ'})`);
@@ -557,74 +471,12 @@ function App() {
   }, [audioBlob, selectedModel]);
 
   const applyAiResult = async (result: any, updateId: number | null) => {
-    if (updateId) {
-      // Fetch existing task to ensure consistency between date and deadline
-      const existing = await db.tasks.get(updateId);
-      if (!existing) return;
+    const semanticOutput = await applySemanticResult(result, updateId, googleAuth);
+    if (!semanticOutput) return;
 
-      // Type normalization
-      if (result.type) {
-        const aiType = String(result.type).toLowerCase();
-        if (aiType.includes('task') || aiType.includes('úkol')) result.type = 'task' as any;
-        else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) result.type = 'meeting' as any;
-        else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) result.type = 'thought' as any;
-      }
-
-      // Consistency: For Tasks, always prioritize deadline and keep date in sync
-      if (existing.type === 'task' || result.type === 'task') {
-        if (result.deadline && !result.date) result.date = result.deadline;
-        if (result.date && !result.deadline) result.deadline = result.date;
-      } else {
-        // For meetings/others, keep previous loose sync logic
-        if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
-          result.deadline = result.date;
-        } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
-          result.date = result.deadline;
-        }
-      }
-
-      await db.tasks.update(updateId, result as any);
-
-      // Pokud je tento úkol právě otevřen v editačním okně, aktualizujeme i jeho lokální stav
+    if (updateId && semanticOutput.updatedId) {
       if (editingTask && editingTask.id === updateId) {
-        setEditingTask(prev => prev ? { ...prev, ...result } : null);
-      }
-    } else {
-      let finalType: Task['type'] = 'thought';
-      const aiType = String(result.type || 'thought').toLowerCase();
-      if (aiType.includes('task') || aiType.includes('úkol')) finalType = 'task';
-      else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) finalType = 'meeting';
-      else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) finalType = 'thought';
-
-      const defaultDuration = finalType === 'meeting' ? 60 : 30;
-
-      const newTaskId = await db.tasks.add({
-        title: result.title || "Nový záznam",
-        description: result.description || "",
-        internalNotes: result.internalNotes || "",
-        type: finalType,
-        urgency: Number(result.urgency) as any || 2,
-        status: 'pending',
-        date: result.date || new Date().toISOString().split('T')[0],
-        startTime: result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined)),
-        deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
-        duration: Number(result.duration) || defaultDuration,
-        totalDuration: Number(result.duration) || defaultDuration,
-        subTasks: result.subTasks || [],
-        progress: Number(result.progress) || 0,
-        createdAt: Date.now()
-      });
-
-      if (finalType === 'meeting' && googleAuth.isSignedIn) {
-        const addedTask = await db.tasks.get(newTaskId);
-        if (addedTask) {
-          try {
-            const eventId = await googleService.addToCalendar(addedTask);
-            if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
-          } catch (e) {
-            console.error("Auto Google sync failed", e);
-          }
-        }
+        setEditingTask(prev => prev ? { ...prev, ...semanticOutput.result } : null);
       }
     }
   };
@@ -641,7 +493,8 @@ function App() {
       subTasks: newSubTasks,
       progress: newProgress,
       duration: newDuration,
-      totalDuration: total
+      totalDuration: total,
+      updatedAt: Date.now()
     } as any);
   };
 
@@ -652,7 +505,10 @@ function App() {
       // Refresh google tasks
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     } else if (task.id) {
-      await db.tasks.update(task.id, { status: task.status === 'completed' ? 'pending' : 'completed' });
+      await db.tasks.update(task.id, {
+        status: task.status === 'completed' ? 'pending' : 'completed',
+        updatedAt: Date.now()
+      });
     }
   };
 
@@ -666,7 +522,7 @@ function App() {
       if (task.googleEventId && googleAuth.isSignedIn) {
         try { await googleService.deleteFromCalendar(task.googleEventId); } catch (e) { }
       }
-      await db.tasks.delete(task.id);
+      await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
     }
   };
 
@@ -679,12 +535,12 @@ function App() {
         }, editingTask.googleListId);
         googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
       } else if (editingTask.id) {
-        await db.tasks.update(editingTask.id, editingTask as any);
+        await db.tasks.update(editingTask.id, { ...editingTask, updatedAt: Date.now() } as any);
         if (editingTask.type === 'meeting' && googleAuth.isSignedIn) {
           try {
             const eventId = await googleService.addToCalendar(editingTask);
             if (eventId && eventId !== editingTask.googleEventId) {
-              await db.tasks.update(editingTask.id, { googleEventId: eventId });
+              await db.tasks.update(editingTask.id, { googleEventId: eventId, updatedAt: Date.now() });
             }
           } catch (e) {
             console.error("Save Google sync failed", e);
@@ -704,21 +560,12 @@ function App() {
     try {
       const eventId = await googleService.addToCalendar(task);
       if (eventId) {
-        await db.tasks.update(task.id, { googleEventId: eventId });
+        await db.tasks.update(task.id, { googleEventId: eventId, updatedAt: Date.now() });
       }
     } catch (err: any) {
       alert(err.message || "Chyba při synchronizaci s Googlem");
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const getUrgencyColor = (urgency: number) => {
-    switch (urgency) {
-      case 3: return 'text-red-400 border-red-400/30 bg-red-400/10';
-      case 2: return 'text-blue-400 border-blue-400/30 bg-blue-400/10';
-      case 1: return 'text-slate-400 border-slate-400/30 bg-slate-400/10';
-      default: return 'text-blue-400 border-blue-400/30 bg-blue-400/10';
     }
   };
 
@@ -740,95 +587,17 @@ function App() {
 
   return (
     <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
-      {/* SIDEBAR FOR DESKTOP - Persistent Office/Professional Style */}
-      <aside className="hidden md:flex flex-col w-64 border-r border-slate-800 bg-slate-900 shadow-xl shrink-0 relative z-[60]">
-        <div className="p-6 flex flex-col items-start gap-1 border-b border-slate-800 bg-slate-900/50">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-600/20">
-              <CheckCircle2 className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-base font-black uppercase tracking-tight text-white leading-none">Bitevní Plán</span>
-          </div>
-          <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase ml-10 opacity-70">Desktop Suite v3.0.0</span>
-        </div>
-
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-6">
-          <nav className="space-y-0.5">
-            <h3 className="px-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em] mb-3">Nástroje</h3>
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = viewMode === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setViewMode(item.id as ViewMode)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-150 group ${isActive ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}
-                >
-                  <Icon className={`w-4 h-4 ${isActive ? 'scale-100' : 'group-hover:scale-110'} transition-transform`} />
-                  <span className="text-xs font-bold tracking-tight">{item.label}</span>
-                  {isActive && (
-                    <motion.div layoutId="active-indicator" className="ml-auto w-1 h-4 bg-white/20 rounded-full" />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-
-          <div className="space-y-4">
-            <h3 className="px-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em]">Systém</h3>
-            <div className="space-y-1">
-              {/* AI STATUS IN SIDEBAR */}
-              <div className="mx-2 flex items-center gap-3 p-3 rounded-xl bg-slate-800/30 border border-slate-800/50">
-                <div className={`w-2 h-2 rounded-full ${isAiActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-slate-700'}`} />
-                <div className="flex flex-col">
-                  <span className="text-[9px] font-black text-white uppercase tracking-wider leading-none">AI ARCHITEKT</span>
-                  <span className={`text-[8px] font-bold ${isAiActive ? 'text-emerald-400' : 'text-slate-500'}`}>
-                    {isAiActive ? 'ONLINE' : 'OFFLINE'}
-                  </span>
-                </div>
-              </div>
-
-              {/* BACKUP BUTTON */}
-              {googleAuth.isSignedIn && (
-                <button
-                  onClick={handleBackupToDrive}
-                  disabled={isSyncing}
-                  className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-emerald-500/10 text-emerald-500 rounded-xl transition-all font-black uppercase text-[9px] tracking-widest border border-emerald-500/10"
-                >
-                  <CloudUpload className={`w-4 h-4 ${isSyncing ? 'animate-bounce' : ''}`} />
-                  {isSyncing ? 'Synchronizace...' : 'Zálohovat Disk'}
-                </button>
-              )}
-
-              <button
-                onClick={() => setShowSettings(true)}
-                className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-slate-400 hover:text-white rounded-xl transition-all font-bold uppercase text-[9px] tracking-widest"
-              >
-                <Settings className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
-                Konfigurace
-              </button>
-
-              <button
-                onClick={() => setViewMode('debug' as any)}
-                className={`mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold uppercase text-[9px] tracking-widest ${viewMode === ('debug' as any) ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-              >
-                <FileText className="w-4 h-4" />
-                Diagnostika
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="p-4 border-t border-slate-800 bg-slate-900/50">
-          <div className="flex items-center gap-3 px-2">
-            <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-black text-[9px] text-indigo-400 shadow-inner">MB</div>
-            <div className="flex flex-col">
-              <span className="text-[11px] font-bold text-white leading-none">Martin H.</span>
-              <span className="text-[9px] text-slate-500">Professional</span>
-            </div>
-          </div>
-        </div>
-      </aside>
+      <Sidebar
+        viewMode={viewMode}
+        setViewMode={setViewMode}
+        isAiActive={isAiActive}
+        googleAuth={googleAuth}
+        handleBackupToDrive={handleBackupToDrive}
+        isSyncing={isSyncing}
+        navItems={navItems}
+        setShowSettings={setShowSettings}
+        isProcessing={isProcessing}
+      />
 
       {/* MAIN CONTENT AREA */}
       <main className={`flex-1 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col no-scrollbar bg-slate-950`}>
@@ -840,7 +609,7 @@ function App() {
                 <h1 className="text-2xl font-black text-white uppercase tracking-tight">
                   {navItems.find(i => i.id === viewMode)?.label}
                 </h1>
-                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">
                   {viewMode === 'battle' ? 'Strategický přehled dne' :
                     viewMode === 'week' ? 'Plánování týdenních cílů' :
                       'Správa pracovního workflow'}
@@ -849,12 +618,12 @@ function App() {
 
               {viewMode === 'week' && (
                 <div className="flex items-center gap-4 bg-slate-900/40 px-4 py-1.5 rounded-xl border border-slate-800/60">
-                  <h2 className="text-[11px] font-black text-white uppercase tracking-[0.2em]">
+                  <h2 className="text-sm font-black text-white uppercase tracking-[0.2em]">
                     {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
                   </h2>
                   <div className="flex gap-1.5 border-l border-slate-800 ml-2 pl-4">
                     <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronLeft className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => setWeekOffset(0)} className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-[8px] font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-all border border-slate-700/50">Dnes</button>
+                    <button onClick={() => setWeekOffset(0)} className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-xs font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-all border border-slate-700/50">Dnes</button>
                     <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronRight className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
@@ -872,7 +641,7 @@ function App() {
                       <button
                         key={list.id}
                         onClick={() => setActiveTaskList(list.id)}
-                        className={`px-3 py-1.5 rounded-md text-[9px] font-black uppercase transition-all ${activeTaskList === list.id ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+                        className={`px-3 py-1.5 rounded-md text-sm font-black uppercase transition-all ${activeTaskList === list.id ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
                       >
                         {list.title}
                       </button>
@@ -881,7 +650,7 @@ function App() {
                       <select
                         value={activeTaskList}
                         onChange={(e) => setActiveTaskList(e.target.value)}
-                        className="bg-transparent text-[9px] font-black text-slate-500 uppercase outline-none px-2 cursor-pointer"
+                        className="bg-transparent text-sm font-black text-slate-500 uppercase outline-none px-2 cursor-pointer"
                       >
                         {googleTaskLists.slice(3).map(list => (
                           <option key={list.id} value={list.id} className="bg-slate-900">{list.title}</option>
@@ -892,7 +661,7 @@ function App() {
                 )}
                 <div className="bg-slate-900/50 border border-slate-800 rounded-lg px-4 py-2 flex items-center gap-3 w-56">
                   <Clock className="w-3.5 h-3.5 text-slate-600" />
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-tight">{new Date().toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+                  <span className="text-sm font-black text-slate-400 uppercase tracking-tight">{new Date().toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
                 </div>
               </div>
             </div>
@@ -946,7 +715,7 @@ function App() {
                     className={`flex flex-col items-center gap-1.5 px-5 py-3 rounded-xl transition-all ${isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-slate-500'}`}
                   >
                     <Icon className="w-5 h-5" />
-                    <span className="text-[8px] font-black uppercase tracking-widest">{item.label}</span>
+                    <span className="text-xs font-black uppercase tracking-widest">{item.label}</span>
                   </button>
                 );
               })}
@@ -954,12 +723,12 @@ function App() {
 
             {viewMode === 'week' && (
               <div className="flex items-center justify-between bg-slate-900/40 px-4 py-2 rounded-xl border border-white/5">
-                <h2 className="text-[10px] font-black text-white uppercase tracking-widest">
+                <h2 className="text-xs font-black text-white uppercase tracking-widest">
                   {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'short', year: 'numeric' })}
                 </h2>
                 <div className="flex gap-2">
                   <button onClick={() => setWeekOffset(prev => prev - 1)} className="p-2 rounded-lg bg-slate-900 border border-white/5 text-slate-400"><ChevronLeft className="w-4 h-4" /></button>
-                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-900 border border-white/5 text-[9px] font-black text-white uppercase tracking-widest">Dnes</button>
+                  <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-900 border border-white/5 text-sm font-black text-white uppercase tracking-widest">Dnes</button>
                   <button onClick={() => setWeekOffset(prev => prev + 1)} className="p-2 rounded-lg bg-slate-900 border border-white/5 text-slate-400"><ChevronRight className="w-4 h-4" /></button>
                 </div>
               </div>
@@ -967,103 +736,15 @@ function App() {
           </div>
 
           {viewMode === 'week' && (
-            <div className="flex-1 flex flex-col min-h-0">
-              <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative">
-                <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[700px] md:min-w-[1200px] relative" style={{ height: `${CALENDAR_HOURS.length * ROW_HEIGHT + 60}px` }}>
-
-                  {/* TIME LABELS COLUMN */}
-                  <div className="relative border-r border-white/10 bg-slate-950/40 z-20 ml-6 md:ml-10">
-                    {CALENDAR_HOURS.map((hour) => (
-                      <div key={hour} className="absolute left-0 w-full flex items-center justify-center -translate-y-1/2" style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `20px` }}>
-                        <span className="text-[10px] font-black text-slate-400 tabular-nums">
-                          {hour < 10 ? `0${hour}:00` : `${hour}:00`}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* DAYS COLUMNS */}
-                  {getWeekDays(weekOffset).map((day) => {
-                    const dayTasks = tasks.filter(t => {
-                      if (t.type === 'task') return t.deadline === day.full;
-                      return t.date === day.full;
-                    });
-
-                    return (
-                      <div key={day.full} className={`relative border-r border-white/10 last:border-r-0 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-amber-950/20' : ''}`}>
-
-                        {/* DAY HEADER - STICKY */}
-                        <div className={`sticky top-0 left-0 w-full h-10 border-b border-white/10 flex flex-col items-center justify-center backdrop-blur-md z-30 transition-colors ${day.isToday ? 'bg-indigo-600/25' : day.isWeekend ? 'bg-amber-900/40' : 'bg-slate-900/60'}`}>
-                          <span className={`text-[8px] uppercase font-black tracking-widest ${day.isToday ? 'text-indigo-300' : 'text-slate-400'}`}>{day.dayName}</span>
-                          <span className={`text-sm font-black leading-none ${day.isToday ? 'text-white' : 'text-slate-200'}`}>{day.dayNum}</span>
-                        </div>
-
-                        {/* HOUR GRID LINES */}
-                        {CALENDAR_HOURS.map((hour) => (
-                          <div
-                            key={hour}
-                            className="absolute left-0 w-full border-b border-white/5"
-                            style={{ top: `${(hour - 7) * ROW_HEIGHT + 40}px`, height: `${ROW_HEIGHT}px` }}
-                          />
-                        ))}
-
-                        {/* TASKS IN DAY */}
-                        <div className="relative h-full z-10 mx-1">
-                          {dayTasks.map(t => {
-                            const height = Math.max(40, (t.duration || 60) / 60 * ROW_HEIGHT);
-                            const basePos = getTimePosition(t.startTime);
-                            // Pivot: Task ends at startTime (deadline), Meeting starts at startTime
-                            const top = (t.type === 'task' ? (basePos - height) : basePos) + 40;
-
-                            return (
-                              <button
-                                key={t.isGoogleTask ? `g-${t.googleId}` : `l-${t.id}`}
-                                onClick={() => setEditingTask(t)}
-                                className={`absolute left-0 right-0 p-2 rounded-lg border transition-all flex flex-col gap-0.5 overflow-hidden group/item ${t.status === 'completed' ? 'opacity-40' : 'hover:z-30 hover:scale-[1.02] shadow-lg shadow-black/20'} ${t.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : isOverCapacity(t) ? 'bg-red-950/40 border-red-500/40 animate-pulse-red' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'}`}
-                                style={{ top: `${top}px`, height: `${height}px` }}
-                              >
-                                <div className={`absolute top-0 left-0 bottom-0 w-1 ${t.type === 'meeting' ? 'bg-indigo-300' : isOverCapacity(t) ? 'bg-red-500' : 'bg-orange-500'} opacity-80`} />
-                                <div className="flex items-center justify-between gap-1">
-                                  <span className="text-[10px] font-black uppercase tracking-tight text-white line-clamp-1 leading-tight">{t.title}</span>
-                                  {t.isGoogleTask && <span className="text-[7px] bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30 shrink-0">G</span>}
-                                </div>
-                                <div className="flex flex-col gap-1 mt-auto">
-                                  {t.startTime && (
-                                    <div className="flex items-center gap-1 opacity-60">
-                                      <Clock className="w-2.5 h-2.5 text-slate-400" />
-                                      <span className="text-[9px] font-bold text-slate-400">{t.startTime} {t.duration ? `(${t.duration}m)` : ''}</span>
-                                    </div>
-                                  )}
-                                  {t.type === 'task' && t.deadline && (
-                                    <div className="flex items-center gap-1 opacity-90">
-                                      <Hourglass className={`w-2.5 h-2.5 ${isOverCapacity(t) ? 'text-red-400' : getDeadlineColor(t.deadline, t.startTime)}`} />
-                                      <span className={`text-[8px] font-black uppercase tracking-tight ${isOverCapacity(t) ? 'text-red-400' : getDeadlineColor(t.deadline, t.startTime)}`}>
-                                        {formatTimeLeft(t.deadline, t.startTime)}
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {/* CURRENT TIME INDICATOR */}
-                        {day.isToday && currentHourPosition !== -1 && (
-                          <div
-                            className="absolute left-0 right-0 z-30 flex items-center pointer-events-none"
-                            style={{ top: `${currentHourPosition + 40}px` }}
-                          >
-                            <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)] -ml-1" />
-                            <div className="flex-1 h-px bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.4)]" />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
+            <WeeklyCalendar
+              weekOffset={weekOffset}
+              tasks={tasks}
+              rowHeight={ROW_HEIGHT}
+              calendarHours={CALENDAR_HOURS}
+              currentTime={currentTime}
+              currentHourPosition={currentHourPosition}
+              setEditingTask={setEditingTask}
+            />
           )}
 
           {viewMode === ('debug' as any) && (
@@ -1072,12 +753,12 @@ function App() {
                 <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v3.0.0)</h2>
                 <button
                   onClick={() => setDebugLogs([])}
-                  className="px-3 py-1 bg-slate-800 hover:bg-red-900/20 text-slate-400 hover:text-red-400 rounded-lg text-[9px] font-black uppercase transition-all"
+                  className="px-3 py-1 bg-slate-800 hover:bg-red-900/20 text-slate-400 hover:text-red-400 rounded-lg text-sm font-black uppercase transition-all"
                 >
                   Smazat
                 </button>
               </div>
-              <div className="flex-1 bg-slate-900/50 rounded-2xl border border-slate-800 overflow-y-auto p-4 font-mono text-[10px] space-y-1">
+              <div className="flex-1 bg-slate-900/50 rounded-2xl border border-slate-800 overflow-y-auto p-4 font-mono text-xs space-y-1">
                 {debugLogs.length === 0 ? (
                   <div className="text-slate-600 italic">Žádné logy k dispozici...</div>
                 ) : (
@@ -1090,8 +771,8 @@ function App() {
                 )}
               </div>
               <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase mb-2">Aktivní Konfigurace</h3>
-                <div className="grid grid-cols-2 gap-4 text-[10px]">
+                <h3 className="text-xs font-black text-slate-500 uppercase mb-2">Aktivní Konfigurace</h3>
+                <div className="grid grid-cols-2 gap-4 text-xs">
                   <div>
                     <span className="text-slate-500">Model:</span> <span className="text-white">{selectedModel}</span>
                   </div>
@@ -1113,132 +794,28 @@ function App() {
                 {tasks.length === 0 ? (
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-20 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
                     <AlertCircle className="w-12 h-12 text-slate-800 mx-auto mb-4" />
-                    <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest">Seznam je prázdný</p>
+                    <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">Seznam je prázdný</p>
                   </motion.div>
                 ) : (
                   tasks.map((task) => (
-                    <motion.div
+                    <TaskCard
                       key={task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`}
-                      layout
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.98 }}
-                      className={`office-card group relative ${task.status === 'completed' ? 'opacity-50 grayscale-[0.3]' : ''} ${isOverCapacity(task) ? 'animate-pulse-red border-red-500/40 bg-red-950/20' : ''}`}
-                    >
-                      {isOverCapacity(task) && (
-                        <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 bg-red-500/20 border border-red-500/40 rounded-full text-red-400 z-20">
-                          <AlertCircle className="w-3 h-3" />
-                          <span className="text-[8px] font-black uppercase tracking-widest">Nedostatek kapacity</span>
-                        </div>
-                      )}
-
-                      <div className="flex justify-between items-start mb-3">
-                        <div className="flex items-center gap-2">
-                          <div className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${getUrgencyColor(task.urgency)}`}>
-                            {task.isGoogleTask ? 'Google Task' : task.urgency === 3 ? 'Urgentní' : task.urgency === 1 ? 'Bez urgentnosti' : 'Normální'}
-                          </div>
-                          {task.isGoogleTask && (
-                            <div className="w-4 h-4 bg-blue-600 rounded flex items-center justify-center text-[8px] font-black text-white shadow-sm">G</div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-500 hover:text-white transition-all"><Mail className="w-3.5 h-3.5" /></button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDeleteTask(task); }} className="p-1.5 rounded-lg bg-red-900/10 text-red-500/50 hover:text-red-400 hover:bg-red-900/20 transition-all"><X className="w-3.5 h-3.5" /></button>
-                          {task.startTime && (
-                            <div className="h-6 px-2 bg-slate-800 rounded-md flex items-center gap-1.5 border border-slate-700">
-                              <Clock className="w-3 h-3 text-indigo-400" />
-                              <span className="text-[10px] font-black text-white">{task.startTime}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mb-4">
-                        <div className="flex items-start gap-3">
-                          <div className={`mt-0.5 p-2 rounded-lg ${task.type === 'meeting' ? 'bg-orange-500/10 text-orange-400' : task.type === 'thought' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-indigo-500/10 text-indigo-400'}`}>
-                            {task.type === 'meeting' ? <Users className="w-4 h-4" /> : task.type === 'thought' ? <Lightbulb className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h3 className="text-sm font-black text-white uppercase tracking-tight leading-tight mb-1 group-hover:text-indigo-400 transition-colors">{task.title}</h3>
-                            <p className="text-xs text-slate-500 line-clamp-2 font-medium leading-relaxed mb-3">{task.description}</p>
-
-                            {task.type === 'task' && task.deadline && (
-                              <div className={`mt-2 flex items-center gap-2 p-2 rounded-lg border ${isOverCapacity(task) ? 'bg-red-500/10 border-red-500/30' : 'bg-slate-800/40 border-slate-700/60'}`}>
-                                <Hourglass className={`w-3.5 h-3.5 ${isOverCapacity(task) ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`} />
-                                <div className="flex flex-col">
-                                  <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Do termínu zbývá</span>
-                                  <span className={`text-[10px] font-black uppercase tracking-tight ${isOverCapacity(task) ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`}>
-                                    {formatTimeLeft(task.deadline, task.startTime)}
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {task.subTasks && task.subTasks.length > 0 && (
-                        <div className="space-y-2 mb-6 ml-11">
-                          {task.subTasks.slice(0, 3).map(st => (
-                            <button key={st.id} onClick={() => toggleSubtask(task, st.id)} className="flex items-center gap-2 group/st w-full">
-                              <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-slate-700 group-hover/st:border-indigo-500'}`}>
-                                {st.completed && <CheckCircle2 className="w-3 h-3 text-white" />}
-                              </div>
-                              <span className={`text-[11px] font-bold ${st.completed ? 'text-slate-600 line-through' : 'text-slate-400 group-hover/st:text-slate-200'}`}>{st.title}</span>
-                            </button>
-                          ))}
-                          {task.subTasks.length > 3 && (
-                            <div className="text-[10px] text-slate-600 font-bold uppercase">+ {task.subTasks.length - 3} dalších</div>
-                          )}
-                        </div>
-                      )}
-
-                      {task.status === 'pending' && (task.type === 'task' || task.type === 'meeting') && (
-                        <div className="mb-8 ml-11">
-                          <div className="flex justify-between items-end mb-1.5 px-0.5">
-                            <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Stav plnění</span>
-                            <span className="text-[10px] font-black text-white">{task.progress || 0}%</span>
-                          </div>
-                          <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                            <motion.div initial={{ width: 0 }} animate={{ width: `${task.progress || 0}%` }} className={`h-full ${task.type === 'meeting' ? 'bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.4)]' : 'bg-indigo-600 shadow-[0_0_10px_rgba(79,70,229,0.4)]'}`} />
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="flex gap-2 pt-3 border-t border-slate-800/50 mt-auto">
-                        <button
-                          onClick={async () => handleToggleTask(task)}
-                          className={`h-9 px-4 flex-1 rounded-lg text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2 ${task.status === 'completed' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                        >
-                          {task.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
-                          {task.status === 'completed' ? 'Hotovo' : 'Splnit'}
-                        </button>
-                        <button onClick={() => setEditingTask(task)} className="h-9 px-4 flex-1 rounded-lg bg-slate-800/50 text-slate-400 hover:text-slate-200 hover:bg-slate-700 text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2">
-                          <FileText className="w-3.5 h-3.5" /> Detaily
-                        </button>
-                        {!task.isGoogleTask && (
-                          <button
-                            onClick={() => {
-                              if (activeVoiceUpdateId === task.id) {
-                                stopRecording();
-                              } else {
-                                setActiveVoiceUpdateId(task.id!);
-                                activeVoiceUpdateIdRef.current = task.id!;
-                                startRecording({
-                                  enableFeedback: true,
-                                  onSilence: () => stopRecording(),
-                                  silenceThreshold: -45,
-                                  silenceDuration: 4000
-                                });
-                              }
-                            }}
-                            className={`h-9 px-3 rounded-lg transition-all border ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-orange-600/10 border-orange-500/20 text-orange-500 hover:bg-orange-600/20'}`}
-                          >
-                            <Mic className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </motion.div>
+                      task={task}
+                      activeVoiceUpdateId={activeVoiceUpdateId}
+                      isOverCapacity={isOverCapacity.bind(null, currentTime)}
+                      getUrgencyColor={getUrgencyColor}
+                      handleExport={handleExport}
+                      handleDeleteTask={handleDeleteTask}
+                      getDeadlineColor={getDeadlineColor.bind(null, currentTime)}
+                      formatTimeLeft={formatTimeLeft.bind(null, currentTime)}
+                      toggleSubtask={toggleSubtask}
+                      handleToggleTask={handleToggleTask}
+                      setEditingTask={setEditingTask}
+                      stopRecording={stopRecording}
+                      setActiveVoiceUpdateId={setActiveVoiceUpdateId}
+                      activeVoiceUpdateIdRef={activeVoiceUpdateIdRef}
+                      startRecording={startRecording}
+                    />
                   ))
                 )}
               </AnimatePresence>
@@ -1247,366 +824,44 @@ function App() {
 
           <AnimatePresence>
             {editingTask && (
-              <div className="fixed inset-0 md:left-64 z-[100] flex items-stretch justify-center bg-slate-950/80 backdrop-blur-md overflow-hidden">
-                <motion.div
-                  initial={{ x: '100%', opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  exit={{ x: '100%', opacity: 0 }}
-                  transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                  className="w-full h-full bg-slate-900 border-l border-white/5 shadow-[0_0_50px_rgba(0,0,0,0.5)] flex flex-col relative"
-                >
-                  <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-indigo-600 to-blue-500" />
-
-                  {/* EDITOR HEADER */}
-                  <div className="p-6 md:px-12 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-                    <div className="flex items-center gap-4">
-                      <div className={`p-2 rounded-xl ${editingTask.type === 'meeting' ? 'bg-orange-500/10 text-orange-400' : 'bg-indigo-500/10 text-indigo-400'}`}>
-                        {editingTask.type === 'meeting' ? <Users className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
-                      </div>
-                      <div>
-                        <h2 className="text-xl font-black text-white uppercase tracking-tight">Focus Mode</h2>
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none mt-1">Hluboká editace a detail záznamu</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {!editingTask.isGoogleTask && (
-                        <button
-                          onClick={() => {
-                            if (activeVoiceUpdateId === editingTask.id) {
-                              stopRecording();
-                            } else {
-                              activeVoiceUpdateIdRef.current = editingTask.id!;
-                              setActiveVoiceUpdateId(editingTask.id!);
-                              startRecording({
-                                enableFeedback: true,
-                                onSilence: () => stopRecording(),
-                                silenceThreshold: -45,
-                                silenceDuration: 4000
-                              });
-                            }
-                          }}
-                          className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 border ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-orange-600/20 border-orange-600/30 text-orange-500 hover:bg-orange-600/40'}`}
-                        >
-                          {activeVoiceUpdateId === editingTask.id ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-                        </button>
-                      )}
-                      <button
-                        disabled={isRecording && activeVoiceUpdateId === editingTask.id}
-                        onClick={() => setEditingTask(null)}
-                        className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 text-slate-700 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
-                      >
-                        <X className="w-6 h-6" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* EDITOR CONTENT - SCROLLABLE AREA */}
-                  <div className="flex-1 overflow-y-auto no-scrollbar">
-                    <div className="grid grid-cols-1 lg:grid-cols-12 h-full w-full">
-
-                      {/* MAIN CONTENT (LEFT) */}
-                      <div className="lg:col-span-8 p-6 md:p-10 space-y-8 border-r border-slate-800/50">
-                        <div className="space-y-3">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Název aktivity</label>
-                          <input
-                            type="text"
-                            disabled={editingTask.isGoogleTask}
-                            value={editingTask.title}
-                            onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })}
-                            className="w-full bg-slate-800/30 border border-slate-800 rounded-2xl px-6 py-5 text-2xl font-black text-white focus:border-indigo-500 transition-all outline-none"
-                            placeholder="Na čem pracujeme?"
-                          />
-                        </div>
-
-                        <div className="space-y-4">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Podrobný popis (Popis a Kontext)</label>
-                          <textarea
-                            rows={12}
-                            value={editingTask.description}
-                            onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })}
-                            className="w-full bg-slate-800/20 border border-slate-800 rounded-2xl px-6 py-6 text-base font-medium text-slate-300 leading-relaxed focus:bg-slate-800/40 focus:border-indigo-500 transition-all outline-none resize-none"
-                            placeholder="Zde rozveďte své myšlenky..."
-                          />
-                        </div>
-
-                        {!editingTask.isGoogleTask && (
-                          <div className="space-y-4">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Interní Zápisy (Pouze pro AI)</label>
-                            <textarea
-                              rows={8}
-                              value={editingTask.internalNotes || ''}
-                              onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value })}
-                              className="w-full bg-indigo-950/10 border border-indigo-900/20 rounded-2xl px-6 py-6 text-sm italic font-medium text-indigo-300/60 leading-relaxed focus:border-indigo-500 transition-all outline-none resize-none"
-                              placeholder="Dodatečné technické poznámky nebo AI instrukce..."
-                            />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* PROPERTIES & ACTIONS (RIGHT) */}
-                      <div className="lg:col-span-4 bg-slate-900/30 p-6 md:p-10 space-y-10">
-                        <div className="space-y-6">
-                          <h3 className="text-[11px] font-black text-white uppercase tracking-[0.3em] border-b border-slate-800 pb-3">Parametry</h3>
-
-                          <div className="grid grid-cols-1 gap-6">
-                            <div className="space-y-2">
-                              <label className="text-[9px] font-black text-slate-500 uppercase">Typ záznamu</label>
-                              <select
-                                disabled={editingTask.isGoogleTask}
-                                value={editingTask.type}
-                                onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any })}
-                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold uppercase text-white outline-none cursor-pointer"
-                              >
-                                <option value="task">Úkol</option>
-                                <option value="meeting">Schůzka</option>
-                                <option value="thought">Myšlenka</option>
-                              </select>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                              <div className="space-y-2">
-                                <label className="text-[9px] font-black text-slate-500 uppercase">Datum</label>
-                                <input
-                                  type="date"
-                                  value={(editingTask.type === 'task' ? (editingTask.deadline || editingTask.date) : (editingTask.date || editingTask.deadline)) || ''}
-                                  onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value })}
-                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none"
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <label className="text-[9px] font-black text-slate-500 uppercase">Čas (24h)</label>
-                                <input
-                                  type="text"
-                                  placeholder="13:00"
-                                  maxLength={5}
-                                  value={editingTask.startTime || ''}
-                                  onChange={(e) => {
-                                    let val = e.target.value.replace(/[^\d:]/g, '');
-                                    if (val.length === 2 && !val.includes(':') && e.target.value.length > (editingTask.startTime?.length || 0)) {
-                                      val += ':';
-                                    }
-                                    setEditingTask({ ...editingTask, startTime: val });
-                                  }}
-                                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600"
-                                />
-                              </div>
-                            </div>
-
-                            {!editingTask.isGoogleTask && (
-                              <div className="space-y-3">
-                                <label className="text-[9px] font-black text-slate-500 uppercase flex justify-between">
-                                  <span>Urgence / Priorita</span>
-                                  <span className="text-white">{editingTask.urgency}/3</span>
-                                </label>
-                                <input
-                                  type="range" min="1" max="3"
-                                  value={editingTask.urgency}
-                                  onChange={(e) => setEditingTask({ ...editingTask, urgency: Number(e.target.value) as any })}
-                                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                                />
-                              </div>
-                            )}
-
-                            {editingTask.type === 'task' && (editingTask.deadline || editingTask.date) && (
-                              <div className={`p-4 rounded-2xl border flex items-center gap-3 transition-colors ${isOverCapacity(editingTask) ? 'bg-red-500/10 border-red-500/20 shadow-lg shadow-red-500/5' : 'bg-slate-800/40 border-slate-700/60'}`}>
-                                <Hourglass className={`w-5 h-5 ${isOverCapacity(editingTask) ? 'text-red-400 animate-pulse' : getDeadlineColor(editingTask.deadline || editingTask.date, editingTask.startTime)}`} />
-                                <div className="flex flex-col">
-                                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Do termínu zbývá</span>
-                                  <span className={`text-sm font-black uppercase tracking-tight ${isOverCapacity(editingTask) ? 'text-red-400' : getDeadlineColor(editingTask.deadline || editingTask.date, editingTask.startTime)}`}>
-                                    {formatTimeLeft(editingTask.deadline || editingTask.date, editingTask.startTime)}
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {!editingTask.isGoogleTask && (
-                          <div className="space-y-6">
-                            <div className="flex justify-between items-center">
-                              <h3 className="text-[11px] font-black text-white uppercase tracking-[0.3em]">Checklist</h3>
-                              <button
-                                onClick={() => {
-                                  const newSubTasks = [...(editingTask.subTasks || []), { id: Date.now().toString(), title: '', completed: false }];
-                                  setEditingTask({ ...editingTask, subTasks: newSubTasks });
-                                }}
-                                className="text-[9px] bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-all font-black uppercase"
-                              >
-                                + Přidat krok
-                              </button>
-                            </div>
-
-                            <div className="space-y-2 max-h-[300px] overflow-y-auto no-scrollbar pr-1">
-                              {editingTask.subTasks?.map((st) => (
-                                <div key={st.id} className="group flex gap-3 items-start bg-slate-800/40 p-3 rounded-xl border border-slate-800/50">
-                                  <button
-                                    onClick={() => {
-                                      const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, completed: !item.completed } : item);
-                                      setEditingTask({ ...editingTask, subTasks: newSubTasks });
-                                    }}
-                                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-slate-700 hover:border-indigo-500'}`}
-                                  >
-                                    {st.completed && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
-                                  </button>
-                                  <input
-                                    value={st.title}
-                                    onChange={(e) => {
-                                      const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, title: e.target.value } : item);
-                                      setEditingTask({ ...editingTask, subTasks: newSubTasks });
-                                    }}
-                                    className={`bg-transparent border-none focus:ring-0 text-[13px] flex-1 text-white ${st.completed ? 'line-through text-slate-600' : 'font-bold'}`}
-                                    placeholder="Popis kroku..."
-                                  />
-                                  <button
-                                    onClick={() => {
-                                      const newSubTasks = editingTask.subTasks?.filter(item => item.id !== st.id);
-                                      setEditingTask({ ...editingTask, subTasks: newSubTasks });
-                                    }}
-                                    className="p-1 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                                  >
-                                    <X className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* EDITOR FOOTER */}
-                  <div className="p-6 md:px-12 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-4">
-                    <button
-                      disabled={isRecording && activeVoiceUpdateId === editingTask.id}
-                      onClick={() => { handleDeleteTask(editingTask); setEditingTask(null); }}
-                      className={`px-4 md:px-6 py-3.5 rounded-xl border transition-all shadow-lg shadow-red-500/5 text-[10px] md:text-[11px] font-black uppercase ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 border-slate-700 text-slate-600 cursor-not-allowed' : 'bg-red-600/10 border-red-500/20 text-red-500 hover:bg-red-600 hover:text-white'}`}
-                    >
-                      {window.innerWidth < 768 ? 'Smazat' : 'Odstranit záznam'}
-                    </button>
-
-                    <div className="flex items-center gap-4">
-                      {editingTask.type === 'meeting' && !editingTask.isGoogleTask && googleAuth.isSignedIn && (
-                        <button
-                          onClick={() => handleSyncToGoogle(editingTask)}
-                          className={`px-8 py-3.5 rounded-xl text-[11px] font-black uppercase flex items-center gap-2 transition-all ${editingTask.googleEventId ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-emerald-400 border border-emerald-500/30'}`}
-                        >
-                          <Share2 className="w-4 h-4" />
-                          {editingTask.googleEventId ? 'Synchronizováno' : 'Odeslat do Kalendáře'}
-                        </button>
-                      )}
-
-                      <div className="flex items-center gap-3">
-                        {!editingTask.isGoogleTask && (
-                          <button
-                            onClick={() => {
-                              if (activeVoiceUpdateId === editingTask.id) {
-                                stopRecording();
-                              } else {
-                                activeVoiceUpdateIdRef.current = editingTask.id!;
-                                setActiveVoiceUpdateId(editingTask.id!);
-                                startRecording({
-                                  enableFeedback: true,
-                                  onSilence: () => stopRecording(),
-                                  silenceThreshold: -45,
-                                  silenceDuration: 4000
-                                });
-                              }
-                            }}
-                            className={`h-11 px-4 rounded-xl transition-all border flex items-center gap-2 font-black uppercase text-[10px] ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-orange-600/10 border-orange-500/30 text-orange-500 hover:bg-orange-600/20 shadow-lg shadow-orange-950/10'}`}
-                          >
-                            <Mic className="w-4 h-4" />
-                            {activeVoiceUpdateId === editingTask.id ? 'Zastavit' : 'Diktovat'}
-                          </button>
-                        )}
-
-                        <button
-                          onClick={handleSaveEdit}
-                          className="px-6 md:px-12 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-xs rounded-xl shadow-xl shadow-indigo-600/30 transition-all active:scale-95 whitespace-nowrap"
-                        >
-                          <Save className="w-4 h-4 md:mr-2 inline" />
-                          <span className="hidden md:inline">Uložit změny</span>
-                          <span className="md:hidden">Uložit</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              </div>
+              <FocusEditor
+                editingTask={editingTask}
+                setEditingTask={setEditingTask as any}
+                activeVoiceUpdateId={activeVoiceUpdateId}
+                isRecording={isRecording}
+                stopRecording={stopRecording}
+                startRecording={startRecording}
+                setActiveVoiceUpdateId={setActiveVoiceUpdateId}
+                activeVoiceUpdateIdRef={activeVoiceUpdateIdRef}
+                handleDeleteTask={handleDeleteTask}
+                handleSyncToGoogle={handleSyncToGoogle}
+                handleSaveEdit={handleSaveEdit}
+                googleAuth={googleAuth}
+                isOverCapacity={isOverCapacity.bind(null, currentTime)}
+                getDeadlineColor={getDeadlineColor.bind(null, currentTime)}
+                formatTimeLeft={formatTimeLeft.bind(null, currentTime)}
+              />
             )}
           </AnimatePresence>
 
           <AnimatePresence>
             {showSettings && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-slate-950/95 backdrop-blur-md">
-                <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="glass-card w-full max-w-sm p-8 space-y-6">
-                  <div className="flex justify-between items-center"><h2 className="text-2xl font-display font-bold text-white">Nastavení AI</h2><button onClick={() => setShowSettings(false)} className="text-slate-500"><X /></button></div>
-                  <div className="space-y-4">
-                    <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm" placeholder="Gemini API klíč..." />
-                    <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full bg-slate-900 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm">{availableModels.map(m => <option key={m} value={m}>{m}</option>)}</select>
-                    <div className="pt-4 border-t border-white/5 space-y-3">
-                      <h3 className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Vzhled a Čitelnost</h3>
-                      <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-4">
-                        <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase">
-                          <span>Velikost písma</span>
-                          <span className="text-white px-2 py-0.5 bg-indigo-500/20 rounded-md border border-indigo-500/30">{uiScale}px</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="12"
-                          max="24"
-                          step="1"
-                          value={uiScale}
-                          onChange={(e) => setUiScale(Number(e.target.value))}
-                          className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                        />
-                        <div className="flex justify-between text-[8px] text-slate-600 font-bold uppercase">
-                          <span>Malé</span>
-                          <span>Normální (16)</span>
-                          <span>Velké</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="pt-4 border-t border-white/5 space-y-3">
-                      {googleAuth.isSignedIn ? (
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
-                            <span className="text-xs text-emerald-400 font-bold">Připojeno</span>
-                            <button onClick={() => googleService.signOut()} className="text-[10px] text-slate-500 uppercase underline">Odpojit</button>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2">
-                            <button
-                              onClick={handleBackupToDrive}
-                              disabled={isSyncing}
-                              className="flex flex-col items-center justify-center p-4 bg-indigo-600/10 border border-indigo-500/20 rounded-2xl text-indigo-300 transition-all hover:bg-indigo-600/20 disabled:opacity-50"
-                            >
-                              <CloudUpload className={`w-5 h-5 mb-1 ${isSyncing ? 'animate-bounce' : ''}`} />
-                              <span className="text-[10px] font-bold uppercase">Zálohovat</span>
-                            </button>
-                            <button
-                              onClick={handleRestoreFromDrive}
-                              disabled={isSyncing}
-                              className="flex flex-col items-center justify-center p-4 bg-blue-500/10 border border-blue-500/20 rounded-2xl text-blue-300 transition-all hover:bg-blue-500/20 disabled:opacity-50"
-                            >
-                              <CloudDownload className="w-5 h-5 mb-1" />
-                              <span className="text-[10px] font-bold uppercase">Obnovit</span>
-                            </button>
-                          </div>
-
-                          {lastSync && (
-                            <p className="text-center text-[9px] text-slate-600 font-mono">
-                              Poslední synchronizace: {lastSync}
-                            </p>
-                          )}
-                        </div>
-                      ) : <button onClick={() => googleService.signIn()} className="w-full py-4 bg-white text-slate-900 rounded-2xl text-xs font-bold uppercase flex items-center justify-center gap-2 font-black">Google Přihlášení</button>}
-                    </div>
-                  </div>
-                  <button onClick={saveSettings} className="w-full py-4 bg-indigo-600 rounded-2xl text-white font-bold uppercase text-xs flex items-center justify-center gap-2"><Save className="w-4 h-4" /> Uložit nastavení</button>
-                </motion.div>
-              </div>
+              <SettingsModal
+                apiKey={apiKey}
+                setApiKey={setApiKey}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+                availableModels={availableModels}
+                uiScale={uiScale}
+                setUiScale={setUiScale}
+                googleAuth={googleAuth}
+                handleBackupToDrive={handleBackupToDrive}
+                handleRestoreFromDrive={handleRestoreFromDrive}
+                isSyncing={isSyncing}
+                lastSync={lastSync}
+                saveSettings={saveSettings}
+                setShowSettings={setShowSettings}
+              />
             )}
           </AnimatePresence>
           <AnimatePresence>

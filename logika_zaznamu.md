@@ -42,10 +42,12 @@ AI rozlišuje tři základní typy záznamů, pro které má specifická pravidl
 
 ---
 
-## 📅 Logika termínů a času
-AI pracuje s absolutním časem na základě dnešního data:
+## 📅 Logika termínů a času (Date vs. Deadline)
+Od verze 4.0.0 se striktně rozlišuje mezi `date` (Datum konání / začátek akce) a `deadline` (Nejzazší termín dokončení):
+- **Úkoly (Task):** Primárně pracují s `deadline`. Kdy se na nich začne pracovat je volitelné.
+- **Schůzky (Meeting):** Primárně pracují s `date`. Schůzka má konkrétní datum a čas konání.
 - **Relativní výrazy:** Rozumí termínům jako „dnes“, „zítra“, „v úterý“ (nejbližší budoucí) nebo „příští středu“ (nejbližší + 7 dní).
-- **Deadline-First:** U úkolů je automaticky nastavován `deadline` jako primární zdroj pravdy pro zobrazení v kalendáři.
+- Pokud uživatel nadiktuje „Do zítřka musím...“, AI nastaví `deadline` na zítřek. Pokud řekne „Zítra mám meeting...“, AI nastaví `date` na zítřek.
 
 ---
 
@@ -58,7 +60,10 @@ AI pracuje s absolutním časem na základě dnešního data:
    - **3 (Urgentní):** Kritické úkoly.
    - **2 (Normální):** Výchozí nastavení.
    - **1 (Nízká):** Úkoly bez časového tlaku.
-4. **Preservace dat při aktualizaci:** AI při hlasové změně (např. „posuň to na 12:00“) nesmí smazat původní bohatý popis. Technická pole (čas/datum) se přepisují, ale hlavní text se inteligentně slučuje a zachovává.
+4. **Preservace dat při aktualizaci a Sync:** 
+   - AI při hlasové změně (např. „posuň to na 12:00“) nesmí smazat původní bohatý popis. Změny se slučují.
+   - Lokální změny z UI a změny od AI se slučují na základě atributu `updatedAt`. Pokud dojde v offline režimu na jiném zařízení k úpravě, novější `updatedAt` vítězí.
+5. **Soft Delete:** Smazané úkoly nejsou ihned nevratně odstraněny (kvůli prevenci ztráty dat při synchronizaci). Jsou označeny symbolem `isDeleted` a fyzicky odstaněny až po potvrzené synchronizaci na Disk/Cloud.
 
 ---
-*Bitevní Plán v3.0.0+ – Vždy o krok napřed.*
+*Bitevní Plán v4.0.0 – Vždy o krok napřed.*

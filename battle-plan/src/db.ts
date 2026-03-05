@@ -22,6 +22,8 @@ export interface Task {
     subTasks?: SubTask[];
     progress?: number; // 0-100
     googleEventId?: string;
+    updatedAt: number;
+    isDeleted?: boolean;
     createdAt: number;
 }
 
@@ -66,6 +68,11 @@ export class BattlePlanDB extends Dexie {
         });
         this.version(5).stores({
             tasks: '++id, type, date, deadline, urgency, status, googleEventId, createdAt',
+            recordings: '++id, analyzed, createdAt',
+            settings: 'id'
+        });
+        this.version(6).stores({
+            tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
             recordings: '++id, analyzed, createdAt',
             settings: 'id'
         });
