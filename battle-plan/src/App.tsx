@@ -108,7 +108,15 @@ function App() {
   useEffect(() => {
     const initGoogle = async () => {
       await googleService.init();
-      setGoogleAuth(googleService.getAuthStatus());
+      let status = googleService.getAuthStatus();
+
+      // Pokus o automatické obnovení tokenu, pokud je expirovaný, ale uživatel už byl přihlášen
+      if (!status.isSignedIn && localStorage.getItem('google_user_email')) {
+        await googleService.trySilentRefresh();
+        status = googleService.getAuthStatus();
+      }
+
+      setGoogleAuth(status);
     };
     initGoogle();
 

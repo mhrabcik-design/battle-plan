@@ -41,7 +41,7 @@ class GoogleService {
                     if (this.accessToken) {
                         window.gapi.client.setToken({ access_token: this.accessToken });
                         window.dispatchEvent(new CustomEvent('google-auth-change', {
-                            detail: { isSignedIn: true, accessToken: this.accessToken }
+                            detail: this.getAuthStatus()
                         }));
                     }
                     resolve();
