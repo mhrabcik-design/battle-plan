@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Mic, MicOff, CheckCircle2, AlertCircle, List, Users, Lightbulb, Save, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CloudUpload } from 'lucide-react';
+import { Mic, MicOff, CheckCircle2, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
@@ -38,7 +38,6 @@ function App() {
   ];
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(localStorage.getItem('last_drive_sync'));
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [uiScale, setUiScale] = useState<number>(Number(localStorage.getItem('ui_scale')) || 16);
@@ -377,70 +376,6 @@ function App() {
     await geminiService.init();
   };
 
-  const handleBackupToDrive = async () => {
-    if (!googleAuth.isSignedIn) return;
-    setIsSyncing(true);
-    try {
-      const allTasks = await db.tasks.toArray();
-      const allSettings = await db.settings.toArray();
-      const savedTimestamp = await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
-
-      if (savedTimestamp) {
-        const now = new Date().toLocaleString('cs-CZ');
-        setLastSync(now);
-        localStorage.setItem('last_drive_sync', now);
-        localStorage.setItem('last_drive_sync_ts', savedTimestamp.toString());
-        console.log('Manual backup successful');
-        return true;
-      }
-    } catch (e: any) {
-      alert('Chyba při zálohování: ' + e.message);
-      return false;
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleRestoreFromDrive = async () => {
-    if (!googleAuth.isSignedIn) return;
-    if (!confirm('Opravdu chcete obnovit data z Google Disku? Současná lokální data budou přepsána.')) return;
-
-    setIsSyncing(true);
-    try {
-      const payload = await googleService.loadFromDrive();
-      if (!payload || !payload.data) {
-        alert('Na Google Disku nebyla nalezena žádná záloha.');
-        return;
-      }
-
-      const { tasks: driveTasks, settings: driveSettings } = payload.data;
-
-      // Clear and restore tasks
-      await db.tasks.clear();
-      if (driveTasks) await db.tasks.bulkAdd(driveTasks);
-
-      // Restore settings if present
-      if (driveSettings) {
-        for (const s of driveSettings) {
-          await db.settings.put(s);
-          if (s.id === 'gemini_api_key') setApiKey(s.value);
-          if (s.id === 'gemini_model') setSelectedModel(s.value);
-          if (s.id === 'ui_scale') setUiScale(Number(s.value));
-        }
-      }
-
-      const now = new Date().toLocaleString('cs-CZ');
-      setLastSync(now);
-      localStorage.setItem('last_drive_sync', now);
-      localStorage.setItem('last_drive_sync_ts', (payload.timestamp || Date.now()).toString());
-      alert('Data byla úspěšně obnovena z Google Disku.');
-    } catch (e: any) {
-      addLog('Chyba při obnově: ' + e.message, 'error');
-      alert('Chyba při obnově dat: ' + e.message);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const handleProcessAudio = async (blob: Blob) => {
     if (isProcessing) return;
@@ -599,9 +534,6 @@ function App() {
         viewMode={viewMode}
         setViewMode={setViewMode}
         isAiActive={isAiActive}
-        googleAuth={googleAuth}
-        handleBackupToDrive={handleBackupToDrive}
-        isSyncing={isSyncing}
         navItems={navItems}
         setShowSettings={setShowSettings}
         isProcessing={isProcessing}
@@ -638,11 +570,6 @@ function App() {
               )}
 
               <div className="flex items-center gap-4">
-                {isSyncing && (
-                  <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="text-indigo-400">
-                    <Save className="w-4 h-4" />
-                  </motion.div>
-                )}
                 {viewMode === 'tasks' && googleAuth.isSignedIn && (
                   <div className="flex items-center gap-2 bg-slate-900/50 border border-slate-800 rounded-lg p-1">
                     {googleTaskLists.slice(0, 3).map(list => (
@@ -685,23 +612,6 @@ function App() {
                 <h1 className="text-xl font-black text-white uppercase tracking-tight">Bitevní Plán</h1>
               </div>
               <div className="flex items-center gap-1.5">
-                {googleAuth.isSignedIn && (
-                  <button
-                    onClick={handleBackupToDrive}
-                    disabled={isSyncing}
-                    className={`p-2 rounded-xl transition-all ${isSyncing ? 'bg-indigo-600/20' : 'bg-indigo-600/10 border border-white/5'}`}
-                  >
-                    {isSyncing ? (
-                      <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="text-indigo-400">
-                        <Save className="w-4 h-4" />
-                      </motion.div>
-                    ) : (
-                      <div className="flex items-center gap-1.5">
-                        <CloudUpload className="w-4 h-4 text-emerald-500" />
-                      </div>
-                    )}
-                  </button>
-                )}
                 <button
                   onClick={() => setShowSettings(true)}
                   className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400"
@@ -863,9 +773,6 @@ function App() {
                 uiScale={uiScale}
                 setUiScale={setUiScale}
                 googleAuth={googleAuth}
-                handleBackupToDrive={handleBackupToDrive}
-                handleRestoreFromDrive={handleRestoreFromDrive}
-                isSyncing={isSyncing}
                 lastSync={lastSync}
                 saveSettings={saveSettings}
                 setShowSettings={setShowSettings}

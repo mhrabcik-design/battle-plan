@@ -1,14 +1,11 @@
 import { motion } from 'framer-motion';
-import { CheckCircle2, CloudUpload, Settings, FileText } from 'lucide-react';
-import type { ViewMode, GoogleAuthStatus } from '../types';
+import { CheckCircle2, Settings, FileText } from 'lucide-react';
+import type { ViewMode } from '../types';
 
 interface SidebarProps {
     viewMode: ViewMode;
     setViewMode: (mode: any) => void;
     isAiActive: boolean;
-    googleAuth: GoogleAuthStatus;
-    handleBackupToDrive: () => Promise<boolean | undefined>;
-    isSyncing: boolean;
     navItems: Array<{ id: string; label: string; icon: any }>;
     setShowSettings: (show: boolean) => void;
     isProcessing: boolean;
@@ -18,9 +15,6 @@ export function Sidebar({
     viewMode,
     setViewMode,
     isAiActive,
-    googleAuth,
-    handleBackupToDrive,
-    isSyncing,
     navItems,
     setShowSettings,
     isProcessing
@@ -72,17 +66,6 @@ export function Sidebar({
                             </div>
                         </div>
 
-                        {googleAuth.isSignedIn && (
-                            <button
-                                onClick={handleBackupToDrive}
-                                disabled={isSyncing}
-                                className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-emerald-500/10 text-emerald-500 rounded-xl transition-all font-black uppercase text-sm tracking-widest border border-emerald-500/10"
-                            >
-                                <CloudUpload className={`w-4 h-4 ${isSyncing ? 'animate-bounce' : ''}`} />
-                                {isSyncing ? 'Synchronizace...' : 'Zálohovat Disk'}
-                            </button>
-                        )}
-
                         <button
                             onClick={() => setShowSettings(true)}
                             className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-slate-400 hover:text-white rounded-xl transition-all font-bold uppercase text-sm tracking-widest"
@@ -111,6 +94,6 @@ export function Sidebar({
                     </div>
                 </div>
             </div>
-        </aside>
+        </aside >
     );
 }

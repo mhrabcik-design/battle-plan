@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { X, Save, CloudUpload, CloudDownload } from 'lucide-react';
+import { X, Save } from 'lucide-react';
 import { googleService } from '../services/googleService';
 import type { GoogleAuthStatus } from '../types';
 
@@ -13,9 +13,6 @@ interface SettingsModalProps {
     uiScale: number;
     setUiScale: (val: number) => void;
     googleAuth: GoogleAuthStatus;
-    handleBackupToDrive: () => Promise<boolean | undefined>;
-    handleRestoreFromDrive: () => Promise<void>;
-    isSyncing: boolean;
     lastSync: string | null;
     saveSettings: () => Promise<void>;
     setShowSettings: (val: boolean) => void;
@@ -30,9 +27,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     uiScale,
     setUiScale,
     googleAuth,
-    handleBackupToDrive,
-    handleRestoreFromDrive,
-    isSyncing,
     lastSync,
     saveSettings,
     setShowSettings
@@ -108,27 +102,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     <button onClick={() => googleService.signOut()} className="text-[10px] text-slate-500 hover:text-red-400 uppercase underline transition-colors">Odpojit</button>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-2">
-                                    <button
-                                        onClick={handleBackupToDrive}
-                                        disabled={isSyncing}
-                                        className="flex flex-col items-center justify-center p-4 bg-indigo-600/10 border border-indigo-500/20 rounded-2xl text-indigo-300 transition-all hover:bg-indigo-600/20 disabled:opacity-50"
-                                    >
-                                        <CloudUpload className={`w-5 h-5 mb-1 ${isSyncing ? 'animate-bounce' : ''}`} />
-                                        <span className="text-[10px] font-black uppercase tracking-widest">Zálohovat</span>
-                                    </button>
-                                    <button
-                                        onClick={handleRestoreFromDrive}
-                                        disabled={isSyncing}
-                                        className="flex flex-col items-center justify-center p-4 bg-blue-500/10 border border-blue-500/20 rounded-2xl text-blue-300 transition-all hover:bg-blue-500/20 disabled:opacity-50"
-                                    >
-                                        <CloudDownload className="w-5 h-5 mb-1" />
-                                        <span className="text-[10px] font-black uppercase tracking-widest">Obnovit</span>
-                                    </button>
-                                </div>
-
                                 {lastSync && (
-                                    <p className="text-center text-[10px] text-slate-600 font-black uppercase tracking-widest">
+                                    <p className="text-center text-[10px] text-slate-600 font-black uppercase tracking-widest mt-2">
                                         Poslední synchronizace: {lastSync}
                                     </p>
                                 )}
