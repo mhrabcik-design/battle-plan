@@ -20,8 +20,8 @@ export function Sidebar({
     isProcessing
 }: SidebarProps) {
     return (
-        <aside className="hidden md:flex flex-col w-64 border-r border-slate-800 bg-slate-900 shadow-xl shrink-0 relative z-[60]">
-            <div className="p-6 flex flex-col items-start gap-1 border-b border-slate-800 bg-slate-900/50">
+        <aside className="hidden md:flex flex-col w-64 border-r border-white/5 bg-[#05070a]/90 backdrop-blur-2xl shadow-2xl shrink-0 relative z-[60]">
+            <div className="p-6 flex flex-col items-start gap-1 border-b border-white/5 bg-transparent">
                 <div className="flex items-center gap-2">
                     <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-600/20">
                         <CheckCircle2 className="w-5 h-5 text-white" />
@@ -56,7 +56,7 @@ export function Sidebar({
                 <div className="space-y-4">
                     <h3 className="px-4 text-sm font-black text-slate-600 uppercase tracking-[0.2em]">Systém</h3>
                     <div className="space-y-1">
-                        <div className="mx-2 flex items-center gap-3 p-3 rounded-xl bg-slate-800/30 border border-slate-800/50">
+                        <div className="mx-2 flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/5 shadow-inner">
                             <div className={`w-2 h-2 rounded-full ${isAiActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-slate-700'}`} />
                             <div className="flex flex-col">
                                 <span className="text-sm font-black text-white uppercase tracking-wider leading-none">AI ARCHITEKT</span>
