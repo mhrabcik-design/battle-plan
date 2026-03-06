@@ -232,7 +232,7 @@ class GoogleService {
 
         try {
             const event = {
-                'summary': `[BITEVNÍ PLÁN] ${task.title}`,
+                'summary': `${task.title} [BP]`,
                 'description': `${task.description}\n\nInterní poznámky:\n${task.internalNotes || ''}`,
                 'start': {
                     'dateTime': (() => {
