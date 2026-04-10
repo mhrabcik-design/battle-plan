@@ -3,6 +3,7 @@ import type { UnifiedTask } from '../types';
 export const formatTimeLeft = (currentTime: Date, targetDateStr?: string, targetTimeStr?: string) => {
     if (!targetDateStr) return "";
     const end = new Date(targetDateStr);
+    if (isNaN(end.getTime())) return "";
     const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
     end.setHours(h, m, 0, 0);
 
@@ -12,27 +13,31 @@ export const formatTimeLeft = (currentTime: Date, targetDateStr?: string, target
     const diffMins = Math.floor(diffMs / 60000);
     const days = Math.floor(diffMins / (24 * 60));
     const hours = Math.floor((diffMins % (24 * 60)) / 60);
+    const mins = diffMins % 60;
 
     if (days > 0) return `${days}d ${hours}h`;
-    return `${hours}h ${diffMins % 60}m`;
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
 };
 
 export const getDeadlineColor = (currentTime: Date, targetDateStr?: string, targetTimeStr?: string) => {
     if (!targetDateStr) return "text-slate-500";
     const end = new Date(targetDateStr);
+    if (isNaN(end.getTime())) return "text-slate-500";
     const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
     end.setHours(h, m, 0, 0);
 
     const diffMs = end.getTime() - currentTime.getTime();
-    if (diffMs < 0) return "text-red-500"; // Past deadline
-    if (diffMs < 3 * 3600 * 1000) return "text-red-400"; // Very close (< 3h)
-    if (diffMs < 24 * 3600 * 1000) return "text-amber-400"; // Today (< 24h)
-    return "text-emerald-400"; // Plenty of time
+    if (diffMs < 0) return "text-red-500";
+    if (diffMs < 3 * 3600 * 1000) return "text-red-400";
+    if (diffMs < 24 * 3600 * 1000) return "text-amber-400";
+    return "text-emerald-400";
 };
 
 export const getAvailableWorkingMinutes = (currentTime: Date, targetDateStr?: string, targetTimeStr?: string) => {
     if (!targetDateStr) return 0;
     const end = new Date(targetDateStr);
+    if (isNaN(end.getTime())) return 0;
     const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
     end.setHours(h, m, 0, 0);
 
@@ -58,6 +63,7 @@ export const getAvailableWorkingMinutes = (currentTime: Date, targetDateStr?: st
             totalMinutes += Math.floor((currentEnd.getTime() - currentStart.getTime()) / 60000);
         }
 
+        current = new Date(current);
         current.setDate(current.getDate() + 1);
         current.setHours(7, 0, 0, 0);
     }
@@ -67,25 +73,31 @@ export const getAvailableWorkingMinutes = (currentTime: Date, targetDateStr?: st
 
 export const isOverCapacity = (currentTime: Date, task: UnifiedTask) => {
     if (task.type !== 'task' || task.status === 'completed') return false;
-    const duration = task.duration || 0;
+    if (task.duration == null) return false;
     const available = getAvailableWorkingMinutes(currentTime, task.deadline, task.startTime);
-    return duration > available;
+    return task.duration > available;
 };
 
 export const getWeekDays = (offset: number) => {
     const today = new Date();
     const day = today.getDay();
     const diff = today.getDate() - day + (day === 0 ? -6 : 1) + (offset * 7);
-    const start = new Date(today.setDate(diff));
+    const start = new Date(today.getFullYear(), today.getMonth(), diff);
+
+    const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
 
     return Array.from({ length: 7 }, (_, i) => {
         const d = new Date(start);
         d.setDate(d.getDate() + i);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const full = `${y}-${m}-${dd}`;
         return {
-            full: d.toISOString().split('T')[0],
+            full,
             dayName: d.toLocaleDateString('cs-CZ', { weekday: 'short' }),
             dayNum: d.getDate(),
-            isToday: d.toISOString().split('T')[0] === new Date().toISOString().split('T')[0],
+            isToday: full === todayStr,
             isWeekend: d.getDay() === 0 || d.getDay() === 6
         };
     });
@@ -94,8 +106,10 @@ export const getWeekDays = (offset: number) => {
 export const getTimePosition = (timeStr: string | undefined, rowHeight: number) => {
     if (!timeStr) return 0;
     const [hours, minutes] = timeStr.split(':').map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return 0;
     const h = Math.max(7, Math.min(19, hours));
-    const totalMinutes = (h - 7) * 60 + minutes;
+    const m = Math.max(0, Math.min(59, minutes));
+    const totalMinutes = (h - 7) * 60 + m;
     return (totalMinutes / 60) * rowHeight;
 };
 

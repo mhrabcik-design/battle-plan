@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Mic, MicOff, CheckCircle2, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
-import { db, type Task } from './db';
+import { db } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
@@ -21,6 +21,24 @@ import {
 } from './utils/calendarUtils';
 import { applySemanticResult } from './services/semanticEngine';
 
+const AVAILABLE_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-2.5-flash',
+  'gemini-1.5-pro'
+];
+
+const NAV_ITEMS = [
+  { id: 'battle', label: 'Plán', icon: List },
+  { id: 'week', label: 'Týden', icon: LayoutGrid },
+  { id: 'tasks', label: 'Úkoly', icon: CheckCircle2 },
+  { id: 'meetings', label: 'Schůzky', icon: Users },
+  { id: 'thoughts', label: 'Myšlenky', icon: Lightbulb },
+];
+
+const ROW_HEIGHT = 80;
+const CALENDAR_HOURS = Array.from({ length: 13 }, (_, i) => i + 7);
+
 function App() {
   const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
   const [viewMode, setViewMode] = useState<ViewMode>('battle');
@@ -30,12 +48,6 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
-  const availableModels = [
-    'gemini-2.0-flash',   // Default - nejlepší poměr cena/výkon
-    'gemini-1.5-flash',   // Ultra levný
-    'gemini-2.5-flash',   // Premium kvalita
-    'gemini-1.5-pro'      // Komplexní analýza
-  ];
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
   const [lastSync, setLastSync] = useState<string | null>(localStorage.getItem('last_drive_sync'));
@@ -45,22 +57,20 @@ function App() {
   const [activeTaskList, setActiveTaskList] = useState<string>('@default');
   const [googleTasksRaw, setGoogleTasksRaw] = useState<any[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [debugLogs, setDebugLogs] = useState<{ t: string, m: string, type: 'info' | 'error' }[]>([]);
+  const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
+  const isProcessingRef = useRef(false);
 
-  const addLog = (message: string, type: 'info' | 'error' = 'info') => {
+  const addLog = useCallback((message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
     setDebugLogs(prev => [{ t: time, m: message, type }, ...prev].slice(0, 50));
-    console.log(`[${type.toUpperCase()}] ${message} `);
-  };
+    console.log(`[${type.toUpperCase()}] ${message}`);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 30000);
     return () => clearInterval(timer);
   }, []);
-
-  const CALENDAR_HOURS = useMemo(() => Array.from({ length: 13 }, (_, i) => i + 7), []); // 7:00 to 19:00
-  const ROW_HEIGHT = 80;
 
   const currentHourPosition = useMemo(() => {
     const hours = currentTime.getHours();
@@ -71,11 +81,13 @@ function App() {
   }, [currentTime]);
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--app-font-size', `${uiScale} px`);
+    document.documentElement.style.setProperty('--app-font-size', `${uiScale}px`);
     db.settings.put({ id: 'ui_scale', value: uiScale.toString() });
-    // Auto-scroll to top when view changes on desktop
+  }, [uiScale]);
+
+  useEffect(() => {
     document.querySelector('main')?.scrollTo(0, 0);
-  }, [uiScale, viewMode]);
+  }, [viewMode]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -92,13 +104,16 @@ function App() {
 
   useEffect(() => {
     const cleanup = async () => {
-      const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-      // Delete tasks that were completed OR soft-deleted more than 30 days ago
-      const toDelete = await db.tasks
-        .filter(t => (t.status === 'completed' || !!t.isDeleted) && (t.updatedAt || t.createdAt) < thirtyDaysAgo)
-        .primaryKeys();
-      if (toDelete.length > 0) {
-        await db.tasks.bulkDelete(toDelete);
+      try {
+        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+        const toDelete = await db.tasks
+          .filter(t => (t.status === 'completed' || !!t.isDeleted) && (t.updatedAt || t.createdAt) < thirtyDaysAgo)
+          .primaryKeys();
+        if (toDelete.length > 0) {
+          await db.tasks.bulkDelete(toDelete);
+        }
+      } catch (e) {
+        console.error("Cleanup failed", e);
       }
     };
     cleanup();
@@ -106,20 +121,26 @@ function App() {
 
   useEffect(() => {
     const initGoogle = async () => {
-      await googleService.init();
-      let status = googleService.getAuthStatus();
+      try {
+        await googleService.init();
+        let status = googleService.getAuthStatus();
 
-      // Pokus o automatické obnovení tokenu, pokud je expirovaný, ale uživatel už byl přihlášen
-      if (!status.isSignedIn && localStorage.getItem('google_user_email')) {
-        await googleService.trySilentRefresh();
-        status = googleService.getAuthStatus();
+        if (!status.isSignedIn && localStorage.getItem('google_user_email')) {
+          await googleService.trySilentRefresh();
+          status = googleService.getAuthStatus();
+        }
+
+        setGoogleAuth(status);
+      } catch (e) {
+        console.error("Google init failed", e);
       }
-
-      setGoogleAuth(status);
     };
     initGoogle();
 
-    const handleAuthChange = (e: any) => setGoogleAuth(e.detail);
+    const handleAuthChange = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setGoogleAuth(detail);
+    };
     window.addEventListener('google-auth-change', handleAuthChange);
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -141,17 +162,8 @@ function App() {
     if (viewMode === 'battle') {
       return await db.tasks
         .where('status').equals('pending')
-        .and(t => t.type !== 'thought' && t.type !== 'note')
-        .toArray()
-        .then(all => all.sort((a, b) => {
-          const dateA = a.deadline || a.date || '9999-12-31';
-          const dateB = b.deadline || b.date || '9999-12-31';
-          if (dateA !== dateB) return dateA.localeCompare(dateB);
-          const timeA = a.startTime || '15:00';
-          const timeB = b.startTime || '15:00';
-          if (timeA !== timeB) return timeA.localeCompare(timeB);
-          return (b.urgency || 0) - (a.urgency || 0);
-        }));
+        .and(t => t.type !== 'thought' && t.type !== 'note' && !t.isDeleted)
+        .toArray();
     }
 
     if (viewMode === 'week') {
@@ -260,25 +272,25 @@ function App() {
 
           if (driveTasks && Array.isArray(driveTasks)) {
             let changesMade = false;
-            for (const cloudTask of driveTasks) {
-              if (!cloudTask.id) continue;
-              const localTask = await db.tasks.get(cloudTask.id);
+            await db.transaction('rw', db.tasks, async () => {
+              for (const cloudTask of driveTasks) {
+                if (!cloudTask.id) continue;
+                const localTask = await db.tasks.get(cloudTask.id);
 
-              if (!localTask) {
-                // New task from cloud
-                await db.tasks.add(cloudTask);
-                changesMade = true;
-              } else {
-                // Compare versions
-                const cloudUpdated = cloudTask.updatedAt || cloudTask.createdAt || 0;
-                const localUpdated = localTask.updatedAt || localTask.createdAt || 0;
-
-                if (cloudUpdated > localUpdated) {
-                  await db.tasks.put(cloudTask);
+                if (!localTask) {
+                  await db.tasks.add(cloudTask);
                   changesMade = true;
+                } else {
+                  const cloudUpdated = cloudTask.updatedAt || cloudTask.createdAt || 0;
+                  const localUpdated = localTask.updatedAt || localTask.createdAt || 0;
+
+                  if (cloudUpdated > localUpdated) {
+                    await db.tasks.put(cloudTask);
+                    changesMade = true;
+                  }
                 }
               }
-            }
+            });
 
             if (changesMade) {
               addLog(`Synchronizace: Staženy novější změny z cloudu.`);
@@ -312,13 +324,15 @@ function App() {
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
     };
-  }, [googleAuth.isSignedIn]);
+  }, [googleAuth.isSignedIn, addLog]);
 
   useEffect(() => {
     if (googleAuth.isSignedIn) {
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     }
   }, [googleAuth.isSignedIn, viewMode, activeTaskList]);
+
+  const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
   // Auto-backup on change
   useEffect(() => {
@@ -337,14 +351,13 @@ function App() {
           localStorage.setItem('last_drive_sync_ts', savedTimestamp.toString());
           addLog('Automatická záloha na Disk úspěšná');
         }
-        console.log('Auto-backup completed');
       } catch (e) {
         console.error('Auto-backup failed', e);
       }
-    }, 3000); // Faster Debounce: 3s
+    }, 10000);
 
     return () => clearTimeout(timer);
-  }, [tasks, googleAuth.isSignedIn]);
+  }, [tasksHash, googleAuth.isSignedIn, addLog]);
 
   useEffect(() => {
     db.settings.get('gemini_api_key').then(setting => {
@@ -352,12 +365,10 @@ function App() {
     });
     db.settings.get('gemini_model').then(setting => {
       if (setting) {
-        // Validate if the saved model is still in our allowed list
-        const isValid = availableModels.includes(setting.value);
+        const isValid = AVAILABLE_MODELS.includes(setting.value);
         if (isValid) {
           setSelectedModel(setting.value);
         } else {
-          // Reset to default if the model is no longer supported
           setSelectedModel('gemini-2.0-flash');
           db.settings.put({ id: 'gemini_model', value: 'gemini-2.0-flash' });
         }
@@ -373,15 +384,15 @@ function App() {
     await db.settings.put({ id: 'gemini_api_key', value: apiKey });
     await db.settings.put({ id: 'gemini_model', value: selectedModel });
     setShowSettings(false);
+    geminiService.clearModelCache();
     await geminiService.init();
   };
 
-
-  const handleProcessAudio = async (blob: Blob) => {
-    if (isProcessing) return;
+  const handleProcessAudio = useCallback(async (blob: Blob) => {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
     setIsProcessing(true);
 
-    // Use the REF to get the correct ID even in an async/stale closure scenario
     const updateId = activeVoiceUpdateIdRef.current;
 
     addLog(`Zpracovávám audio s modelem: ${selectedModel} (Update ID: ${updateId || 'NOVÝ'})`);
@@ -396,24 +407,26 @@ function App() {
         addLog(`AI analýza úspěšná: ${result.title} (${updateId ? 'AKTUALIZACE' : 'NOVÝ'})`);
         await applyAiResult(result, updateId);
       }
-    } catch (err: any) {
-      addLog('AI Chyba: ' + err.message, 'error');
-      alert(err.message || "Chyba při zpracování AI");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addLog('AI Chyba: ' + msg, 'error');
+      alert(msg || "Chyba při zpracování AI");
     } finally {
+      isProcessingRef.current = false;
       setIsProcessing(false);
       activeVoiceUpdateIdRef.current = null;
       setActiveVoiceUpdateId(null);
       clearAudio();
     }
-  };
+  }, [selectedModel, addLog, clearAudio]);
 
   useEffect(() => {
-    if (audioBlob) {
+    if (audioBlob && !isProcessingRef.current) {
       handleProcessAudio(audioBlob);
     }
-  }, [audioBlob, selectedModel]);
+  }, [audioBlob, handleProcessAudio]);
 
-  const applyAiResult = async (result: any, updateId: number | null) => {
+  const applyAiResult = useCallback(async (result: any, updateId: number | null) => {
     const semanticOutput = await applySemanticResult(result, updateId, googleAuth);
     if (!semanticOutput) return;
 
@@ -422,9 +435,9 @@ function App() {
         setEditingTask(prev => prev ? { ...prev, ...semanticOutput.result } : null);
       }
     }
-  };
+  }, [googleAuth, editingTask]);
 
-  const toggleSubtask = async (task: Task, subTaskId: string) => {
+  const toggleSubtask = useCallback(async (task: UnifiedTask, subTaskId: string) => {
     if (!task.id || !task.subTasks) return;
     const newSubTasks = task.subTasks.map(st => st.id === subTaskId ? { ...st, completed: !st.completed } : st);
     const completedCount = newSubTasks.filter(st => st.completed).length;
@@ -438,14 +451,13 @@ function App() {
       duration: newDuration,
       totalDuration: total,
       updatedAt: Date.now()
-    } as any);
-  };
+    });
+  }, []);
 
-  const handleToggleTask = async (task: UnifiedTask) => {
+  const handleToggleTask = useCallback(async (task: UnifiedTask) => {
     if (task.isGoogleTask && task.googleId && googleAuth.isSignedIn) {
       const newStatus = task.status === 'completed' ? 'needsAction' : 'completed';
       await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
-      // Refresh google tasks
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     } else if (task.id) {
       await db.tasks.update(task.id, {
@@ -453,9 +465,9 @@ function App() {
         updatedAt: Date.now()
       });
     }
-  };
+  }, [googleAuth.isSignedIn, activeTaskList]);
 
-  const handleDeleteTask = async (task: UnifiedTask) => {
+  const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
     if (!confirm('Opravdu smazat tento záznam?')) return;
 
     if (task.isGoogleTask && task.googleId && googleAuth.isSignedIn) {
@@ -463,13 +475,13 @@ function App() {
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     } else if (task.id) {
       if (task.googleEventId && googleAuth.isSignedIn) {
-        try { await googleService.deleteFromCalendar(task.googleEventId); } catch (e) { }
+        try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
       }
       await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
     }
-  };
+  }, [googleAuth.isSignedIn, activeTaskList]);
 
-  const handleSaveEdit = async () => {
+  const handleSaveEdit = useCallback(async () => {
     if (editingTask) {
       if (editingTask.isGoogleTask && editingTask.googleId && googleAuth.isSignedIn) {
         await googleService.updateGoogleTask(editingTask.googleId, {
@@ -478,7 +490,11 @@ function App() {
         }, editingTask.googleListId);
         googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
       } else if (editingTask.id) {
-        await db.tasks.update(editingTask.id, { ...editingTask, updatedAt: Date.now() } as any);
+        const taskData = { ...editingTask };
+        delete (taskData as Partial<UnifiedTask>).isGoogleTask;
+        delete (taskData as Partial<UnifiedTask>).googleId;
+        delete (taskData as Partial<UnifiedTask>).googleListId;
+        await db.tasks.update(editingTask.id, { ...taskData, updatedAt: Date.now() });
         if (editingTask.type === 'meeting' && googleAuth.isSignedIn) {
           try {
             const eventId = await googleService.addToCalendar(editingTask);
@@ -492,9 +508,9 @@ function App() {
       }
       setEditingTask(null);
     }
-  };
+  }, [editingTask, googleAuth.isSignedIn, activeTaskList]);
 
-  const handleSyncToGoogle = async (task: Task) => {
+  const handleSyncToGoogle = useCallback(async (task: UnifiedTask) => {
     if (!task.id || !googleAuth.isSignedIn) {
       alert("Pro synchronizaci musíte být přihlášeni ke Googlu.");
       return;
@@ -505,28 +521,25 @@ function App() {
       if (eventId) {
         await db.tasks.update(task.id, { googleEventId: eventId, updatedAt: Date.now() });
       }
-    } catch (err: any) {
-      alert(err.message || "Chyba při synchronizaci s Googlem");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(msg || "Chyba při synchronizaci s Googlem");
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [googleAuth.isSignedIn]);
 
-  const handleExport = (task: Task) => {
+  const handleExport = useCallback((task: UnifiedTask) => {
     const subTasksText = (task.subTasks || []).map(st => `${st.completed ? '✅' : '☐'} ${st.title}`).join('\n');
     const body = `=== ${task.title} ===\nTermín: ${task.deadline || task.date || 'Neurčeno'} | Urgence: ${task.urgency}/3\nPokrok: ${task.progress || 0}%\n--------------------------------------\nPOPIS:\n${task.description || 'Bez popisu'}\n\n${subTasksText ? `PŘEHLED PODÚKOLŮ:\n${subTasksText}\n` : ''}INTERNÍ ZÁPIS:\n${task.internalNotes || 'Bez dodatečného zápisu'}\n\n--\nOdesláno z aplikace Bitevní Plán`.trim();
     const subject = `${task.title} [BP]`;
     const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailtoUrl;
-  };
+  }, []);
 
-  const navItems = [
-    { id: 'battle', label: 'Plán', icon: List },
-    { id: 'week', label: 'Týden', icon: LayoutGrid },
-    { id: 'tasks', label: 'Úkoly', icon: CheckCircle2 },
-    { id: 'meetings', label: 'Schůzky', icon: Users },
-    { id: 'thoughts', label: 'Myšlenky', icon: Lightbulb },
-  ];
+  const memoizedIsOverCapacity = useCallback((task: UnifiedTask) => isOverCapacity(currentTime, task), [currentTime]);
+  const memoizedGetDeadlineColor = useCallback((date?: string, time?: string) => getDeadlineColor(currentTime, date, time), [currentTime]);
+  const memoizedFormatTimeLeft = useCallback((date?: string, time?: string) => formatTimeLeft(currentTime, date, time), [currentTime]);
 
   return (
     <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
@@ -534,7 +547,7 @@ function App() {
         viewMode={viewMode}
         setViewMode={setViewMode}
         isAiActive={isAiActive}
-        navItems={navItems}
+        navItems={NAV_ITEMS}
         setShowSettings={setShowSettings}
         isProcessing={isProcessing}
       />
@@ -547,7 +560,7 @@ function App() {
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-black text-white uppercase tracking-tight">
-                  {navItems.find(i => i.id === viewMode)?.label}
+                  {NAV_ITEMS.find(i => i.id === viewMode)?.label || 'Plán'}
                 </h1>
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">
                   {viewMode === 'battle' ? 'Strategický přehled dne' :
@@ -623,7 +636,7 @@ function App() {
             </div>
 
             <nav className="flex items-center justify-between bg-[#0d1117]/80 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 shadow-xl overflow-x-auto no-scrollbar">
-              {navItems.map((item) => {
+              {NAV_ITEMS.map((item) => {
                 const Icon = item.icon;
                 const isActive = viewMode === item.id;
                 return (
@@ -665,7 +678,7 @@ function App() {
             />
           )}
 
-          {viewMode === ('debug' as any) && (
+          {viewMode === 'debug' && (
             <div className="flex-1 flex flex-col gap-4 min-h-0">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v4.0.0)</h2>
@@ -720,12 +733,12 @@ function App() {
                       key={task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`}
                       task={task}
                       activeVoiceUpdateId={activeVoiceUpdateId}
-                      isOverCapacity={isOverCapacity.bind(null, currentTime)}
+                      isOverCapacity={memoizedIsOverCapacity}
                       getUrgencyColor={getUrgencyColor}
                       handleExport={handleExport}
                       handleDeleteTask={handleDeleteTask}
-                      getDeadlineColor={getDeadlineColor.bind(null, currentTime)}
-                      formatTimeLeft={formatTimeLeft.bind(null, currentTime)}
+                      getDeadlineColor={memoizedGetDeadlineColor}
+                      formatTimeLeft={memoizedFormatTimeLeft}
                       toggleSubtask={toggleSubtask}
                       handleToggleTask={handleToggleTask}
                       setEditingTask={setEditingTask}
@@ -744,7 +757,7 @@ function App() {
             {editingTask && (
               <FocusEditor
                 editingTask={editingTask}
-                setEditingTask={setEditingTask as any}
+                setEditingTask={setEditingTask}
                 activeVoiceUpdateId={activeVoiceUpdateId}
                 isRecording={isRecording}
                 stopRecording={stopRecording}
@@ -755,9 +768,9 @@ function App() {
                 handleSyncToGoogle={handleSyncToGoogle}
                 handleSaveEdit={handleSaveEdit}
                 googleAuth={googleAuth}
-                isOverCapacity={isOverCapacity.bind(null, currentTime)}
-                getDeadlineColor={getDeadlineColor.bind(null, currentTime)}
-                formatTimeLeft={formatTimeLeft.bind(null, currentTime)}
+                isOverCapacity={memoizedIsOverCapacity}
+                getDeadlineColor={memoizedGetDeadlineColor}
+                formatTimeLeft={memoizedFormatTimeLeft}
               />
             )}
           </AnimatePresence>
@@ -769,7 +782,7 @@ function App() {
                 setApiKey={setApiKey}
                 selectedModel={selectedModel}
                 setSelectedModel={setSelectedModel}
-                availableModels={availableModels}
+                availableModels={AVAILABLE_MODELS}
                 uiScale={uiScale}
                 setUiScale={setUiScale}
                 googleAuth={googleAuth}

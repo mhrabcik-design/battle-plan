@@ -75,8 +75,8 @@ export function Sidebar({
                         </button>
 
                         <button
-                            onClick={() => setViewMode('debug' as any)}
-                            className={`mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold uppercase text-sm tracking-widest ${viewMode === ('debug' as any) ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                            onClick={() => setViewMode('debug')}
+                            className={`mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold uppercase text-sm tracking-widest ${viewMode === 'debug' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                         >
                             <FileText className="w-4 h-4" />
                             Diagnostika

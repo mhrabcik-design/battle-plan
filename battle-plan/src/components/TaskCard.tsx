@@ -17,7 +17,7 @@ interface TaskCardProps {
     stopRecording: () => void;
     setActiveVoiceUpdateId: (id: number) => void;
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
-    startRecording: (options: any) => void;
+    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void;
 }
 
 export function TaskCard({

@@ -5,7 +5,7 @@ declare global {
     }
 }
 
-const CLIENT_ID = '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/tasks';
 
 export interface GoogleAuthStatus {
@@ -26,7 +26,7 @@ class GoogleService {
     }
 
     async init() {
-        return new Promise<void>((resolve) => {
+        return new Promise<void>((resolve, reject) => {
             const gapiLoad = () => {
                 window.gapi.load('client', async () => {
                     await window.gapi.client.init({
@@ -66,7 +66,6 @@ class GoogleService {
 
                         window.gapi.client.setToken({ access_token: response.access_token });
 
-                        // Check for user info to get email if not present
                         if (!this.userEmail) {
                             this.fetchUserInfo();
                         }
@@ -78,14 +77,24 @@ class GoogleService {
                 });
             };
 
-            // Poll until scripts are loaded
+            const SCRIPT_LOAD_TIMEOUT = 15000;
+            let resolved = false;
+
             const checkScripts = setInterval(() => {
                 if (window.gapi && window.google?.accounts?.oauth2) {
                     clearInterval(checkScripts);
+                    resolved = true;
                     gapiLoad();
                     gisLoad();
                 }
             }, 100);
+
+            setTimeout(() => {
+                if (!resolved) {
+                    clearInterval(checkScripts);
+                    reject(new Error('Google scripts failed to load within timeout'));
+                }
+            }, SCRIPT_LOAD_TIMEOUT);
         });
     }
 
@@ -93,18 +102,51 @@ class GoogleService {
         if (!this.tokenClient || !this.userEmail) return false;
 
         return new Promise<boolean>((resolve) => {
+            let settled = false;
+
+            const done = (result: boolean) => {
+                if (settled) return;
+                settled = true;
+                resolve(result);
+            };
+
+            const singleUseClient = window.google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                callback: (response: any) => {
+                    if (response.error !== undefined) {
+                        done(false);
+                        return;
+                    }
+                    this.accessToken = response.access_token;
+                    const expiresIn = response.expires_in || 3600;
+                    this.expiresAt = Date.now() + (expiresIn * 1000);
+
+                    localStorage.setItem('google_access_token', response.access_token);
+                    localStorage.setItem('google_token_expires_at', this.expiresAt.toString());
+
+                    window.gapi.client.setToken({ access_token: response.access_token });
+
+                    window.dispatchEvent(new CustomEvent('google-auth-change', {
+                        detail: { isSignedIn: true, accessToken: this.accessToken }
+                    }));
+
+                    done(true);
+                },
+                error_callback: () => done(false),
+            });
+
             try {
-                // If it fails, GIS will trigger the callback with an error
-                this.tokenClient.requestAccessToken({
+                singleUseClient.requestAccessToken({
                     prompt: 'none',
                     login_hint: this.userEmail
                 });
-                // We give it a short time to succeed
-                setTimeout(() => resolve(!!this.accessToken), 2000);
             } catch (err) {
                 console.error('Silent refresh failed', err);
-                resolve(false);
+                done(false);
             }
+
+            setTimeout(() => done(!!this.accessToken), 5000);
         });
     }
 
@@ -113,6 +155,7 @@ class GoogleService {
             const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
                 headers: { 'Authorization': `Bearer ${this.accessToken}` }
             });
+            if (!response.ok) return;
             const data = await response.json();
             if (data.email) {
                 this.userEmail = data.email;
@@ -124,7 +167,7 @@ class GoogleService {
     }
 
     getAuthStatus(): GoogleAuthStatus {
-        const isExpired = Date.now() > (this.expiresAt - 60000); // 1 minute buffer
+        const isExpired = Date.now() > (this.expiresAt - 60000);
         return {
             isSignedIn: !!this.accessToken && !isExpired,
             accessToken: this.accessToken
@@ -133,7 +176,6 @@ class GoogleService {
 
     signIn() {
         if (this.tokenClient) {
-            // Using logic to pre-fill email if we know it
             const options: any = { prompt: '' };
             if (this.userEmail) options.login_hint = this.userEmail;
             this.tokenClient.requestAccessToken(options);
@@ -141,6 +183,16 @@ class GoogleService {
     }
 
     signOut() {
+        if (this.accessToken) {
+            fetch(`https://oauth2.googleapis.com/revoke?token=${this.accessToken}`, { method: 'POST' }).catch(() => {});
+        }
+
+        try {
+            if (window.gapi?.client) {
+                window.gapi.client.setToken(null);
+            }
+        } catch {}
+
         this.accessToken = null;
         this.expiresAt = 0;
         this.userEmail = null;
@@ -152,7 +204,6 @@ class GoogleService {
         }));
     }
 
-    // Google Tasks Methods
     async getTaskLists() {
         if (!this.accessToken) return [];
         try {
@@ -182,12 +233,12 @@ class GoogleService {
     async createGoogleTask(title: string, notes: string = '', taskListId: string = '@default', dueDate?: string) {
         if (!this.accessToken) return null;
         try {
-            const task: any = {
-                title,
-                notes
-            };
+            const task: any = { title, notes };
             if (dueDate) {
-                task.due = new Date(dueDate).toISOString();
+                const d = new Date(dueDate);
+                if (!isNaN(d.getTime())) {
+                    task.due = d.toISOString();
+                }
             }
             const response = await window.gapi.client.tasks.tasks.insert({
                 tasklist: taskListId,
@@ -231,25 +282,22 @@ class GoogleService {
         if (!this.accessToken) return;
 
         try {
+            const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
+            const timeStr = task.startTime || "09:00";
+            const baseDate = new Date(`${dateStr}T${timeStr}:00`);
+            if (isNaN(baseDate.getTime())) throw new Error("Neplatné datum/čas pro kalendář");
+
+            const duration = task.duration != null ? Number(task.duration) : (task.totalDuration != null ? Number(task.totalDuration) : 60);
+
             const event = {
                 'summary': `${task.title} [BP]`,
                 'description': `${task.description}\n\nInterní poznámky:\n${task.internalNotes || ''}`,
                 'start': {
-                    'dateTime': (() => {
-                        const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
-                        const timeStr = task.startTime || "09:00";
-                        return new Date(`${dateStr}T${timeStr}:00`).toISOString();
-                    })(),
+                    'dateTime': baseDate.toISOString(),
                     'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone
                 },
                 'end': {
-                    'dateTime': (() => {
-                        const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
-                        const timeStr = task.startTime || "09:00";
-                        const baseDate = new Date(`${dateStr}T${timeStr}:00`);
-                        const duration = Number(task.duration) || Number(task.totalDuration) || 60;
-                        return new Date(baseDate.getTime() + duration * 60000).toISOString();
-                    })(),
+                    'dateTime': new Date(baseDate.getTime() + duration * 60000).toISOString(),
                     'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone
                 }
             };

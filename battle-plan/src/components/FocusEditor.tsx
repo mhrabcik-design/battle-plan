@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass } from 'lucide-react';
 import type { UnifiedTask, GoogleAuthStatus } from '../types';
 import React from 'react';
+import type { Task } from '../db';
 
 interface FocusEditorProps {
     editingTask: UnifiedTask;
@@ -9,7 +10,7 @@ interface FocusEditorProps {
     activeVoiceUpdateId: number | null;
     isRecording: boolean;
     stopRecording: () => void;
-    startRecording: (options: any) => void;
+    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void;
     setActiveVoiceUpdateId: (id: number | null) => void;
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
     handleDeleteTask: (task: UnifiedTask) => void;
@@ -146,7 +147,7 @@ export function FocusEditor({
                                         <select
                                             disabled={editingTask.isGoogleTask}
                                             value={editingTask.type}
-                                            onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as any, updatedAt: Date.now() })}
+                                            onChange={(e) => setEditingTask({ ...editingTask, type: e.target.value as Task['type'], updatedAt: Date.now() })}
                                             className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold uppercase text-white outline-none cursor-pointer"
                                         >
                                             <option value="task">Úkol</option>
@@ -202,7 +203,7 @@ export function FocusEditor({
                                             <input
                                                 type="range" min="1" max="3"
                                                 value={editingTask.urgency}
-                                                onChange={(e) => setEditingTask({ ...editingTask, urgency: Number(e.target.value) as any, updatedAt: Date.now() })}
+                                                onChange={(e) => setEditingTask({ ...editingTask, urgency: Math.min(3, Math.max(1, Number(e.target.value))) as 1 | 2 | 3, updatedAt: Date.now() })}
                                                 className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                                             />
                                         </div>
@@ -289,7 +290,7 @@ export function FocusEditor({
                     <div className="flex items-center gap-4">
                         {editingTask.type === 'meeting' && !editingTask.isGoogleTask && googleAuth.isSignedIn && (
                             <button
-                                onClick={() => handleSyncToGoogle(editingTask as any)}
+                                onClick={() => handleSyncToGoogle(editingTask)}
                                 className={`px-8 py-3.5 rounded-xl text-sm font-black uppercase flex items-center gap-2 transition-all ${editingTask.googleEventId ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-emerald-400 border border-emerald-500/30'}`}
                             >
                                 <Share2 className="w-4 h-4" />

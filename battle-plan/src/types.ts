@@ -1,6 +1,6 @@
 import type { Task } from './db';
 
-export type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts';
+export type ViewMode = 'battle' | 'week' | 'tasks' | 'meetings' | 'thoughts' | 'debug';
 
 export type UnifiedTask = Task & {
     isGoogleTask?: boolean;

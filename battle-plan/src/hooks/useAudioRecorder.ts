@@ -2,8 +2,8 @@ import { useState, useRef, useCallback } from 'react';
 
 export interface RecorderOptions {
     onSilence?: () => void;
-    silenceThreshold?: number; // dB, default -50
-    silenceDuration?: number; // ms, default 3000
+    silenceThreshold?: number;
+    silenceDuration?: number;
     enableFeedback?: boolean;
 }
 
@@ -13,39 +13,40 @@ export function useAudioRecorder() {
     const [mimeType, setMimeType] = useState<string>('audio/webm');
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
-    const processorRef = useRef<ScriptProcessorNode | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const chunksRef = useRef<Blob[]>([]);
     const startTimeRef = useRef<number>(0);
     const [duration, setDuration] = useState(0);
-    const silenceTimerRef = useRef<any>(null);
+    const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const optionsRef = useRef<RecorderOptions>({});
+    const isRecordingRef = useRef(false);
 
     const playFeedback = (type: 'start' | 'stop') => {
         if (!optionsRef.current.enableFeedback) return;
 
-        // Haptic feedback
         if ('vibrate' in navigator) {
             navigator.vibrate(type === 'start' ? 50 : [30, 30, 30]);
         }
 
-        // Audio feedback
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
+        try {
+            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
 
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(type === 'start' ? 880 : 440, ctx.currentTime);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(type === 'start' ? 880 : 440, ctx.currentTime);
 
-        gain.gain.setValueAtTime(0.1, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
 
-        osc.connect(gain);
-        gain.connect(ctx.destination);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
 
-        osc.start();
-        osc.stop(ctx.currentTime + 0.2);
-        setTimeout(() => ctx.close(), 300);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.2);
+            osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+            setTimeout(() => ctx.close(), 300);
+        } catch {}
     };
 
     const startRecording = useCallback(async (options: RecorderOptions = {}) => {
@@ -56,7 +57,6 @@ export function useAudioRecorder() {
             startTimeRef.current = Date.now();
             playFeedback('start');
 
-            // Standard MediaRecorder for the final blob
             const mediaRecorder = new MediaRecorder(stream);
             mediaRecorderRef.current = mediaRecorder;
             setMimeType(mediaRecorder.mimeType);
@@ -75,12 +75,10 @@ export function useAudioRecorder() {
 
             mediaRecorder.start();
 
-            // Setup AudioContext for Silence Detection
             const audioContext = new AudioContext();
             audioContextRef.current = audioContext;
             const source = audioContext.createMediaStreamSource(stream);
 
-            // Silence Detection
             const analyser = audioContext.createAnalyser();
             analyser.fftSize = 256;
             source.connect(analyser);
@@ -91,7 +89,7 @@ export function useAudioRecorder() {
             const silDuration = options.silenceDuration || 3000;
 
             const checkSilence = () => {
-                if (!isRecording && !streamRef.current) return;
+                if (!isRecordingRef.current || !streamRef.current) return;
 
                 analyser.getFloatTimeDomainData(dataArray);
                 let sumSquares = 0.0;
@@ -99,7 +97,7 @@ export function useAudioRecorder() {
                     sumSquares += amplitude * amplitude;
                 }
                 const rms = Math.sqrt(sumSquares / dataArray.length);
-                const db = 20 * Math.log10(rms);
+                const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
 
                 if (db < threshold) {
                     if (!silenceTimerRef.current) {
@@ -121,6 +119,7 @@ export function useAudioRecorder() {
 
             checkSilence();
 
+            isRecordingRef.current = true;
             setIsRecording(true);
         } catch (err) {
             console.error('Failed to start recording', err);
@@ -128,33 +127,30 @@ export function useAudioRecorder() {
     }, []);
 
     const stopRecording = useCallback(() => {
-        if (isRecording) {
-            playFeedback('stop');
-            mediaRecorderRef.current?.stop();
+        if (!isRecordingRef.current) return;
 
-            if (silenceTimerRef.current) {
-                clearTimeout(silenceTimerRef.current);
-                silenceTimerRef.current = null;
-            }
+        isRecordingRef.current = false;
+        playFeedback('stop');
+        mediaRecorderRef.current?.stop();
 
-            if (processorRef.current) {
-                processorRef.current.disconnect();
-                processorRef.current = null;
-            }
-            if (audioContextRef.current) {
-                audioContextRef.current.close();
-                audioContextRef.current = null;
-            }
-            if (streamRef.current) {
-                streamRef.current.getTracks().forEach(track => track.stop());
-                streamRef.current = null;
-            }
-
-            const finalDuration = (Date.now() - startTimeRef.current) / 1000;
-            setDuration(finalDuration);
-            setIsRecording(false);
+        if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
         }
-    }, [isRecording]);
+
+        if (audioContextRef.current) {
+            audioContextRef.current.close();
+            audioContextRef.current = null;
+        }
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+        }
+
+        const finalDuration = (Date.now() - startTimeRef.current) / 1000;
+        setDuration(finalDuration);
+        setIsRecording(false);
+    }, []);
 
     return {
         isRecording,
@@ -163,6 +159,6 @@ export function useAudioRecorder() {
         audioBlob,
         mimeType,
         duration,
-        clearAudio: () => { setAudioBlob(null); setDuration(0); }
+        clearAudio: useCallback(() => { setAudioBlob(null); setDuration(0); }, [])
     };
 }

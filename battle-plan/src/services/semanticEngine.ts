@@ -31,7 +31,7 @@ V polích \`date\` a \`deadline\` VŽDY vrať absolutní datum ve formátu YYYY-
     - Pokud je dnes úterý -> PŘÍŠTÍ úterý (+7 dní).
     - Pokud dnes NENÍ úterý -> NEJBLIŽŠÍ BUDOUCÍ úterý.
   - **Pravidlo 4**: "Příští [den]" nebo "Příští týden v [den]" -> Přičti 7 dní k výsledku z Pravidla 3.
-- Relativní výrazy (za měsíc, za 3 týdny) nepodporuj. Podporuj jen tento a příští týden.
+- Relativní výrazy (za měsíc, za 3 týdny) nepodporuj. Podportuj jen tento a příští týden.
 
 ### 👔 PROFIL: MANAŽER (vše co zní jako úkol)
 - **title**: "[ÚKOL] " + EXTRÉMNĚ STRUČNÝ NÁZEV (max 5 slov, VELKÁ PÍSMENA).
@@ -59,7 +59,7 @@ Příklad JSON struktury:
 {
   "title": "NÁZEV",
   "description": "Strukturovaný text...",
-  "internalNotes": "--- RAW PŘEPIS ---\\nDoslovný text z audia...",
+  "internalNotes": "--- RAW PŘEPIS---\\nDoslovný text z audia...",
   "type": "task",
   "urgency": 2,
   "date": "${today}",
@@ -67,73 +67,137 @@ Příklad JSON struktury:
   "subTasks": [{"id": "1", "title": "Krok 1", "completed": false}]
 }`;
 
+const EXACT_TYPE_MAP: Record<string, Task['type']> = {
+    'task': 'task',
+    'úkol': 'task',
+    'meeting': 'meeting',
+    'sraz': 'meeting',
+    'schůzka': 'meeting',
+    'thought': 'thought',
+    'myšlenka': 'thought',
+    'note': 'thought',
+};
+
+function normalizeType(aiType: string): Task['type'] {
+    const lower = aiType.toLowerCase().trim();
+
+    if (EXACT_TYPE_MAP[lower]) return EXACT_TYPE_MAP[lower];
+
+    if (lower === 'task' || lower.includes('úkol')) return 'task';
+    if (lower === 'meeting' || lower.includes('sraz') || lower.includes('schůzka')) return 'meeting';
+    if (lower === 'thought' || lower.includes('myšlenka') || lower === 'note') return 'thought';
+
+    return 'thought';
+}
+
+function clampUrgency(val: any): 1 | 2 | 3 {
+    const n = Number(val);
+    if (isNaN(n)) return 2;
+    return Math.min(3, Math.max(1, n)) as 1 | 2 | 3;
+}
+
+function clampProgress(val: any): number {
+    const n = Number(val);
+    if (isNaN(n)) return 0;
+    return Math.min(100, Math.max(0, Math.round(n)));
+}
+
+interface AiResult {
+    title?: string;
+    description?: string;
+    internalNotes?: string;
+    type?: string;
+    urgency?: any;
+    date?: string;
+    deadline?: string;
+    startTime?: string;
+    duration?: any;
+    totalDuration?: any;
+    subTasks?: any[];
+    progress?: any;
+}
+
+function sanitizeResultFields(result: AiResult, finalType: Task['type'], defaultDuration: number) {
+    return {
+        title: result.title || "Nový záznam",
+        description: result.description || "",
+        internalNotes: result.internalNotes || "",
+        type: finalType,
+        urgency: clampUrgency(result.urgency),
+        date: result.date || new Date().toISOString().split('T')[0],
+        startTime: result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined)),
+        deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
+        duration: Number(result.duration) || defaultDuration,
+        totalDuration: Number(result.totalDuration) || Number(result.duration) || defaultDuration,
+        subTasks: Array.isArray(result.subTasks) ? result.subTasks : [],
+        progress: clampProgress(result.progress),
+    };
+}
+
 export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: any) => {
-    if (updateId) {
-        const existing = await db.tasks.get(updateId);
-        if (!existing) return null;
+    try {
+        if (updateId) {
+            const existing = await db.tasks.get(updateId);
+            if (!existing) return null;
 
-        // Type normalization
-        if (result.type) {
-            const aiType = String(result.type).toLowerCase();
-            if (aiType.includes('task') || aiType.includes('úkol')) result.type = 'task';
-            else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) result.type = 'meeting';
-            else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) result.type = 'thought';
-        }
+            const finalType = result.type ? normalizeType(String(result.type)) : existing.type;
 
-        // Consistency: For Tasks, always prioritize deadline and keep date in sync
-        if (existing.type === 'task' || result.type === 'task') {
-            if (result.deadline && !result.date) result.date = result.deadline;
-            if (result.date && !result.deadline) result.deadline = result.date;
-        } else {
-            // For meetings/others, keep previous loose sync logic
-            if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
-                result.deadline = result.date;
-            } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
-                result.date = result.deadline;
-            }
-        }
-
-        const updatedTask = { ...result, updatedAt: Date.now() };
-        await db.tasks.update(updateId, updatedTask);
-        return { updatedId: updateId, result: updatedTask };
-    } else {
-        let finalType: Task['type'] = 'thought';
-        const aiType = String(result.type || 'thought').toLowerCase();
-        if (aiType.includes('task') || aiType.includes('úkol')) finalType = 'task';
-        else if (aiType.includes('meeting') || aiType.includes('sraz') || aiType.includes('schůzka')) finalType = 'meeting';
-        else if (aiType.includes('thought') || aiType.includes('myšlenka') || aiType.includes('note')) finalType = 'thought';
-
-        const defaultDuration = finalType === 'meeting' ? 60 : 30;
-
-        const newTaskId = await db.tasks.add({
-            title: result.title || "Nový záznam",
-            description: result.description || "",
-            internalNotes: result.internalNotes || "",
-            type: finalType,
-            urgency: Number(result.urgency) as any || 2,
-            status: 'pending',
-            date: result.date || new Date().toISOString().split('T')[0],
-            startTime: result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined)),
-            deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
-            duration: Number(result.duration) || defaultDuration,
-            totalDuration: Number(result.duration) || defaultDuration,
-            subTasks: result.subTasks || [],
-            progress: Number(result.progress) || 0,
-            updatedAt: Date.now(),
-            createdAt: Date.now()
-        });
-
-        if (finalType === 'meeting' && googleAuth.isSignedIn) {
-            const addedTask = await db.tasks.get(newTaskId);
-            if (addedTask) {
-                try {
-                    const eventId = await googleService.addToCalendar(addedTask);
-                    if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
-                } catch (e) {
-                    console.error("Auto Google sync failed", e);
+            if (finalType === 'task' || existing.type === 'task') {
+                if (result.deadline && !result.date) result.date = result.deadline;
+                if (result.date && !result.deadline) result.deadline = result.date;
+            } else {
+                if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
+                    result.deadline = result.date;
+                } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
+                    result.date = result.deadline;
                 }
             }
+
+            const updatedTask = {
+                title: result.title ?? existing.title,
+                description: result.description ?? existing.description,
+                internalNotes: result.internalNotes ?? existing.internalNotes,
+                type: finalType,
+                urgency: result.urgency != null ? clampUrgency(result.urgency) : existing.urgency,
+                date: result.date ?? existing.date,
+                deadline: result.deadline ?? existing.deadline,
+                startTime: result.startTime ?? existing.startTime,
+                duration: result.duration != null ? Number(result.duration) : existing.duration,
+                totalDuration: result.totalDuration != null ? Number(result.totalDuration) : (result.duration != null ? Number(result.duration) : existing.totalDuration),
+                subTasks: Array.isArray(result.subTasks) ? result.subTasks : existing.subTasks,
+                progress: result.progress != null ? clampProgress(result.progress) : existing.progress,
+                updatedAt: Date.now(),
+            };
+            await db.tasks.update(updateId, updatedTask);
+            return { updatedId: updateId, result: updatedTask };
+        } else {
+            const finalType = normalizeType(String(result.type || 'thought'));
+            const defaultDuration = finalType === 'meeting' ? 60 : 30;
+
+            const sanitized = sanitizeResultFields(result, finalType, defaultDuration);
+
+            const newTaskId = await db.tasks.add({
+                ...sanitized,
+                status: 'pending',
+                updatedAt: Date.now(),
+                createdAt: Date.now()
+            });
+
+            if (finalType === 'meeting' && googleAuth.isSignedIn) {
+                const addedTask = await db.tasks.get(newTaskId);
+                if (addedTask) {
+                    try {
+                        const eventId = await googleService.addToCalendar(addedTask);
+                        if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
+                    } catch (e) {
+                        console.error("Auto Google sync failed", e);
+                    }
+                }
+            }
+            return { newId: newTaskId };
         }
-        return { newId: newTaskId };
+    } catch (e) {
+        console.error("applySemanticResult failed", e);
+        throw e;
     }
 };

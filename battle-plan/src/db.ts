@@ -56,11 +56,6 @@ export class BattlePlanDB extends Dexie {
             recordings: '++id, analyzed, createdAt',
             settings: 'id'
         });
-        this.version(3).stores({
-            tasks: '++id, type, date, urgency, status, createdAt',
-            recordings: '++id, analyzed, createdAt',
-            settings: 'id'
-        });
         this.version(4).stores({
             tasks: '++id, type, date, deadline, urgency, status, createdAt',
             recordings: '++id, analyzed, createdAt',

@@ -76,7 +76,11 @@
   }
 
   .office-button-primary {
-    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-all duration-300 ease-out active:scale-95 flex items-center justify-center gap-2 shadow-[0_4px_14px_0_rgba(79, 70, 229, 0.39)] hover:shadow-[0_6px_20px_rgba(79, 70, 229, 0.23)] hover:-translate-y-0.5;
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-all duration-300 ease-out active:scale-95 flex items-center justify-center gap-2 hover:-translate-y-0.5;
+    box-shadow: 0 4px 14px 0 rgba(79, 70, 229, 0.39);
+  }
+  .office-button-primary:hover {
+    box-shadow: 0 6px 20px rgba(79, 70, 229, 0.23);
   }
 
   .office-btn-ghost {
