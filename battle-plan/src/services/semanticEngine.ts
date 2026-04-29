@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { db, type Task } from '../db';
 import { googleService } from './googleService';
 
@@ -134,7 +135,7 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
     };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: any) => {
     try {
         if (updateId) {

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
     interface Window {
         gapi: {
@@ -279,7 +280,7 @@ class GoogleService {
     async createGoogleTask(title: string, notes: string = '', taskListId: string = '@default', dueDate?: string) {
         if (!this.accessToken) return null;
         try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             
             const task: any = { title, notes };
             if (dueDate) {
                 const d = new Date(dueDate);
@@ -298,7 +299,7 @@ class GoogleService {
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     async updateGoogleTask(taskId: string, updates: any, taskListId: string = '@default') {
         if (!this.accessToken) return null;
         try {
@@ -326,7 +327,7 @@ class GoogleService {
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     async addToCalendar(task: any) {
         if (!this.accessToken) return;
 
@@ -352,7 +353,7 @@ class GoogleService {
             };
 
             const method = task.googleEventId ? 'update' : 'insert';
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             
             const params: any = {
                 'calendarId': 'primary',
                 'resource': event,
@@ -393,7 +394,7 @@ class GoogleService {
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     async saveToDrive(data: any) {
         if (!this.accessToken) return;
         try {
@@ -405,7 +406,7 @@ class GoogleService {
             });
 
             const existingFile = listResponse.result.files[0];
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             
             const metadata: any = {
                 name: 'battle_plan_data.json',
                 mimeType: 'application/json'
