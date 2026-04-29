@@ -7,6 +7,22 @@ export interface RecorderOptions {
     enableFeedback?: boolean;
 }
 
+const PREFERRED_RECORDING_MIME_TYPES = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/mp4',
+];
+
+type WindowWithWebkitAudio = typeof window & {
+    webkitAudioContext?: typeof AudioContext;
+};
+
+function getSupportedRecordingMimeType(): string | undefined {
+    if (!('MediaRecorder' in window)) return undefined;
+    return PREFERRED_RECORDING_MIME_TYPES.find(type => MediaRecorder.isTypeSupported(type));
+}
+
 export function useAudioRecorder() {
     const [isRecording, setIsRecording] = useState(false);
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -29,7 +45,10 @@ export function useAudioRecorder() {
         }
 
         try {
-            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudio).webkitAudioContext;
+            if (!AudioContextCtor) return;
+
+            const ctx = new AudioContextCtor();
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
 
@@ -46,7 +65,9 @@ export function useAudioRecorder() {
             osc.stop(ctx.currentTime + 0.2);
             osc.onended = () => { osc.disconnect(); gain.disconnect(); };
             setTimeout(() => ctx.close(), 300);
-        } catch {}
+        } catch (err) {
+            console.warn('Audio feedback failed', err);
+        }
     };
 
     const startRecording = useCallback(async (options: RecorderOptions = {}) => {
@@ -57,7 +78,10 @@ export function useAudioRecorder() {
             startTimeRef.current = Date.now();
             playFeedback('start');
 
-            const mediaRecorder = new MediaRecorder(stream);
+            const supportedMimeType = getSupportedRecordingMimeType();
+            const mediaRecorder = supportedMimeType
+                ? new MediaRecorder(stream, { mimeType: supportedMimeType })
+                : new MediaRecorder(stream);
             mediaRecorderRef.current = mediaRecorder;
             setMimeType(mediaRecorder.mimeType);
             chunksRef.current = [];
@@ -117,10 +141,9 @@ export function useAudioRecorder() {
                 }
             };
 
-            checkSilence();
-
             isRecordingRef.current = true;
             setIsRecording(true);
+            checkSilence();
         } catch (err) {
             console.error('Failed to start recording', err);
         }
@@ -131,7 +154,9 @@ export function useAudioRecorder() {
 
         isRecordingRef.current = false;
         playFeedback('stop');
-        mediaRecorderRef.current?.stop();
+        if (mediaRecorderRef.current?.state === 'recording') {
+            mediaRecorderRef.current.stop();
+        }
 
         if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);

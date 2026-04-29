@@ -2,9 +2,9 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
-import { db } from './db';
+import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { geminiService } from './services/geminiService';
+import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -21,12 +21,21 @@ import {
 } from './utils/calendarUtils';
 import { applySemanticResult } from './services/semanticEngine';
 
-const AVAILABLE_MODELS = [
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-2.5-flash',
-  'gemini-1.5-pro'
-];
+const AVAILABLE_MODELS = AVAILABLE_GEMINI_MODELS;
+
+interface GoogleTaskList {
+  id: string;
+  title?: string;
+}
+
+interface GoogleTaskRaw {
+  id: string;
+  title: string;
+  notes?: string;
+  status?: string;
+  due?: string;
+  updated: string;
+}
 
 const NAV_ITEMS = [
   { id: 'battle', label: 'Plán', icon: List },
@@ -47,15 +56,15 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_GEMINI_MODEL);
   const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
   const [lastSync, setLastSync] = useState<string | null>(localStorage.getItem('last_drive_sync'));
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [uiScale, setUiScale] = useState<number>(Number(localStorage.getItem('ui_scale')) || 16);
-  const [googleTaskLists, setGoogleTaskLists] = useState<any[]>([]);
+  const [googleTaskLists, setGoogleTaskLists] = useState<GoogleTaskList[]>([]);
   const [activeTaskList, setActiveTaskList] = useState<string>('@default');
-  const [googleTasksRaw, setGoogleTasksRaw] = useState<any[]>([]);
+  const [googleTasksRaw, setGoogleTasksRaw] = useState<GoogleTaskRaw[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
@@ -369,8 +378,8 @@ function App() {
         if (isValid) {
           setSelectedModel(setting.value);
         } else {
-          setSelectedModel('gemini-2.0-flash');
-          db.settings.put({ id: 'gemini_model', value: 'gemini-2.0-flash' });
+          setSelectedModel(DEFAULT_GEMINI_MODEL);
+          db.settings.put({ id: 'gemini_model', value: DEFAULT_GEMINI_MODEL });
         }
       }
     });
@@ -426,7 +435,7 @@ function App() {
     }
   }, [audioBlob, handleProcessAudio]);
 
-  const applyAiResult = useCallback(async (result: any, updateId: number | null) => {
+  const applyAiResult = useCallback(async (result: Partial<Task>, updateId: number | null) => {
     const semanticOutput = await applySemanticResult(result, updateId, googleAuth);
     if (!semanticOutput) return;
 
