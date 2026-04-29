@@ -107,14 +107,14 @@ interface AiResult {
     description?: string;
     internalNotes?: string;
     type?: string;
-    urgency?: unknown;
+    urgency?: any;
     date?: string;
     deadline?: string;
     startTime?: string;
-    duration?: unknown;
-    totalDuration?: unknown;
-    subTasks?: unknown[];
-    progress?: unknown;
+    duration?: any;
+    totalDuration?: any;
+    subTasks?: any[];
+    progress?: any;
 }
 
 function sanitizeResultFields(result: AiResult, finalType: Task['type'], defaultDuration: number) {
@@ -134,7 +134,8 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
     };
 }
 
-export const applySemanticResult = async (result: AiResult, updateId: number | null, googleAuth: { isSignedIn: boolean }) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: any) => {
     try {
         if (updateId) {
             const existing = await db.tasks.get(updateId);

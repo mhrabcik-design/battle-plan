@@ -6,9 +6,9 @@ declare global {
                 init: (args: { apiKey: string; discoveryDocs: string[] }) => Promise<void>;
                 setToken: (token: { access_token: string } | null) => void;
                 tasks: {
-                    tasklists: { list: () => Promise<{ result: { items?: unknown[] } }> };
+                    tasklists: { list: () => Promise<{ result: { items?: any[] } }> };
                     tasks: {
-                        list: (args: { tasklist: string; showCompleted?: boolean; showHidden?: boolean }) => Promise<{ result: { items?: unknown[] } }>;
+                        list: (args: { tasklist: string; showCompleted?: boolean; showHidden?: boolean }) => Promise<{ result: { items?: any[] } }>;
                         insert: (args: { tasklist: string; resource: unknown }) => Promise<{ result: unknown }>;
                         patch: (args: { tasklist: string; task: string; resource: unknown }) => Promise<{ result: unknown }>;
                         delete: (args: { tasklist: string; task: string }) => Promise<void>;
@@ -26,7 +26,7 @@ declare global {
                         list: (args: { spaces: string; q: string; fields: string; pageSize: number }) => Promise<{ result: { files: Array<{ id: string; name: string }> } }>;
                     };
                 };
-                request: (args: { path: string; method: string; headers: Record<string, string>; body: string }) => Promise<{ status: number; statusText?: string }>;
+                request: (args: { path: string; method: string; headers: Record<string, string>; body: string | FormData | Blob | ArrayBufferView | ArrayBuffer | URLSearchParams | ReadableStream | string }) => Promise<{ status: number; statusText?: string }>;
             };
         };
         google: {
@@ -40,12 +40,12 @@ declare global {
 }
 
 interface TokenClient {
-    requestAccessToken(options?: { prompt?: string; login_hint?: string }): void;
+    requestAccessToken(options?: { prompt?: string; login_hint?: string | null }): void;
 }
 
 interface TokenResponse {
     error?: string;
-    access_token?: string;
+    access_token: string;
     expires_in?: number;
 }
 
@@ -101,7 +101,7 @@ class GoogleService {
                             console.error('GIS Error:', response);
                             return;
                         }
-                        this.accessToken = response.access_token;
+                        this.accessToken = response.access_token || null;
                         const expiresIn = response.expires_in || 3600;
                         this.expiresAt = Date.now() + (expiresIn * 1000);
 
@@ -162,7 +162,7 @@ class GoogleService {
                         done(false);
                         return;
                     }
-                    this.accessToken = response.access_token;
+                    this.accessToken = response.access_token || null;
                     const expiresIn = response.expires_in || 3600;
                     this.expiresAt = Date.now() + (expiresIn * 1000);
 
@@ -220,7 +220,7 @@ class GoogleService {
 
     signIn() {
         if (this.tokenClient) {
-            const options: { prompt?: string; login_hint?: string } = { prompt: '' };
+            const options: { prompt?: string; login_hint?: string | null } = { prompt: '' };
             if (this.userEmail) options.login_hint = this.userEmail;
             this.tokenClient.requestAccessToken(options);
         }
@@ -279,7 +279,8 @@ class GoogleService {
     async createGoogleTask(title: string, notes: string = '', taskListId: string = '@default', dueDate?: string) {
         if (!this.accessToken) return null;
         try {
-            const task: Record<string, unknown> = { title, notes };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const task: any = { title, notes };
             if (dueDate) {
                 const d = new Date(dueDate);
                 if (!isNaN(d.getTime())) {
@@ -297,7 +298,8 @@ class GoogleService {
         }
     }
 
-    async updateGoogleTask(taskId: string, updates: Record<string, unknown>, taskListId: string = '@default') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async updateGoogleTask(taskId: string, updates: any, taskListId: string = '@default') {
         if (!this.accessToken) return null;
         try {
             const response = await window.gapi.client.tasks.tasks.patch({
@@ -324,7 +326,8 @@ class GoogleService {
         }
     }
 
-    async addToCalendar(task: Record<string, unknown>) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async addToCalendar(task: any) {
         if (!this.accessToken) return;
 
         try {
@@ -349,7 +352,8 @@ class GoogleService {
             };
 
             const method = task.googleEventId ? 'update' : 'insert';
-            const params: { calendarId: string; resource: unknown; eventId?: string } = {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const params: any = {
                 'calendarId': 'primary',
                 'resource': event,
             };
@@ -389,7 +393,8 @@ class GoogleService {
         }
     }
 
-    async saveToDrive(data: unknown) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async saveToDrive(data: any) {
         if (!this.accessToken) return;
         try {
             const listResponse = await window.gapi.client.drive.files.list({
@@ -400,7 +405,8 @@ class GoogleService {
             });
 
             const existingFile = listResponse.result.files[0];
-            const metadata: { name: string; mimeType: string; parents?: string[] } = {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const metadata: any = {
                 name: 'battle_plan_data.json',
                 mimeType: 'application/json'
             };
