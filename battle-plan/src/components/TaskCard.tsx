@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { AlertCircle, Mail, X, Clock, Users, Lightbulb, CheckCircle2, Hourglass, Mic, FileText } from 'lucide-react';
+import { AlertCircle, Mail, X, Clock, Users, Lightbulb, CheckCircle2, Hourglass, Mic, FileText, Trash2 } from 'lucide-react';
 import type { UnifiedTask } from '../types';
 
 interface TaskCardProps {
@@ -126,6 +126,13 @@ export function TaskCard({
             )}
 
             <div className="flex gap-2 pt-3 border-t border-slate-800/50 mt-auto">
+                <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteTask(task); }}
+                    className="h-9 px-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 hover:bg-red-500/20 transition-all flex items-center justify-center"
+                    title="Smazat"
+                >
+                    <Trash2 className="w-3.5 h-3.5" />
+                </button>
                 <button
                     onClick={async () => handleToggleTask(task)}
                     className={`h-9 px-4 flex-1 rounded-lg text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${task.status === 'completed' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}

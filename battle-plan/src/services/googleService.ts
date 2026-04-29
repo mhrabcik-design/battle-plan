@@ -1,8 +1,52 @@
 declare global {
     interface Window {
-        gapi: any;
-        google: any;
+        gapi: {
+            load: (apiName: string, callback: () => void) => void;
+            client: {
+                init: (args: { apiKey: string; discoveryDocs: string[] }) => Promise<void>;
+                setToken: (token: { access_token: string } | null) => void;
+                tasks: {
+                    tasklists: { list: () => Promise<{ result: { items?: unknown[] } }> };
+                    tasks: {
+                        list: (args: { tasklist: string; showCompleted?: boolean; showHidden?: boolean }) => Promise<{ result: { items?: unknown[] } }>;
+                        insert: (args: { tasklist: string; resource: unknown }) => Promise<{ result: unknown }>;
+                        patch: (args: { tasklist: string; task: string; resource: unknown }) => Promise<{ result: unknown }>;
+                        delete: (args: { tasklist: string; task: string }) => Promise<void>;
+                    };
+                };
+                calendar: {
+                    events: {
+                        insert: (args: { calendarId: string; resource: unknown; eventId?: string }) => Promise<{ result: { id: string } }>;
+                        update: (args: { calendarId: string; resource: unknown; eventId?: string }) => Promise<{ result: { id: string } }>;
+                        delete: (args: { calendarId: string; eventId: string }) => Promise<void>;
+                    };
+                };
+                drive: {
+                    files: {
+                        list: (args: { spaces: string; q: string; fields: string; pageSize: number }) => Promise<{ result: { files: Array<{ id: string; name: string }> } }>;
+                    };
+                };
+                request: (args: { path: string; method: string; headers: Record<string, string>; body: string }) => Promise<{ status: number; statusText?: string }>;
+            };
+        };
+        google: {
+            accounts: {
+                oauth2: {
+                    initTokenClient: (config: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: () => void }) => TokenClient;
+                };
+            };
+        };
     }
+}
+
+interface TokenClient {
+    requestAccessToken(options?: { prompt?: string; login_hint?: string }): void;
+}
+
+interface TokenResponse {
+    error?: string;
+    access_token?: string;
+    expires_in?: number;
 }
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
@@ -14,7 +58,7 @@ export interface GoogleAuthStatus {
 }
 
 class GoogleService {
-    private tokenClient: any = null;
+    private tokenClient: TokenClient | null = null;
     private accessToken: string | null = null;
     private expiresAt: number = 0;
     private userEmail: string | null = null;
@@ -52,7 +96,7 @@ class GoogleService {
                 this.tokenClient = window.google.accounts.oauth2.initTokenClient({
                     client_id: CLIENT_ID,
                     scope: SCOPES,
-                    callback: (response: any) => {
+                    callback: (response: TokenResponse) => {
                         if (response.error !== undefined) {
                             console.error('GIS Error:', response);
                             return;
@@ -113,7 +157,7 @@ class GoogleService {
             const singleUseClient = window.google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
                 scope: SCOPES,
-                callback: (response: any) => {
+                callback: (response: TokenResponse) => {
                     if (response.error !== undefined) {
                         done(false);
                         return;
@@ -176,7 +220,7 @@ class GoogleService {
 
     signIn() {
         if (this.tokenClient) {
-            const options: any = { prompt: '' };
+            const options: { prompt?: string; login_hint?: string } = { prompt: '' };
             if (this.userEmail) options.login_hint = this.userEmail;
             this.tokenClient.requestAccessToken(options);
         }
@@ -191,7 +235,9 @@ class GoogleService {
             if (window.gapi?.client) {
                 window.gapi.client.setToken(null);
             }
-        } catch {}
+        } catch (e) {
+            console.error('Sign out error:', e);
+        }
 
         this.accessToken = null;
         this.expiresAt = 0;
@@ -233,7 +279,7 @@ class GoogleService {
     async createGoogleTask(title: string, notes: string = '', taskListId: string = '@default', dueDate?: string) {
         if (!this.accessToken) return null;
         try {
-            const task: any = { title, notes };
+            const task: Record<string, unknown> = { title, notes };
             if (dueDate) {
                 const d = new Date(dueDate);
                 if (!isNaN(d.getTime())) {
@@ -251,7 +297,7 @@ class GoogleService {
         }
     }
 
-    async updateGoogleTask(taskId: string, updates: any, taskListId: string = '@default') {
+    async updateGoogleTask(taskId: string, updates: Record<string, unknown>, taskListId: string = '@default') {
         if (!this.accessToken) return null;
         try {
             const response = await window.gapi.client.tasks.tasks.patch({
@@ -278,7 +324,7 @@ class GoogleService {
         }
     }
 
-    async addToCalendar(task: any) {
+    async addToCalendar(task: Record<string, unknown>) {
         if (!this.accessToken) return;
 
         try {
@@ -303,7 +349,7 @@ class GoogleService {
             };
 
             const method = task.googleEventId ? 'update' : 'insert';
-            const params: any = {
+            const params: { calendarId: string; resource: unknown; eventId?: string } = {
                 'calendarId': 'primary',
                 'resource': event,
             };
@@ -311,7 +357,8 @@ class GoogleService {
 
             const response = await window.gapi.client.calendar.events[method](params);
             return response.result.id;
-        } catch (err: any) {
+        } catch (e: unknown) {
+            const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
                 this.signOut();
@@ -330,7 +377,8 @@ class GoogleService {
                 'eventId': eventId
             });
             return true;
-        } catch (err: any) {
+        } catch (e: unknown) {
+            const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
                 this.signOut();
@@ -341,7 +389,7 @@ class GoogleService {
         }
     }
 
-    async saveToDrive(data: any) {
+    async saveToDrive(data: unknown) {
         if (!this.accessToken) return;
         try {
             const listResponse = await window.gapi.client.drive.files.list({
@@ -352,7 +400,7 @@ class GoogleService {
             });
 
             const existingFile = listResponse.result.files[0];
-            const metadata: any = {
+            const metadata: { name: string; mimeType: string; parents?: string[] } = {
                 name: 'battle_plan_data.json',
                 mimeType: 'application/json'
             };
@@ -394,7 +442,8 @@ class GoogleService {
                 throw new Error(`Sync failed: ${response.statusText || response.status}`);
             }
             return payload.timestamp;
-        } catch (err: any) {
+        } catch (e: unknown) {
+            const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error saving to Drive', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
                 this.signOut();

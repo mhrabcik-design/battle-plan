@@ -4,9 +4,9 @@ import type { ViewMode } from '../types';
 
 interface SidebarProps {
     viewMode: ViewMode;
-    setViewMode: (mode: any) => void;
+    setViewMode: (mode: ViewMode) => void;
     isAiActive: boolean;
-    navItems: Array<{ id: string; label: string; icon: any }>;
+    navItems: Array<{ id: string; label: string; icon: React.ElementType }>;
     setShowSettings: (show: boolean) => void;
     isProcessing: boolean;
 }

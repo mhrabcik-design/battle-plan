@@ -3,7 +3,7 @@ export class AudioFeedbackService {
 
     private async init() {
         if (!this.audioContext) {
-            this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            this.audioContext = new (window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
         }
         if (this.audioContext.state === 'suspended') {
             await this.audioContext.resume();
@@ -31,7 +31,9 @@ export class AudioFeedbackService {
             osc.start();
             osc.stop(this.audioContext.currentTime + duration);
             osc.onended = () => { osc.disconnect(); gain.disconnect(); };
-        } catch {}
+        } catch (e) {
+            console.error('Audio playback error:', e);
+        }
     }
 
     playStart() {

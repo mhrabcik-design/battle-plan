@@ -90,13 +90,13 @@ function normalizeType(aiType: string): Task['type'] {
     return 'thought';
 }
 
-function clampUrgency(val: any): 1 | 2 | 3 {
+function clampUrgency(val: unknown): 1 | 2 | 3 {
     const n = Number(val);
     if (isNaN(n)) return 2;
     return Math.min(3, Math.max(1, n)) as 1 | 2 | 3;
 }
 
-function clampProgress(val: any): number {
+function clampProgress(val: unknown): number {
     const n = Number(val);
     if (isNaN(n)) return 0;
     return Math.min(100, Math.max(0, Math.round(n)));
@@ -107,14 +107,14 @@ interface AiResult {
     description?: string;
     internalNotes?: string;
     type?: string;
-    urgency?: any;
+    urgency?: unknown;
     date?: string;
     deadline?: string;
     startTime?: string;
-    duration?: any;
-    totalDuration?: any;
-    subTasks?: any[];
-    progress?: any;
+    duration?: unknown;
+    totalDuration?: unknown;
+    subTasks?: unknown[];
+    progress?: unknown;
 }
 
 function sanitizeResultFields(result: AiResult, finalType: Task['type'], defaultDuration: number) {
@@ -134,7 +134,7 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
     };
 }
 
-export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: any) => {
+export const applySemanticResult = async (result: AiResult, updateId: number | null, googleAuth: { isSignedIn: boolean }) => {
     try {
         if (updateId) {
             const existing = await db.tasks.get(updateId);
