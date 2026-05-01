@@ -339,6 +339,19 @@ class GoogleService {
 
             const duration = task.duration != null ? Number(task.duration) : (task.totalDuration != null ? Number(task.totalDuration) : 60);
 
+            // Výpočet pro upozornění v 8:00 ráno daný den
+            const eightAmDate = new Date(`${dateStr}T08:00:00`);
+            const minutesBefore8AM = Math.floor((baseDate.getTime() - eightAmDate.getTime()) / 60000);
+            
+            let overrides: any[] = [];
+            
+            if (task.status !== 'completed') {
+                overrides.push({ method: 'popup', minutes: 24 * 60 }); // 24 hodin předem
+                if (minutesBefore8AM >= 0) {
+                    overrides.push({ method: 'popup', minutes: minutesBefore8AM });
+                }
+            }
+
             const event = {
                 'summary': `${task.title} [BP]`,
                 'description': `${task.description}\n\nInterní poznámky:\n${task.internalNotes || ''}`,
@@ -349,6 +362,10 @@ class GoogleService {
                 'end': {
                     'dateTime': new Date(baseDate.getTime() + duration * 60000).toISOString(),
                     'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone
+                },
+                'reminders': {
+                    'useDefault': false,
+                    'overrides': overrides
                 }
             };
 

@@ -469,10 +469,20 @@ function App() {
       await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     } else if (task.id) {
+      const newStatus = task.status === 'completed' ? 'pending' : 'completed';
       await db.tasks.update(task.id, {
-        status: task.status === 'completed' ? 'pending' : 'completed',
+        status: newStatus,
         updatedAt: Date.now()
       });
+      
+      if (task.googleEventId && googleAuth.isSignedIn) {
+        try {
+          const updatedTask = { ...task, status: newStatus };
+          await googleService.addToCalendar(updatedTask);
+        } catch (e) {
+          console.error("Failed to update calendar event on toggle", e);
+        }
+      }
     }
   }, [googleAuth.isSignedIn, activeTaskList]);
 
