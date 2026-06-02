@@ -6,6 +6,7 @@ import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
+import { agentBridge } from './services/agentBridge';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TaskCard } from './components/TaskCard';
@@ -332,6 +333,51 @@ function App() {
     return () => {
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
+    };
+  }, [googleAuth.isSignedIn, addLog]);
+
+  // Agent bridge: poslouchá agent-pending-writes.json z Anu
+  useEffect(() => {
+    if (!googleAuth.isSignedIn) return;
+
+    let cancelled = false;
+
+    const checkAgentWrites = async () => {
+      if (cancelled) return;
+      try {
+        await agentBridge.init();
+        if (!agentBridge.initialized) return;
+
+        const writes = await agentBridge.fetchPendingWrites();
+        if (writes.length === 0) return;
+        if (cancelled) return;
+
+        addLog(`Anu: ${writes.length} nových zápisů ke zpracování`);
+
+        const applied: string[] = [];
+        for (const w of writes) {
+          if (cancelled) break;
+          const result = await agentBridge.applyWrite(w);
+          if (result.success) applied.push(w.id);
+        }
+
+        if (applied.length > 0 && !cancelled) {
+          await agentBridge.markApplied(applied);
+          addLog(`Anu: ${applied.length} zápisů úspěšně aplikováno`);
+        }
+      } catch (e) {
+        console.error('Agent bridge failed', e);
+      }
+    };
+
+    // Po mount, pak každých 30s
+    const initialTimer = setTimeout(checkAgentWrites, 3000);  // 3s po mount
+    const interval = setInterval(checkAgentWrites, 30_000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(initialTimer);
+      clearInterval(interval);
     };
   }, [googleAuth.isSignedIn, addLog]);
 
