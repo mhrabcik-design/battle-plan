@@ -62,6 +62,7 @@ export interface GoogleAuthStatus {
 class GoogleService {
     private tokenClient: TokenClient | null = null;
     private accessToken: string | null = null;
+    private folderIdCache: string | null = null;
     private expiresAt: number = 0;
     private userEmail: string | null = null;
 
@@ -242,6 +243,7 @@ class GoogleService {
         }
 
         this.accessToken = null;
+        this.folderIdCache = null;
         this.expiresAt = 0;
         this.userEmail = null;
         localStorage.removeItem('google_access_token');
@@ -415,6 +417,7 @@ class GoogleService {
      
     async getOrCreateFolder(): Promise<string> {
         if (!this.accessToken) throw new Error('Not signed in');
+        if (this.folderIdCache) return this.folderIdCache;
         const listResponse = await window.gapi.client.drive.files.list({
             q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
             spaces: 'drive',
@@ -422,7 +425,8 @@ class GoogleService {
             pageSize: 1,
         });
         if (listResponse.result.files[0]) {
-            return listResponse.result.files[0].id;
+            this.folderIdCache = listResponse.result.files[0].id;
+            return this.folderIdCache;
         }
         const createResponse = await window.gapi.client.request({
             path: '/drive/v3/files',
@@ -434,7 +438,9 @@ class GoogleService {
             }),
         });
         const created = JSON.parse(createResponse.body || '{}');
-        return created.id;
+        if (!created.id) throw new Error('Failed to create Drive folder: no ID returned');
+        this.folderIdCache = created.id;
+        return this.folderIdCache as string;
     }
 
     async saveToDrive(data: any) {
