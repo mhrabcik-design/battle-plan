@@ -27,7 +27,7 @@ declare global {
                         list: (args: { spaces: string; q: string; fields: string; pageSize: number }) => Promise<{ result: { files: Array<{ id: string; name: string }> } }>;
                     };
                 };
-                request: (args: { path: string; method: string; headers: Record<string, string>; body: string | FormData | Blob | ArrayBufferView | ArrayBuffer | URLSearchParams | ReadableStream | string }) => Promise<{ status: number; statusText?: string }>;
+                request: (args: { path: string; method: string; headers: Record<string, string>; body: string | FormData | Blob | ArrayBufferView | ArrayBuffer | URLSearchParams | ReadableStream | string }) => Promise<{ status: number; statusText?: string; body?: string }>;
             };
         };
         google: {
@@ -52,6 +52,7 @@ interface TokenResponse {
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/tasks';
+const FOLDER_NAME = 'Anu-BattlePlan';
 
 export interface GoogleAuthStatus {
     isSignedIn: boolean;
@@ -412,12 +413,37 @@ class GoogleService {
     }
 
      
+    async getOrCreateFolder(): Promise<string> {
+        if (!this.accessToken) throw new Error('Not signed in');
+        const listResponse = await window.gapi.client.drive.files.list({
+            q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+            spaces: 'drive',
+            fields: 'files(id, name)',
+            pageSize: 1,
+        });
+        if (listResponse.result.files[0]) {
+            return listResponse.result.files[0].id;
+        }
+        const createResponse = await window.gapi.client.request({
+            path: '/drive/v3/files',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: FOLDER_NAME,
+                mimeType: 'application/vnd.google-apps.folder',
+            }),
+        });
+        const created = JSON.parse(createResponse.body || '{}');
+        return created.id;
+    }
+
     async saveToDrive(data: any) {
         if (!this.accessToken) return;
         try {
+            const folderId = await this.getOrCreateFolder();
             const listResponse = await window.gapi.client.drive.files.list({
-                spaces: 'appDataFolder',
-                q: "name = 'battle_plan_data.json'",
+                spaces: 'drive',
+                q: `name = 'battle_plan_data.json' and '${folderId}' in parents and trashed=false`,
                 fields: 'files(id, name)',
                 pageSize: 1
             });
@@ -429,7 +455,7 @@ class GoogleService {
                 mimeType: 'application/json'
             };
             if (!existingFile) {
-                metadata.parents = ['appDataFolder'];
+                metadata.parents = [folderId];
             }
 
             const payload = {
@@ -481,9 +507,10 @@ class GoogleService {
     async loadFromDrive() {
         if (!this.accessToken) return null;
         try {
+            const folderId = await this.getOrCreateFolder();
             const listResponse = await window.gapi.client.drive.files.list({
-                spaces: 'appDataFolder',
-                q: "name = 'battle_plan_data.json'",
+                spaces: 'drive',
+                q: `name = 'battle_plan_data.json' and '${folderId}' in parents and trashed=false`,
                 fields: 'files(id, name)',
                 pageSize: 1
             });
