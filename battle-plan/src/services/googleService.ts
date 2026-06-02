@@ -51,7 +51,7 @@ interface TokenResponse {
 }
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/tasks';
+const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/tasks';
 
 export interface GoogleAuthStatus {
     isSignedIn: boolean;
