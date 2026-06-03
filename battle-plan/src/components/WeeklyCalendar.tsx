@@ -1,12 +1,13 @@
 import React from 'react';
-import { Clock, Hourglass } from 'lucide-react';
+import { Clock, Hourglass, Sun } from 'lucide-react';
 import type { UnifiedTask } from '../types';
 import {
     getWeekDays,
     getTimePosition,
     isOverCapacity,
     getDeadlineColor,
-    formatTimeLeft
+    formatTimeLeft,
+    isAllDayTask
 } from '../utils/calendarUtils';
 
 interface WeeklyCalendarProps {
@@ -18,6 +19,9 @@ interface WeeklyCalendarProps {
     currentHourPosition: number;
     setEditingTask: (task: UnifiedTask) => void;
 }
+
+const ALL_DAY_LANE_HEIGHT = 32; // px na každý all-day řádek
+const ALL_DAY_VISIBLE_ROWS = 3; // max viditelných řádků bez scrollu
 
 export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     weekOffset,
@@ -48,10 +52,16 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
 
                     {/* DAYS COLUMNS */}
                     {days.map((day) => {
-                        const dayTasks = tasks.filter(t => {
-                            if (t.type === 'task') return t.deadline === day.full;
-                            return t.date === day.full;
+                        const allDayTasks = tasks.filter(t => {
+                            const matchesDay = t.type === 'task' ? t.deadline === day.full : t.date === day.full;
+                            return matchesDay && isAllDayTask(t);
                         });
+                        const timedTasks = tasks.filter(t => {
+                            const matchesDay = t.type === 'task' ? t.deadline === day.full : t.date === day.full;
+                            return matchesDay && !isAllDayTask(t);
+                        });
+
+                        const allDayLaneHeight = Math.max(ALL_DAY_LANE_HEIGHT, Math.min(allDayTasks.length, ALL_DAY_VISIBLE_ROWS) * ALL_DAY_LANE_HEIGHT);
 
                         return (
                             <div key={day.full} className={`relative border-r border-white/10 last:border-r-0 ${day.isToday ? 'bg-indigo-500/5' : day.isWeekend ? 'bg-amber-950/20' : ''}`}>
@@ -62,6 +72,26 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                     <span className={`text-sm font-black leading-none ${day.isToday ? 'text-white' : 'text-slate-200'}`}>{day.dayNum}</span>
                                 </div>
 
+                                {/* ALL-DAY LANE */}
+                                {allDayTasks.length > 0 && (
+                                    <div
+                                        className="absolute left-0 right-0 z-20 px-1 pt-1 space-y-1 overflow-y-auto no-scrollbar"
+                                        style={{ top: '40px', height: `${allDayLaneHeight}px` }}
+                                    >
+                                        {allDayTasks.map(t => (
+                                            <button
+                                                key={t.isGoogleTask ? `g-${t.googleId}-allday` : `l-${t.id}-allday`}
+                                                onClick={() => setEditingTask(t)}
+                                                className={`w-full px-2 py-1 rounded-md border transition-all flex items-center gap-1.5 overflow-hidden ${t.status === 'completed' ? 'opacity-40' : 'hover:scale-[1.01] shadow-sm shadow-black/20'} ${t.type === 'meeting' ? 'bg-indigo-600/80 border-indigo-500/50 hover:border-indigo-300' : 'bg-amber-600/80 border-amber-500/50 hover:border-amber-300'}`}
+                                            >
+                                                <Sun className="w-3 h-3 text-white shrink-0" />
+                                                <span className="text-sm font-bold uppercase tracking-tight text-white line-clamp-1 leading-tight">{t.title}</span>
+                                                {t.isGoogleTask && <span className="text-sm bg-blue-500/30 text-blue-200 px-1 rounded-sm border border-blue-400/30 shrink-0">G</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+
                                 {/* HOUR GRID LINES */}
                                 {calendarHours.map((hour) => (
                                     <div
@@ -71,9 +101,9 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                     />
                                 ))}
 
-                                {/* TASKS IN DAY */}
+                                {/* TIMED TASKS IN DAY */}
                                 <div className="relative h-full z-10 mx-1">
-                                    {dayTasks.map(t => {
+                                    {timedTasks.map(t => {
                                         const height = Math.max(40, (t.duration || 60) / 60 * rowHeight);
                                         const basePos = getTimePosition(t.startTime, rowHeight);
                                         // Pivot: Task ends at startTime (deadline), Meeting starts at startTime
