@@ -54,7 +54,6 @@ class SuggestionsSync {
   private suggestionsFileId: string | null = null;
   private repliesFileId: string | null = null;
   private accessToken: string | null = null;
-  private knownSuggestionIds: Set<string> = new Set();
   private knownReplyIds: Set<string> = new Set();
   private isInitialized = false;
 

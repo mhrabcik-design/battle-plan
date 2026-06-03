@@ -13,7 +13,6 @@ import {
   Play,
   Pause,
   FileText,
-  AlertTriangle,
 } from 'lucide-react';
 import type { AgentSuggestion, AgentSuggestionReply } from '../services/suggestionsSync';
 
