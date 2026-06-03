@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2 } from 'lucide-react';
+import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
@@ -7,12 +7,14 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
 import { agentBridge } from './services/agentBridge';
+import { suggestionsSync } from './services/suggestionsSync';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TaskCard } from './components/TaskCard';
 import { FocusEditor } from './components/FocusEditor';
 import { SettingsModal } from './components/SettingsModal';
 import { WeeklyCalendar } from './components/WeeklyCalendar';
+import { SuggestionsPage } from './pages/SuggestionsPage';
 import {
   formatTimeLeft,
   getDeadlineColor,
@@ -44,6 +46,7 @@ const NAV_ITEMS = [
   { id: 'tasks', label: 'Úkoly', icon: CheckCircle2 },
   { id: 'meetings', label: 'Schůzky', icon: Users },
   { id: 'thoughts', label: 'Myšlenky', icon: Lightbulb },
+  { id: 'suggestions', label: 'Návrhy', icon: Inbox },
 ];
 
 const ROW_HEIGHT = 80;
@@ -68,6 +71,7 @@ function App() {
   const [googleTasksRaw, setGoogleTasksRaw] = useState<GoogleTaskRaw[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
+  const [suggestionsBadge, setSuggestionsBadge] = useState(0);
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
 
@@ -335,6 +339,30 @@ function App() {
       window.removeEventListener('focus', checkSync);
     };
   }, [googleAuth.isSignedIn, addLog]);
+
+  // Suggestions badge: count open suggestions, poll every 60s
+  useEffect(() => {
+    if (!googleAuth.isSignedIn) {
+      setSuggestionsBadge(0);
+      return;
+    }
+
+    const refreshBadge = async () => {
+      try {
+        await suggestionsSync.init();
+        if (!suggestionsSync.initialized) return;
+        const sugs = await suggestionsSync.fetchSuggestions();
+        const open = sugs.filter((s) => s.status === 'open').length;
+        setSuggestionsBadge(open);
+      } catch (e) {
+        // Silent fail for badge
+      }
+    };
+
+    refreshBadge();
+    const t = setInterval(refreshBadge, 60_000);
+    return () => clearInterval(t);
+  }, [googleAuth.isSignedIn]);
 
   // Agent bridge: poslouchá agent-pending-writes.json z Anu
   useEffect(() => {
@@ -615,6 +643,7 @@ function App() {
         navItems={NAV_ITEMS}
         setShowSettings={setShowSettings}
         isProcessing={isProcessing}
+        suggestionsBadge={suggestionsBadge}
       />
 
       {/* MAIN CONTENT AREA */}
@@ -630,7 +659,8 @@ function App() {
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">
                   {viewMode === 'battle' ? 'Strategický přehled dne' :
                     viewMode === 'week' ? 'Plánování týdenních cílů' :
-                      'Správa pracovního workflow'}
+                      viewMode === 'suggestions' ? 'Návrhy od Anu ke schválení' :
+                        'Správa pracovního workflow'}
                 </p>
               </div>
 
@@ -730,6 +760,13 @@ function App() {
               </div>
             )}
           </div>
+
+          {viewMode === 'suggestions' && (
+            <SuggestionsPage
+              googleAuth={googleAuth}
+              onAddLog={(msg, type) => addLog(msg, type)}
+            />
+          )}
 
           {viewMode === 'week' && (
             <WeeklyCalendar

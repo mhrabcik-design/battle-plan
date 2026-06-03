@@ -9,6 +9,7 @@ interface SidebarProps {
     navItems: Array<{ id: string; label: string; icon: React.ElementType }>;
     setShowSettings: (show: boolean) => void;
     isProcessing: boolean;
+    suggestionsBadge: number;
 }
 
 export function Sidebar({
@@ -17,7 +18,8 @@ export function Sidebar({
     isAiActive,
     navItems,
     setShowSettings,
-    isProcessing
+    isProcessing,
+    suggestionsBadge
 }: SidebarProps) {
     return (
         <aside className="hidden md:flex flex-col w-64 border-r border-white/5 bg-[#05070a]/90 backdrop-blur-2xl shadow-2xl shrink-0 relative z-[60]">
@@ -37,6 +39,7 @@ export function Sidebar({
                     {navItems.map((item) => {
                         const Icon = item.icon;
                         const isActive = viewMode === item.id;
+                        const showBadge = item.id === 'suggestions' && suggestionsBadge > 0;
                         return (
                             <button
                                 key={item.id}
@@ -45,7 +48,12 @@ export function Sidebar({
                             >
                                 <Icon className={`w-4 h-4 ${isActive ? 'scale-100' : 'group-hover:scale-110'} transition-transform`} />
                                 <span className="text-xs font-bold tracking-tight">{item.label}</span>
-                                {isActive && (
+                                {showBadge && (
+                                    <span className="ml-auto px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-black tracking-wide shadow-lg shadow-red-500/30">
+                                        {suggestionsBadge}
+                                    </span>
+                                )}
+                                {isActive && !showBadge && (
                                     <motion.div layoutId="active-indicator" className="ml-auto w-1 h-4 bg-white/20 rounded-full" />
                                 )}
                             </button>
