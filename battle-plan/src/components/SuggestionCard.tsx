@@ -160,9 +160,9 @@ export function SuggestionCard({
     setPlayingVoiceId(replyId);
   };
 
-  const priority = PRIORITY_STYLES[suggestion.context.priority];
-  const category = CATEGORY_STYLES[suggestion.category];
-  const status = STATUS_STYLES[suggestion.status];
+  const priority = PRIORITY_STYLES[suggestion.context.priority] ?? PRIORITY_STYLES.medium;
+  const category = CATEGORY_STYLES[suggestion.category] ?? CATEGORY_STYLES.task;
+  const status = STATUS_STYLES[suggestion.status] ?? STATUS_STYLES.open;
   const deadlineText = formatDeadline(suggestion.context.deadline);
 
   return (

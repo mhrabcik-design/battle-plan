@@ -73,9 +73,9 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   }, [suggestions]);
 
   const filtered = useMemo(() => {
-    if (filter === 'all') return [...suggestions].sort((a, b) => b.created_at - a.created_at);
-    if (filter === 'open') return suggestions.filter((s) => s.status === 'open').sort((a, b) => b.created_at - a.created_at);
-    return suggestions.filter((s) => s.status === filter).sort((a, b) => b.created_at - a.created_at);
+    const sorted = [...suggestions].sort((a, b) => b.created_at - a.created_at);
+    if (filter === 'all') return sorted;
+    return sorted.filter((s) => s.status === filter);
   }, [suggestions, filter]);
 
   const acceptAndCreateTask = async (suggestion: AgentSuggestion) => {
