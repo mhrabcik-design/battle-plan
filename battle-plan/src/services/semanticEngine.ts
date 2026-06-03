@@ -14,9 +14,19 @@ Všechny časy v polích \`startTime\`, \`endTime\` nebo \`time\` MUSÍ být ve 
 - Pokud uživatel řekne "v jednu", myslí se 13:00 (pokud kontext nenapovídá ráno).
 - Pokud uživatel řekne "večer v sedm", je to 19:00.
 
+### 🌞 CELODENNÍ ÚKOLY A SCHŮZKY (isAllDay):
+- Pokud uživatel řekne "**na celý den**", "**celodenní**", "**celý den**", "**bez času**", "**kdykoliv během dne**", "**dopoledne**", "**odpoledne**", "**přes den**" → nastav \`isAllDay: true\`
+- Při \`isAllDay: true\` NEVYPŁŇUJ \`startTime\` (nech prázdné nebo null) a \`duration\` nastav na výchozí (60 pro meeting, 30 pro task)
+- Pokud uživatel výslovně neřekne "na celý den", nech \`isAllDay: false\` (výchozí)
+
+### ⏱️ TRVÁNÍ ÚKOLU (duration):
+- Pokud uživatel řekne "**2 hodiny**", "**hodina a půl**", "**30 minut**", "**90 minut**" → přepočítej na minuty a nastav \`duration\`
+- Příklady: "2 hodiny" = 120, "hodina a půl" = 90, "půl hodiny" = 30, "čtvrthodinka" = 15, "2,5 hodiny" = 150
+- Pokud není řečeno, použij výchozí: meeting = 60 min, task = 30 min
+
 ### 🔄 PRAVIDLO PRO AKTUALIZACI (ZÁSADNÍ):
 Pokud provádíš aktualizaci (máš KONTEXT), postupuj takto:
-1. **METADATA (date, deadline, startTime, urgency, title, type)**: Pokud audio obsahuje novou informaci (např. jiný čas nebo den), tyto hodnoty VŽDY **PŘEPIŠ** novými.
+1. **METADATA (date, deadline, startTime, urgency, title, type, isAllDay, duration)**: Pokud audio obsahuje novou informaci (např. jiný čas nebo den), tyto hodnoty VŽDY **PŘEPIŠ** novými. Pokud audio říká "na celý den", nastav isAllDay: true i když v kontextu je startTime.
 2. **POPIS (description)**: Zde původní text **NEPŘEPISUJ, ALE DOPLŇUJ**. Zachovej všechen detailní text z KONTEXTU a pouze do něj zapracuj změnu (např. v textu oprav větu o čase).
 3. **SUBTASKY (subTasks)**: Zachovej původní a přidej nové, pokud plynou z audia.
 Nikdy nevracej prázdná pole, pokud byla v původním úkolu vyplněna a audio je nemění!
@@ -97,6 +107,12 @@ function clampUrgency(val: unknown): 1 | 2 | 3 {
     return Math.min(3, Math.max(1, n)) as 1 | 2 | 3;
 }
 
+function clampIsAllDay(val: unknown): boolean {
+    if (val === true || val === 'true') return true;
+    if (val === false || val === 'false') return false;
+    return false;
+}
+
 function clampProgress(val: unknown): number {
     const n = Number(val);
     if (isNaN(n)) return 0;
@@ -114,11 +130,13 @@ interface AiResult {
     startTime?: string;
     duration?: any;
     totalDuration?: any;
+    isAllDay?: any;
     subTasks?: any[];
     progress?: any;
 }
 
 function sanitizeResultFields(result: AiResult, finalType: Task['type'], defaultDuration: number) {
+    const isAllDay = clampIsAllDay(result.isAllDay);
     return {
         title: result.title || "Nový záznam",
         description: result.description || "",
@@ -126,10 +144,12 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
         type: finalType,
         urgency: clampUrgency(result.urgency),
         date: result.date || new Date().toISOString().split('T')[0],
-        startTime: result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined)),
+        // Při all-day: startTime prázdné (pokud AI neposkytl)
+        startTime: isAllDay ? undefined : (result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined))),
         deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
         duration: Number(result.duration) || defaultDuration,
         totalDuration: Number(result.totalDuration) || Number(result.duration) || defaultDuration,
+        isAllDay,
         subTasks: Array.isArray(result.subTasks) ? result.subTasks : [],
         progress: clampProgress(result.progress),
     };
@@ -163,9 +183,11 @@ export const applySemanticResult = async (result: any, updateId: number | null, 
                 urgency: result.urgency != null ? clampUrgency(result.urgency) : existing.urgency,
                 date: result.date ?? existing.date,
                 deadline: result.deadline ?? existing.deadline,
-                startTime: result.startTime ?? existing.startTime,
+                // Pokud je isAllDay true z AI, vyčistíme startTime
+                startTime: (result.isAllDay === true) ? undefined : (result.startTime ?? existing.startTime),
                 duration: result.duration != null ? Number(result.duration) : existing.duration,
                 totalDuration: result.totalDuration != null ? Number(result.totalDuration) : (result.duration != null ? Number(result.duration) : existing.totalDuration),
+                isAllDay: result.isAllDay != null ? clampIsAllDay(result.isAllDay) : existing.isAllDay,
                 subTasks: Array.isArray(result.subTasks) ? result.subTasks : existing.subTasks,
                 progress: result.progress != null ? clampProgress(result.progress) : existing.progress,
                 updatedAt: Date.now(),

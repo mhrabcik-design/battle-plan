@@ -336,40 +336,55 @@ class GoogleService {
 
         try {
             const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
+            const isAllDay = task.isAllDay === true;
+
+            // Pro timed event potřebujeme i čas
             const timeStr = task.startTime || "09:00";
             const baseDate = new Date(`${dateStr}T${timeStr}:00`);
-            if (isNaN(baseDate.getTime())) throw new Error("Neplatné datum/čas pro kalendář");
+            if (!isAllDay && isNaN(baseDate.getTime())) throw new Error("Neplatné datum/čas pro kalendář");
 
             const duration = task.duration != null ? Number(task.duration) : (task.totalDuration != null ? Number(task.totalDuration) : 60);
 
             // Výpočet pro upozornění v 8:00 ráno daný den
             const eightAmDate = new Date(`${dateStr}T08:00:00`);
             const minutesBefore8AM = Math.floor((baseDate.getTime() - eightAmDate.getTime()) / 60000);
-            
+
             let overrides: any[] = [];
-            
+
             if (task.status !== 'completed') {
                 overrides.push({ method: 'popup', minutes: 24 * 60 }); // 24 hodin předem
-                if (minutesBefore8AM >= 0) {
+                if (!isAllDay && minutesBefore8AM >= 0) {
                     overrides.push({ method: 'popup', minutes: minutesBefore8AM });
                 }
             }
 
-            const event = {
+            // All-day event vs timed event mají jinou strukturu
+            const event: any = {
                 'summary': `${task.title} [BP]`,
                 'description': `${task.description}\n\nInterní poznámky:\n${task.internalNotes || ''}`,
-                'start': {
+            };
+
+            if (isAllDay) {
+                // Google all-day: start.date = YYYY-MM-DD, end.date je EXKLUZIVNÍ (den po)
+                const endDate = new Date(`${dateStr}T00:00:00`);
+                endDate.setDate(endDate.getDate() + 1);
+                const endDateStr = endDate.toISOString().split('T')[0];
+                event.start = { 'date': dateStr };
+                event.end = { 'date': endDateStr };
+            } else {
+                event.start = {
                     'dateTime': baseDate.toISOString(),
                     'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone
-                },
-                'end': {
+                };
+                event.end = {
                     'dateTime': new Date(baseDate.getTime() + duration * 60000).toISOString(),
                     'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone
-                },
-                'reminders': {
-                    'useDefault': false,
-                    'overrides': overrides
-                }
+                };
+            }
+
+            event.reminders = {
+                'useDefault': false,
+                'overrides': overrides
             };
 
             const method = task.googleEventId ? 'update' : 'insert';

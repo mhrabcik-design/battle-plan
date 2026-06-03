@@ -17,6 +17,7 @@ export interface Task {
     date?: string; // start date ISO
     deadline?: string; // deadline ISO date
     startTime?: string; // HH:mm
+    isAllDay?: boolean; // pokud true, zabírá celý den (bez startTime/duration)
     urgency: 1 | 2 | 3; // 1 low (bez urgentnosti), 2 normal (default), 3 high (urgentní)
     status: 'pending' | 'completed' | 'cancelled';
     subTasks?: SubTask[];
@@ -67,6 +68,11 @@ export class BattlePlanDB extends Dexie {
             settings: 'id'
         });
         this.version(6).stores({
+            tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+            recordings: '++id, analyzed, createdAt',
+            settings: 'id'
+        });
+        this.version(7).stores({
             tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
             recordings: '++id, analyzed, createdAt',
             settings: 'id'

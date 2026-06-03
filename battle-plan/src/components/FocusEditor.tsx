@@ -1,8 +1,9 @@
 import { motion } from 'framer-motion';
-import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass } from 'lucide-react';
+import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass, Sun } from 'lucide-react';
 import type { UnifiedTask, GoogleAuthStatus } from '../types';
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import type { Task } from '../db';
+import { formatDuration, parseDuration } from '../utils/calendarUtils';
 
 interface FocusEditorProps {
     editingTask: UnifiedTask;
@@ -174,6 +175,7 @@ export function FocusEditor({
                                                 type="text"
                                                 placeholder="13:00"
                                                 maxLength={5}
+                                                disabled={editingTask.isAllDay}
                                                 value={editingTask.startTime || ''}
                                                 onChange={(e) => {
                                                     let val = e.target.value.replace(/[^\d:]/g, '');
@@ -189,10 +191,17 @@ export function FocusEditor({
                                                     }
                                                     setEditingTask({ ...editingTask, startTime: val, updatedAt: Date.now() });
                                                 }}
-                                                className={`w-full bg-slate-800 border rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 ${editingTask.startTime && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(editingTask.startTime) ? 'border-red-500/50' : 'border-slate-700'}`}
+                                                className={`w-full bg-slate-800 border rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed ${editingTask.startTime && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(editingTask.startTime) ? 'border-red-500/50' : 'border-slate-700'}`}
                                             />
                                         </div>
                                     </div>
+
+                                    {/* ALL-DAY TOGGLE + DURATION INPUT */}
+                                    <DurationAllDayEditor
+                                        editingTask={editingTask}
+                                        setEditingTask={setEditingTask}
+                                        isGoogleTask={!!editingTask.isGoogleTask}
+                                    />
 
                                     {!editingTask.isGoogleTask && (
                                         <div className="space-y-3">
@@ -334,6 +343,97 @@ export function FocusEditor({
                     </div>
                 </div>
             </motion.div>
+        </div>
+    );
+}
+
+/**
+ * Sub-komponenta pro nastavení celodenního eventu a trvání.
+ * - All-day toggle: přepíná isAllDay, při true se startTime a duration ignorují
+ * - Duration input: formát "2h 30m" / "90m" / "2:30"
+ * - Pokud je all-day, duration input je skryt
+ */
+function DurationAllDayEditor({
+    editingTask,
+    setEditingTask,
+    isGoogleTask
+}: {
+    editingTask: UnifiedTask;
+    setEditingTask: React.Dispatch<React.SetStateAction<UnifiedTask | null>>;
+    isGoogleTask: boolean;
+}) {
+    const isAllDay = !!editingTask.isAllDay;
+    const [durationText, setDurationText] = useState<string>(formatDuration(editingTask.duration));
+
+    useEffect(() => {
+        setDurationText(formatDuration(editingTask.duration));
+    }, [editingTask.duration]);
+
+    const handleDurationBlur = () => {
+        const parsed = parseDuration(durationText);
+        if (parsed !== null) {
+            setEditingTask({ ...editingTask, duration: parsed, updatedAt: Date.now() });
+            setDurationText(formatDuration(parsed));
+        } else if (durationText.trim() === '') {
+            setEditingTask({ ...editingTask, duration: undefined, updatedAt: Date.now() });
+        } else {
+            setDurationText(formatDuration(editingTask.duration));
+        }
+    };
+
+    const handleAllDayToggle = () => {
+        const newAllDay = !isAllDay;
+        setEditingTask({
+            ...editingTask,
+            isAllDay: newAllDay,
+            startTime: newAllDay ? undefined : editingTask.startTime,
+            updatedAt: Date.now()
+        });
+    };
+
+    return (
+        <div className="space-y-3">
+            <button
+                type="button"
+                onClick={handleAllDayToggle}
+                disabled={isGoogleTask}
+                className={`w-full flex items-center justify-between gap-3 p-3 rounded-xl border transition-all ${isAllDay ? 'bg-amber-500/10 border-amber-500/40 shadow-lg shadow-amber-500/5' : 'bg-slate-800/40 border-slate-700/60 hover:border-slate-600'} ${isGoogleTask ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer active:scale-[0.99]'}`}
+            >
+                <div className="flex items-center gap-2.5">
+                    <Sun className={`w-4 h-4 ${isAllDay ? 'text-amber-400' : 'text-slate-500'}`} />
+                    <div className="text-left">
+                        <span className={`text-xs font-black uppercase tracking-wider block ${isAllDay ? 'text-amber-300' : 'text-slate-300'}`}>
+                            Celý den
+                        </span>
+                        <span className="text-sm text-slate-500 leading-none">
+                            {isAllDay ? 'Bez konkrétního času' : 'S časem a trváním'}
+                        </span>
+                    </div>
+                </div>
+                <div className={`w-10 h-5 rounded-full transition-all relative ${isAllDay ? 'bg-amber-500' : 'bg-slate-700'}`}>
+                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-md transition-all ${isAllDay ? 'left-5' : 'left-0.5'}`} />
+                </div>
+            </button>
+
+            {!isAllDay && (
+                <div className="space-y-2">
+                    <label className="text-sm font-black text-slate-500 uppercase flex justify-between">
+                        <span>Trvání</span>
+                        {editingTask.duration != null && (
+                            <span className="text-indigo-400 text-xs">{editingTask.duration} min</span>
+                        )}
+                    </label>
+                    <input
+                        type="text"
+                        placeholder="2h 30m / 90m / 2:30"
+                        value={durationText}
+                        onChange={(e) => setDurationText(e.target.value)}
+                        onBlur={handleDurationBlur}
+                        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 focus:border-indigo-500 transition-all"
+                    />
+                </div>
+            )}
         </div>
     );
 }
