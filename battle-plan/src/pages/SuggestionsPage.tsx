@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Inbox, RefreshCw, AlertCircle, Filter } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
+import { Inbox, RefreshCw, Filter } from 'lucide-react';
 import {
   suggestionsSync,
   type AgentSuggestion,
