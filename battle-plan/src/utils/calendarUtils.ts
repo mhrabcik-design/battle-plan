@@ -121,3 +121,70 @@ export const getUrgencyColor = (urgency?: number) => {
         default: return 'text-blue-400 border-blue-400/30 bg-blue-400/10';
     }
 };
+
+/**
+ * Vrátí true, pokud úkol/schůzka zabírá celý den.
+ * - isAllDay === true (nový field)
+ * - nebo nemá startTime (legacy fallback)
+ */
+export const isAllDayTask = (task: { isAllDay?: boolean; startTime?: string }): boolean => {
+    if (task.isAllDay === true) return true;
+    if (task.isAllDay === false) return false;
+    // Legacy fallback - pokud není isAllDay nastaveno, odvodíme z absence startTime
+    return !task.startTime;
+};
+
+/**
+ * Formátuje duration v minutách na lidsky čitelný text: "2h 30m", "45m", "1h".
+ */
+export const formatDuration = (minutes?: number): string => {
+    if (minutes == null || minutes <= 0) return '';
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
+};
+
+/**
+ * Parsuje lidský vstup ("2h 30m", "90m", "2:30", "2,5h") na minuty.
+ * Vrací null pokud nelze parsovat.
+ */
+export const parseDuration = (input: string): number | null => {
+    if (!input) return null;
+    const s = input.trim().toLowerCase();
+
+    // "2:30" = 2h 30m
+    const colonMatch = s.match(/^(\d{1,2}):(\d{1,2})$/);
+    if (colonMatch) {
+        const h = parseInt(colonMatch[1], 10);
+        const m = parseInt(colonMatch[2], 10);
+        if (m >= 60) return null;
+        return h * 60 + m;
+    }
+
+    // "2h 30m", "2h", "30m", "2,5h"
+    let total = 0;
+    let matched = false;
+    const hMatch = s.match(/(\d+(?:[.,]\d+)?)\s*h/);
+    if (hMatch) {
+        const h = parseFloat(hMatch[1].replace(',', '.'));
+        total += Math.round(h * 60);
+        matched = true;
+    }
+    const mMatch = s.match(/(\d+)\s*m/);
+    if (mMatch) {
+        total += parseInt(mMatch[1], 10);
+        matched = true;
+    }
+    if (matched) return total > 0 ? total : null;
+
+    // "90" = 90 minut
+    const plainMatch = s.match(/^\d+$/);
+    if (plainMatch) {
+        const n = parseInt(s, 10);
+        return n > 0 ? n : null;
+    }
+
+    return null;
+};
