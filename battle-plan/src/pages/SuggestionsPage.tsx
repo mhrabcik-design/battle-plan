@@ -218,7 +218,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
       const result = await suggestionsSync.addReply({
         suggestion_id: suggestion.id,
         type: 'voice',
-        content: 'Voice reply',
+        content: '',
         voice_file_id: upload.fileId,
         action: null,
       });
@@ -232,17 +232,84 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
               suggestion_id: suggestion.id,
               created_at: Date.now(),
               type: 'voice',
-              content: 'Voice reply',
+              content: '',
               voice_file_id: upload.fileId,
               action: null,
             },
           ],
         }));
-        onAddLog(`Suggestions: 🎤 Hlasová reakce nahrána`);
+        onAddLog(`Suggestions: 🎙 Hlasová reakce uložena`);
       }
     } catch (e) {
       console.error('Voice reply failed', e);
       onAddLog('Suggestions: Hlasová reakce selhala', 'error');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const updateSuggestion = async (
+    suggestion: AgentSuggestion,
+    updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null }
+  ) => {
+    setProcessingId(suggestion.id);
+    try {
+      const ok = await suggestionsSync.updateSuggestion(suggestion.id, updates);
+      if (!ok.success) {
+        onAddLog('Suggestions: Úprava selhala', 'error');
+        return;
+      }
+      // Log edit reply for audit
+      const parts: string[] = [];
+      if (updates.priority !== undefined) parts.push(`priorita → ${updates.priority}`);
+      if (updates.deadline !== undefined) {
+        parts.push(
+          updates.deadline === null
+            ? 'deadline smazán'
+            : `deadline → ${new Date(updates.deadline).toISOString().split('T')[0]}`
+        );
+      }
+      const editReply = await suggestionsSync.addReply({
+        suggestion_id: suggestion.id,
+        type: 'text',
+        content: `✏️ ${parts.join(', ')}`,
+        action: null,
+      });
+      // Local optimistic update
+      setSuggestions((prev) =>
+        prev.map((s) =>
+          s.id === suggestion.id
+            ? {
+                ...s,
+                context: {
+                  ...s.context,
+                  ...(updates.priority !== undefined ? { priority: updates.priority } : {}),
+                  ...(updates.deadline !== undefined ? { deadline: updates.deadline } : {}),
+                },
+              }
+            : s
+        )
+      );
+      if (editReply.success && editReply.id) {
+        setRepliesBySuggestion((prev) => ({
+          ...prev,
+          [suggestion.id]: [
+            ...(prev[suggestion.id] ?? []),
+            {
+              id: editReply.id!,
+              suggestion_id: suggestion.id,
+              created_at: Date.now(),
+              type: 'text',
+              content: `✏️ ${parts.join(', ')}`,
+              action: null,
+            },
+          ],
+        }));
+      }
+      onAddLog(`Suggestions: ✏️ Upraveno: ${suggestion.title.slice(0, 50)}`);
+    } catch (e) {
+      console.error('Update suggestion failed', e);
+      onAddLog('Suggestions: Úprava selhala', 'error');
     } finally {
       setProcessingId(null);
     }
@@ -325,6 +392,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
               onDefer={(date) => defer(s, date)}
               onTextReply={(text) => sendTextReply(s, text)}
               onVoiceReply={(blob) => sendVoiceReply(s, blob)}
+              onUpdate={(updates) => updateSuggestion(s, updates)}
             />
           ))}
         </AnimatePresence>

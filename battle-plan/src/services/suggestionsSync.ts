@@ -156,6 +156,61 @@ class SuggestionsSync {
     }
   }
 
+  async updateSuggestion(
+    suggestionId: string,
+    updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null; title?: string; description?: string }
+  ): Promise<{ success: boolean }> {
+    if (!this.isInitialized || !this.suggestionsFileId || !this.accessToken) {
+      return { success: false };
+    }
+    try {
+      const resp = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${this.suggestionsFileId}?alt=media`,
+        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
+      );
+      if (!resp.ok) return { success: false };
+      const data = (await resp.json()) as SuggestionsFile;
+      const idx = (data.suggestions ?? []).findIndex((s) => s.id === suggestionId);
+      if (idx === -1) return { success: false };
+
+      const sug = data.suggestions[idx];
+      if (updates.priority !== undefined) {
+        sug.context = { ...(sug.context ?? { related_task_ids: [], related_email_ids: [], deadline: null, priority: 'medium' }), priority: updates.priority };
+      }
+      if (updates.deadline !== undefined) {
+        sug.context = { ...(sug.context ?? { related_task_ids: [], related_email_ids: [], priority: 'medium' }), deadline: updates.deadline };
+      }
+      if (updates.title !== undefined) {
+        sug.title = updates.title;
+      }
+      if (updates.description !== undefined) {
+        sug.description = updates.description;
+      }
+      const updated = { ...data, suggestions: data.suggestions, last_updated: Date.now() };
+      const fileContent = JSON.stringify(updated);
+      const boundary = '-------314159265358979323846';
+      const metadata = { name: SUGGESTIONS_FILENAME, mimeType: 'application/json' };
+      const body =
+        '--' + boundary + '\r\n' +
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+        JSON.stringify(metadata) + '\r\n' +
+        '--' + boundary + '\r\n' +
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+        fileContent + '\r\n' +
+        '--' + boundary + '--';
+      await window.gapi.client.request({
+        path: `/upload/drive/v3/files/${this.suggestionsFileId}?uploadType=multipart`,
+        method: 'PATCH',
+        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+        body: body,
+      });
+      return { success: true };
+    } catch (e) {
+      console.error('SuggestionsSync: updateSuggestion failed', e);
+      return { success: false };
+    }
+  }
+
   async addReply(reply: Omit<AgentSuggestionReply, 'id' | 'created_at'>): Promise<{ success: boolean; id?: string }> {
     if (!this.isInitialized || !this.repliesFileId || !this.accessToken) {
       return { success: false };

@@ -24,6 +24,7 @@ interface SuggestionCardProps {
   onDefer: (deferUntil: string) => Promise<void>;
   onTextReply: (text: string) => Promise<void>;
   onVoiceReply: (blob: Blob) => Promise<void>;
+  onUpdate: (updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null }) => Promise<void>;
   isProcessing: boolean;
   expandedTextReply: boolean;
   onExpandTextReply: (expand: boolean) => void;
@@ -89,6 +90,7 @@ export function SuggestionCard({
   onDefer,
   onTextReply,
   onVoiceReply,
+  onUpdate,
   isProcessing,
   expandedTextReply,
   onExpandTextReply,
@@ -100,6 +102,19 @@ export function SuggestionCard({
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  const [priorityInput, setPriorityInput] = useState<'high' | 'medium' | 'low'>(suggestion.context.priority);
+  const [deadlineInput, setDeadlineInput] = useState<string>(
+    suggestion.context.deadline ? new Date(suggestion.context.deadline).toISOString().split('T')[0] : ''
+  );
+
+  const handleSavePriority = async () => {
+    await onUpdate({ priority: priorityInput });
+  };
+
+  const handleSaveDeadline = async () => {
+    const ts = deadlineInput ? new Date(deadlineInput).getTime() : null;
+    await onUpdate({ deadline: ts });
+  };
 
   const isResolved = suggestion.status === 'accepted' || suggestion.status === 'rejected' || suggestion.status === 'converted';
 
@@ -210,6 +225,51 @@ export function SuggestionCard({
           <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1">
             <Clock className="w-3 h-3" /> {deadlineText}
           </span>
+        )}
+        {!isResolved && (
+          <>
+            <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1.5">
+              <Clock className="w-3 h-3" />
+              <input
+                type="date"
+                value={deadlineInput}
+                onChange={(e) => setDeadlineInput(e.target.value)}
+                disabled={isProcessing}
+                className="bg-transparent border-none outline-none text-slate-300 font-mono text-[11px] w-[110px] disabled:opacity-50"
+                title="Upravit deadline"
+              />
+              {deadlineInput !== (suggestion.context.deadline ? new Date(suggestion.context.deadline).toISOString().split('T')[0] : '') && (
+                <button
+                  onClick={handleSaveDeadline}
+                  disabled={isProcessing}
+                  className="text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                  title="Uložit deadline"
+                >✓</button>
+              )}
+            </span>
+            <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1.5">
+              <Zap className="w-3 h-3" />
+              <select
+                value={priorityInput}
+                onChange={(e) => setPriorityInput(e.target.value as 'high' | 'medium' | 'low')}
+                disabled={isProcessing}
+                className="bg-transparent border-none outline-none text-slate-300 font-mono text-[11px] disabled:opacity-50 cursor-pointer"
+                title="Změnit prioritu"
+              >
+                <option value="high">Vysoká</option>
+                <option value="medium">Střední</option>
+                <option value="low">Nízká</option>
+              </select>
+              {priorityInput !== suggestion.context.priority && (
+                <button
+                  onClick={handleSavePriority}
+                  disabled={isProcessing}
+                  className="text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                  title="Uložit prioritu"
+                >✓</button>
+              )}
+            </span>
+          </>
         )}
         {suggestion.context.related_task_ids.length > 0 && (
           <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1">
