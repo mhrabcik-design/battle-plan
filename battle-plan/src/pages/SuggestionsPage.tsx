@@ -86,9 +86,25 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         ? new Date(suggestion.context.deadline).toISOString().split('T')[0]
         : undefined;
 
+      // Build description with embedded reply notes (text + voice transcripts)
+      const noteReplies = (repliesBySuggestion[suggestion.id] ?? []).filter(
+        (r) => r.content && r.content.trim() && r.type !== 'action'
+      );
+      const noteSection = noteReplies.length > 0
+        ? '\n\n---\n📝 **Poznámky od tebe:**\n' +
+          noteReplies
+            .map((r) => {
+              const ts = new Date(r.created_at).toLocaleString('cs-CZ', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+              const voiceTag = r.type === 'voice' ? ' 🎙' : '';
+              return `- ${ts}${voiceTag}: ${r.content.trim()}`;
+            })
+            .join('\n')
+        : '';
+      const fullDescription = (suggestion.description ?? '') + noteSection;
+
       const newId = await db.tasks.add({
         title: suggestion.title,
-        description: suggestion.description,
+        description: fullDescription,
         type: 'task',
         status: 'pending',
         urgency: suggestion.context.priority === 'high' ? 3 : suggestion.context.priority === 'low' ? 1 : 2,
