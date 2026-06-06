@@ -51,7 +51,11 @@ interface TokenResponse {
 }
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/tasks';
+// Scopes: drive (full) instead of drive.file so BP app can read agent-suggestions.json
+// that was written by external agents (e.g. Anu bp_suggestions.py). The full drive
+// scope also includes drive.file semantics, so existing files remain accessible.
+// Re-authorization required after this change.
+const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks';
 const FOLDER_NAME = 'Anu-BattlePlan';
 
 export interface GoogleAuthStatus {
