@@ -123,6 +123,9 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         action_data: { convert_to_task: true },
       });
 
+      // Persist status change to Drive so next loadAll doesn't restore 'open'
+      await suggestionsSync.updateSuggestionStatus(suggestion.id, 'converted');
+
       // Local optimistic update
       setSuggestions((prev) =>
         prev.map((s) =>
@@ -150,6 +153,8 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         content: 'Rejected',
         action: 'reject',
       });
+      // Persist status change to Drive so next loadAll doesn't restore 'open'
+      await suggestionsSync.updateSuggestionStatus(suggestion.id, 'rejected');
       setSuggestions((prev) =>
         prev.map((s) =>
           s.id === suggestion.id
@@ -175,6 +180,8 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         action: 'defer',
         action_data: { defer_until: deferUntil },
       });
+      // Persist status change to Drive so next loadAll doesn't restore 'open'
+      await suggestionsSync.updateSuggestionStatus(suggestion.id, 'deferred');
       setSuggestions((prev) =>
         prev.map((s) =>
           s.id === suggestion.id
