@@ -41,10 +41,41 @@ export interface Setting {
     value: string;
 }
 
+// === Work Logs (Pracovní činnosti) ===
+
+/** 5 pastel preset barev pro projekty — nebudou řvát, ale budou odlišitelné. */
+export type ProjectColor = 'slate' | 'indigo' | 'emerald' | 'amber' | 'rose';
+
+/** Barva projektu — pro barevné odlišení v kalendáři. */
+export interface Project {
+    id?: number;
+    name: string;       // unikátní (case-insensitive), např. "KB Plaza Liberec"
+    color: ProjectColor;
+    isActive: boolean;  // soft-delete — staré projekty se v pickeru nezobrazí, ale WorkLog záznamy zůstanou
+    updatedAt: number;
+    createdAt: number;
+}
+
+/** Jeden záznam pracovní činnosti (diktovaný / manuální). */
+export interface WorkLog {
+    id?: number;
+    date: string;          // ISO date YYYY-MM-DD — datum konání práce (NE diktování)
+    projectId: number;     // FK → Project.id
+    projectName: string;   // denormalizovaný název (zůstane i když se projekt smaže/přejmenuje)
+    people: string;        // volný text: "Pepa, Lukáš"
+    hours: number;         // desetinné číslo (8, 8.5, 7.25)
+    description?: string;  // co se dělalo
+    source: 'voice' | 'manual';
+    updatedAt: number;
+    createdAt: number;
+}
+
 export class BattlePlanDB extends Dexie {
     tasks!: Table<Task>;
     recordings!: Table<Recording>;
     settings!: Table<Setting>;
+    workLogs!: Table<WorkLog>;
+    projects!: Table<Project>;
 
     constructor() {
         super('BattlePlanDB');
@@ -76,6 +107,13 @@ export class BattlePlanDB extends Dexie {
             tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
             recordings: '++id, analyzed, createdAt',
             settings: 'id'
+        });
+        this.version(8).stores({
+            tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+            recordings: '++id, analyzed, createdAt',
+            settings: 'id',
+            workLogs: '++id, date, projectId, hours, createdAt',
+            projects: '++id, name, isActive, createdAt'
         });
     }
 }

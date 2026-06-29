@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox } from 'lucide-react';
+import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { db, type Task } from './db';
@@ -15,6 +15,10 @@ import { FocusEditor } from './components/FocusEditor';
 import { SettingsModal } from './components/SettingsModal';
 import { WeeklyCalendar } from './components/WeeklyCalendar';
 import { SuggestionsPage } from './pages/SuggestionsPage';
+import { WorkLogsPage } from './pages/WorkLogsPage';
+import { workLogsSync, mergeCloudToLocal, mergeLocalToCloud, type MergeResult } from './services/workLogsSync';
+import { processWorkLogAudio, type ExtractedWorkLog } from './services/workLogExtractor';
+import { WorkLogVoiceConfirm } from './components/worklogs/WorkLogVoiceConfirm';
 import {
   formatTimeLeft,
   getDeadlineColor,
@@ -45,6 +49,7 @@ const NAV_ITEMS = [
   { id: 'week', label: 'Týden', icon: LayoutGrid },
   { id: 'tasks', label: 'Úkoly', icon: CheckCircle2 },
   { id: 'meetings', label: 'Schůzky', icon: Users },
+  { id: 'worklogs', label: 'Práce', icon: Briefcase },
   { id: 'thoughts', label: 'Myšlenky', icon: Lightbulb },
   { id: 'suggestions', label: 'Návrhy', icon: Inbox },
 ];
@@ -72,6 +77,7 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
+  const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLog | null>(null);
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
 
@@ -316,6 +322,22 @@ function App() {
           localStorage.setItem('last_drive_sync', now);
           localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
         }
+
+        // === F6: WorkLogs + Projects sync ===
+        await workLogsSync.init();
+        if (workLogsSync.initialized) {
+          const wl = await workLogsSync.loadAll();
+          if (wl.timestamp > 0) {
+            const mergeResult: MergeResult = await mergeCloudToLocal(wl.workLogs, wl.projects);
+            if (mergeResult.workLogsAdded > 0 || mergeResult.workLogsUpdated > 0 ||
+                mergeResult.projectsAdded > 0 || mergeResult.projectsUpdated > 0) {
+              addLog(
+                `WorkLogs sync: +${mergeResult.workLogsAdded} logů, ~${mergeResult.workLogsUpdated} upd, +${mergeResult.projectsAdded} projektů, ~${mergeResult.projectsUpdated} upd.`,
+                'info'
+              );
+            }
+          }
+        }
       } catch (e) {
         console.error("Auto-sync check failed", e);
       }
@@ -417,6 +439,22 @@ function App() {
 
   const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
+  // F6: workLogs + projects hash pro auto-backup trigger
+  const [workLogsDataHash, setWorkLogsDataHash] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const allWL = await db.workLogs.toArray();
+      const allP = await db.projects.toArray();
+      if (!cancelled) {
+        const h = allWL.length * 1_000_000 + allWL.reduce((s, w) => s + (w.updatedAt || 0), 0)
+                + allP.length * 10_000 + allP.reduce((s, p) => s + (p.updatedAt || 0), 0);
+        setWorkLogsDataHash(h);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workLogExtracted]);
+
   // Auto-backup on change
   useEffect(() => {
     if (!googleAuth.isSignedIn) return;
@@ -441,6 +479,24 @@ function App() {
 
     return () => clearTimeout(timer);
   }, [tasksHash, googleAuth.isSignedIn, addLog]);
+
+  // F6: Auto-backup workLogs + projects (paralelní trigger na workLogsDataHash)
+  useEffect(() => {
+    if (!googleAuth.isSignedIn || workLogsDataHash === 0) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const ok = await mergeLocalToCloud();
+        if (ok) {
+          addLog('WorkLogs záloha na Disk úspěšná', 'info');
+        }
+      } catch (e) {
+        console.error('WorkLogs auto-backup failed', e);
+      }
+    }, 10000);
+
+    return () => clearTimeout(timer);
+  }, [workLogsDataHash, googleAuth.isSignedIn, addLog]);
 
   useEffect(() => {
     db.settings.get('gemini_api_key').then(setting => {
@@ -478,6 +534,35 @@ function App() {
 
     const updateId = activeVoiceUpdateIdRef.current;
 
+    // === F5: Pokud jsme v záložce Worklogs, jdeme worklog flow ===
+    if (viewMode === 'worklogs') {
+      addLog(`Pracovní činnost — zpracovávám diktát…`, 'info');
+      try {
+        const result = await processWorkLogAudio(
+          blob,
+          (attempt, delay) => addLog(`AI Přetíženo - Pokus č.${attempt} (čekám ${delay / 1000}s)…`, 'info')
+        );
+        if (result.ok) {
+          addLog(`AI extrahovalo: ${result.data.projectName || '?'} (${result.data.hours}h)`, 'info');
+          setWorkLogExtracted(result.data);
+        } else {
+          addLog(`AI extrakce selhala: ${result.error}`, 'error');
+          alert(`AI extrakce selhala: ${result.error}`);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addLog('WorkLog AI Chyba: ' + msg, 'error');
+        alert(msg || 'Chyba při zpracování AI');
+      } finally {
+        isProcessingRef.current = false;
+        setIsProcessing(false);
+        activeVoiceUpdateIdRef.current = null;
+        setActiveVoiceUpdateId(null);
+        clearAudio();
+      }
+      return;
+    }
+
     addLog(`Zpracovávám audio s modelem: ${selectedModel} (Update ID: ${updateId || 'NOVÝ'})`);
 
     try {
@@ -501,7 +586,7 @@ function App() {
       setActiveVoiceUpdateId(null);
       clearAudio();
     }
-  }, [selectedModel, addLog, clearAudio]);
+  }, [selectedModel, addLog, clearAudio, viewMode]);
 
   useEffect(() => {
     if (audioBlob && !isProcessingRef.current) {
@@ -660,7 +745,8 @@ function App() {
                   {viewMode === 'battle' ? 'Strategický přehled dne' :
                     viewMode === 'week' ? 'Plánování týdenních cílů' :
                       viewMode === 'suggestions' ? 'Návrhy od Anu ke schválení' :
-                        'Správa pracovního workflow'}
+                        viewMode === 'worklogs' ? 'Večerní diktování pracovních činností' :
+                          'Správa pracovního workflow'}
                 </p>
               </div>
 
@@ -768,6 +854,13 @@ function App() {
             />
           )}
 
+          {viewMode === 'worklogs' && (
+            <WorkLogsPage
+              googleAuth={googleAuth}
+              onAddLog={(msg, type) => addLog(msg, type)}
+            />
+          )}
+
           {viewMode === 'week' && (
             <WeeklyCalendar
               weekOffset={weekOffset}
@@ -854,6 +947,21 @@ function App() {
               </AnimatePresence>
             </section>
           )}
+
+          <AnimatePresence>
+            {workLogExtracted && (
+              <WorkLogVoiceConfirm
+                extracted={workLogExtracted}
+                onConfirmed={(result) => {
+                  if ('ok' in result && result.ok && 'workLog' in result) {
+                    addLog(`Činnost uložena z hlasu: ${result.workLog.projectName} (${result.workLog.hours}h)`, 'info');
+                  }
+                  setWorkLogExtracted(null);
+                }}
+                onCancelled={() => setWorkLogExtracted(null)}
+              />
+            )}
+          </AnimatePresence>
 
           <AnimatePresence>
             {editingTask && (
