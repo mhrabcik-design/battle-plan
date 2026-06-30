@@ -45,4 +45,17 @@ Cílem je udělat z Bitevního Plánu aktivního hlídače tvého času, nejen p
 - **Widget do systému:** Malá "plovoucí" ikona mikrofonu, která zůstane nad všemi okny pro okamžitý diktát bez přepínání do prohlížeče.
 
 ---
+
+## 🧰 3. Práce / WorkLogs F7+
+
+Navazuje na verzi 4.1.0, kde je hotové MVP záložky Práce, hlasový vstup a Drive sync.
+
+### Prioritní náměty:
+- **Stabilní clientId:** Přidat UUID/clientId do `Project` a `WorkLog`, aby sync nemusel používat `name` a composite key `date|projectName|people`.
+- **Reporting:** Rozhodnout základní report: měsíční výkaz podle projektu, týdenní přehled lidí, nebo export pro fakturaci.
+- **Test suite:** Převést F5/F6 ad-hoc ověřovací skripty do standardního test runneru.
+- **Schůzka vs práce:** Rozhodnout, zda meeting filtr zůstane heuristika v UI, nebo se zavede explicitní příznak v datech.
+- **Anu reporting worker:** Připravit navazující worker, který z `work_logs_data.json` umí generovat přehledy.
+
+---
 *Bitevní Plán – Strategická převaha začíná plánem.*

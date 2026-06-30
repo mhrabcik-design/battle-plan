@@ -1,5 +1,7 @@
 # Task: Update Mobile Sync and UI
 
+> Archivni task s castecne otevrenym backlogem. Sync cast je hotova; pripadne nove mobilni UI prace zapisuj do `../FUTURE_PLANS.md`.
+
 User reported issues with the mobile version of Battle Plan after the Desktop-First transformation.
 Specifically:
 - Settings disappeared on mobile.

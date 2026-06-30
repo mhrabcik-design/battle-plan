@@ -1,6 +1,6 @@
 # Logika záznamů a charakter AI „Bitevní Plán“ 🛡️🧠
 
-Tento dokument shrnuje vnitřní logiku, nastavení osobnosti a způsoby, jakými umělá inteligence (Gemini 2.0 Flash) v aplikaci zpracovává vaše hlasové vstupy. Celý systém je striktně nastaven na **evropské standardy (24hodinový formát)**.
+Tento dokument shrnuje vnitřní logiku, nastavení osobnosti a způsoby, jakými umělá inteligence v aplikaci zpracovává vaše hlasové vstupy. Výchozí model je aktuálně `gemini-3-flash-preview`; další dostupné modely jsou uvedené v `docs/README.md`. Celý systém je striktně nastaven na **evropské standardy (24hodinový formát)**.
 
 ---
 
@@ -40,12 +40,22 @@ AI rozlišuje tři základní typy záznamů, pro které má specifická pravidl
 - **Název (Title):** Začíná ikonou `💡`, je napsán VELKÝMI PÍSMENY (max. 5 slov).
 - **Popis (Description):** Maximální iniciativa AI. Rozvíjí nápad, hledá souvislosti, navrhuje rizika a další logické postupy. Výstupem je bohatý brainstorming.
 
+### 🧰 4. Specializovaný profil: PRÁCE (WorkLog)
+*Zaměřeno na evidenci reálně odvedené práce, ne na plánování.*
+- **Kde se používá:** Pouze v záložce `Práce`.
+- **Extrahovaná pole:** `projectName`, `people`, `hours`, `description`, `date`.
+- **Projekt:** Musí odpovídat existujícímu projektu nebo ho uživatel ručně vybere v potvrzení.
+- **Hodiny:** Musí být větší než 0 a nejvýše 24.
+- **Datum:** Je datum konání práce, ne datum diktování.
+- **Oddělení od schůzek:** WorkLog nemá nahrazovat meetingy. Záznamy vypadající jako schůzky se ve výpisu Práce konzervativně filtrují.
+
 ---
 
 ## 📅 Logika termínů a času (Date vs. Deadline)
 Od verze 4.0.0 se striktně rozlišuje mezi `date` (Datum konání / začátek akce) a `deadline` (Nejzazší termín dokončení):
 - **Úkoly (Task):** Primárně pracují s `deadline`. Kdy se na nich začne pracovat je volitelné.
 - **Schůzky (Meeting):** Primárně pracují s `date`. Schůzka má konkrétní datum a čas konání.
+- **Pracovní činnosti (WorkLog):** Používají `date` jako den, kdy se práce reálně vykonala. Nepoužívají `deadline`.
 - **Relativní výrazy:** Rozumí termínům jako „dnes“, „zítra“, „v úterý“ (nejbližší budoucí) nebo „příští středu“ (nejbližší + 7 dní).
 - Pokud uživatel nadiktuje „Do zítřka musím...“, AI nastaví `deadline` na zítřek. Pokud řekne „Zítra mám meeting...“, AI nastaví `date` na zítřek.
 
@@ -64,6 +74,7 @@ Od verze 4.0.0 se striktně rozlišuje mezi `date` (Datum konání / začátek a
    - AI při hlasové změně (např. „posuň to na 12:00“) nesmí smazat původní bohatý popis. Změny se slučují.
    - Lokální změny z UI a změny od AI se slučují na základě atributu `updatedAt`. Pokud dojde v offline režimu na jiném zařízení k úpravě, novější `updatedAt` vítězí.
 5. **Soft Delete:** Smazané úkoly nejsou ihned nevratně odstraněny (kvůli prevenci ztráty dat při synchronizaci). Jsou označeny symbolem `isDeleted` a fyzicky odstaněny až po potvrzené synchronizaci na Disk/Cloud.
+6. **Práce je oddělená datová doména:** `workLogs` a `projects` jsou samostatné Dexie tabulky a synchronizují se přes `work_logs_data.json`. Nejsou to `tasks`.
 
 ---
-*Bitevní Plán v4.0.0 – Vždy o krok napřed.*
+*Bitevní Plán v4.1.0 – Vždy o krok napřed.*

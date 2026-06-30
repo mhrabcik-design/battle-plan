@@ -1,6 +1,8 @@
-# AI INTELLIGENCE MANIFEST (v1.0)
+# AI INTELLIGENCE MANIFEST (v4.1)
 
 Tento dokument definuje, jak umělá inteligence v aplikaci **Bitevní Plán** zpracovává vstupy, jak strukturalizuje data a jakou úroveň iniciativy projevuje u různých typů záznamů.
+
+Hlavní plánovací prompt je v `battle-plan/src/services/semanticEngine.ts`. Záložka Práce má samostatný specializovaný extractor v `battle-plan/src/services/workLogExtractor.ts`.
 
 ---
 
@@ -46,22 +48,36 @@ Tento dokument definuje, jak umělá inteligence v aplikaci **Bitevní Plán** z
 - **Struktura názvu:** `💡 + NÁPAD/MYŠLENKA` (např. "💡 PŘEDPLATNÉ NA KÁVU").
 - **Bulletpointy:** Bohaté využití v `description` pro rozčlenění nápadu (např. Marketing, Logistika, Business model).
 
+### 🧰 D. Specializovaný profil: PRÁCE (WorkLog)
+*Zaměření na faktickou evidenci odpracované práce.*
+
+- **Použití:** Pouze v záložce `Práce`; nejde přes běžný task/meeting/thought prompt.
+- **Iniciativa:** Nízká až střední. AI má extrahovat fakta, ne plánovat nebo domýšlet rozsáhlé kroky.
+- **Výstupní pole:** `projectName`, `people`, `hours`, `description`, `date`.
+- **Projekt:** Pokud projekt nejde spolehlivě najít, uživatel ho doplní v potvrzovacím dialogu.
+- **Hodiny:** Musí být číslo `> 0` a `<= 24`.
+- **Datum:** Datum reálného výkonu práce. Pokud není řečeno, použije se dnešek.
+- **Schůzky:** Diktát vypadající jako schůzka/jednání nemá navyšovat sumu odpracovaných hodin.
+
 ---
 
 ## 📊 3. Technické Mapování Dat
 
-| Typ | Pole `date` / `deadline` | Pole `description` | Pole `internalNotes` |
+| Typ | Pole času | Hlavní text | RAW / poznámky |
 |:--- |:--- |:--- |:--- |
-| **Úkol** | Deadline prioritní | Exekutivní summary | RAW přepis + kontext |
-| **Schůzka** | Datum a čas konání | Strukturovaný zápis (KDO, KDE...) | RAW přepis |
-| **Myšlenka** | Datum vzniku | **Rozvinutý brainstormingový výstup** | RAW přepis |
+| **Úkol** | `deadline` prioritní | Exekutivní summary | `internalNotes` = RAW přepis + kontext |
+| **Schůzka** | `date` a `startTime` konání | Strukturovaný zápis (KDO, KDE...) | `internalNotes` = RAW přepis |
+| **Myšlenka** | `date` vzniku | Rozvinutý brainstormingový výstup | `internalNotes` = RAW přepis |
+| **Práce / WorkLog** | `date` výkonu práce | `description` = co se dělalo | Specializovaný extractor, bez `internalNotes` |
 
 ---
 
 ## 🔄 4. Protokol změn (Versioning)
-Pokud uživatel pocítí, že AI je "příliš kreativní" nebo naopak "málo iniciativní", upraví se tento manifest a následně promítne do systémového promptu v `geminiService.ts`.
+Pokud uživatel pocítí, že AI je "příliš kreativní" nebo naopak "málo iniciativní", upraví se tento manifest a následně promítne do systémového promptu v `semanticEngine.ts`.
 
-**Aktuální verze promptu v kódu:** `v2.1-dates`
+**Aktuální prompt v kódu:** `battle-plan/src/services/semanticEngine.ts` (`getSystemPrompt`).
+**Výchozí model v kódu:** `gemini-3-flash-preview`.
+**WorkLog prompt v kódu:** `battle-plan/src/services/workLogExtractor.ts` (`WORKLOG_SYSTEM_PROMPT`).
 
 ---
 
@@ -75,3 +91,10 @@ AI musí být schopna přepočítat relativní výrazy na absolutní data ve for
   - **V [den]** (pokud je dnes ten samý den) -> Příští výskyt (+7 dní).
   - **Příští [den]** nebo **Příští týden v [den]** -> Nejbližší výskyt + 7 dní.
 - **Omezení:** Relativní termíny se podporují primárně pro aktuální a příští týden. Pro delší horizonty (za měsíc atd.) se řiď kontextem nebo ponech dnešek.
+
+## 6. Oddělení plánování a evidence práce
+
+- `tasks`, `meetings` a `thoughts` popisují plán, závazky a znalostní kontext.
+- `workLogs` popisují realitu: co se skutečně dělalo, na jakém projektu, kdo u toho byl a kolik hodin to trvalo.
+- AI nesmí automaticky převádět schůzky na pracovní hodiny bez explicitního záměru uživatele.
+- Další Compound Engineering plánování by mělo držet tuto hranici: Práce je reporting/evidence, ne další úkolový seznam.

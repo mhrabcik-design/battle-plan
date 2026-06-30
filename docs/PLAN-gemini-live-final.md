@@ -1,5 +1,7 @@
 # PLAN: Finální test Gemini Live API (Unlimited)
 
+> Archivni dokument: finalni diagnostika Gemini Live API byla uzavrena a smer WebSocket/Live byl nahrazen REST workflow. Aktualni stav je v `docs/README.md`.
+
 ## Cíl
 Systematicky vyčerpat všechny možnosti zprovoznění Google Gemini Live API s neomezenými limity. Pokud selže, přejít na Abacus.ai.
 

@@ -1,5 +1,7 @@
 # Task: Auto-Sync Evolution (Timestamp-driven)
 
+> Archivni task: timestamp-based sync je uz soucasti aktualni aplikace. Soucasny stav dokumentace je v `docs/README.md`.
+
 Goal: Implement a "Newer Wins" synchronization strategy that triggers automatically when the app becomes active, ensuring seamless transition between PC and Mobile.
 
 ## 1. Analysis of Current State

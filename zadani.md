@@ -6,6 +6,7 @@
 ✅ AI Indikátor (Klíč + Online) implementován.
 ✅ Škálování UI (Font Slider) funkční.
 ✅ Multipart Google Drive Sync opraven (mobil i PC).
+✅ Záložka Práce / Pracovní činnosti je v mainu jako verze 4.1.0.
 
 ## Cíl
 Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-First aplikaci** s hlubokou integrací do Google ekosystému.
@@ -84,11 +85,11 @@ Optimalizace stávajícího audio workflow pro maximální rychlost s využitím
    - Audio a haptická zpětná vazba pro lepší UX (Pípnutí/Vibrace).
 
 2. **Výběr modelů (Audio/REST):** ✅
-   - Integrace 4 stabilních modelů:
-     - `gemini-2.0-flash` (Default - rychlá odezva)
-     - `gemini-1.5-flash` (Ekonomická varianta)
-     - `gemini-2.5-flash` (Premium/Experimentální)
-     - `gemini-1.5-pro` (Hluboká analýza)
+   - Aktuální registr modelů je v `battle-plan/src/services/geminiService.ts`:
+     - `gemini-3-flash-preview` (Default)
+     - `gemini-2.5-flash`
+     - `gemini-2.5-flash-lite`
+     - `gemini-2.5-pro`
 
 ## Technické kroky (Dokončeno)
 - ✅ Implementace Silence Detection a Audio/Haptické odezvy.
@@ -106,13 +107,13 @@ Vylepšit schopnost AI pracovat s relativními časovými údaji pro přesnějš
    - Podpora pro "příští týden v [den]" (+7 k nadcházejícímu).
    
 2. **Upgrade Modelu:** ✅
-   - Přechod na `gemini-2.0-flash` jako výchozí model pro bleskové zpracování.
+   - Výchozí model je nyní `gemini-3-flash-preview`.
 
 ## Technické kroky (Dokončeno)
 - ✅ Úprava `geminiService.ts`: Předávání názvu dne v týdnu do kontextu AI.
 - ✅ Implementace robustní logiky termínů do systémového promptu (4 základní pravidla).
 - ✅ Aktualizace JSON příkladu pro AI (přidání polí `date` a `deadline`).
-- ✅ Nastavení `gemini-2.0-flash` jako default fallbacku v kódu.
+- ✅ Nastavení `gemini-3-flash-preview` jako default modelu v kódu.
 
 ## Cíl (Phase 6 - Visual Polish & Legibility) ✅
 Dokončit vizuální ladění, sjednotit designové prvky a zajistit maximální čitelnost na všech zařízeních.
@@ -163,4 +164,38 @@ Zajištění stoprocentní spolehlivosti synchronizace, ochrana dat při AI aktu
 - ✅ Fixace časových os v kalendáři na pevný 24h textový formát.
 
 ---
-*Všechny cíle pro verzi 3.0.0+ byly naplněny. Systém je robustní, rychlý a profesionálně odladěný.*
+## Cíl (Phase 8 - Pracovní činnosti / WorkLogs) ✅
+Oddělit reálnou odvedenou práci od úkolů a schůzek, aby bylo možné večer rychle zapsat, kdo na čem pracoval a kolik hodin tomu věnoval.
+
+1. **Záložka Práce:** ✅
+   - Nový `viewMode: worklogs` a položka `Práce` v navigaci.
+   - Přehled karet, tabulky a kalendáře pracovních činností.
+   - Součet hodin počítaný jen z relevantních pracovních záznamů.
+
+2. **Projekty a záznamy:** ✅
+   - `Project` drží název, barvu a aktivitu projektu.
+   - `WorkLog` drží datum práce, projekt, lidi, hodiny, popis a zdroj (`voice` nebo `manual`).
+   - Projekty jsou soft-deletované přes `isActive`, aby historické worklogy zůstaly čitelné.
+
+3. **Hlasové zadání Práce:** ✅
+   - `WorkLogVoiceBar` umožňuje diktování přímo v záložce Práce.
+   - `workLogExtractor.ts` používá Gemini REST prompt specializovaný na pracovní činnosti.
+   - `WorkLogVoiceConfirm` dává uživateli možnost potvrdit / doplnit projekt před uložením.
+
+4. **Synchronizace Práce:** ✅
+   - `workLogsSync.ts` ukládá `work_logs_data.json` do složky `/Anu-BattlePlan/`.
+   - Merge používá `updatedAt` a pro WorkLog dočasně composite key `date|projectName|people`.
+   - Ověření je zapsané v `battle-plan/docs/F5-verification-report.md` a `battle-plan/docs/F6-verification-report.md`.
+
+5. **Ochrana proti schůzkám v Práci:** ✅
+   - `workLogFilter.ts` konzervativně skrývá záznamy, které vypadají jako schůzka/jednání/meeting.
+   - UI ukazuje počet skrytých záznamů, aby filtr nebyl tichý.
+
+## Otevřené návaznosti pro další plánování
+- F7+: přidat stabilní `clientId` pro `Project` a `WorkLog`, aby sync nepracoval přes názvy a composite key.
+- Rozhodnout, zda se Práce bude reportovat měsíčně, týdně, nebo podle projektu.
+- Doplnit standardní testovací infrastrukturu místo ad-hoc ověřovacích skriptů.
+- Zvážit, zda meeting filtr má zůstat pouze heuristický, nebo má být explicitní typ / příznak v datech.
+
+---
+*Všechny cíle pro verzi 4.1.0 byly naplněny podle aktuálního stavu dokumentace. Systém je robustní, rychlý a připravený na další Compound Engineering plánování.*

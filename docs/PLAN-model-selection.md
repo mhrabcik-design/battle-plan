@@ -1,5 +1,7 @@
 # PLAN: Optimalizace výběru modelů
 
+> Archivni dokument: konkretni seznam modelu v tomto planu je zastaraly. Aktualni model registry je v `battle-plan/src/services/geminiService.ts` a shrnuti v `docs/README.md`.
+
 ## Kontext
 Billing je nastaven. Potřebujeme vybrat správné modely do dropdownu v nastavení.
 

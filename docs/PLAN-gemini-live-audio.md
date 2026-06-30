@@ -1,5 +1,7 @@
 # PLAN: Gemini 2.5 Flash Native Audio (Version 3.0)
 
+> Archivni dokument: tato WebSocket/Gemini Live cesta byla opustena. Aktualni stav je popsany v `docs/README.md` a aplikace pouziva Gemini REST workflow.
+
 ## Cíl
 Implementace **Multimodal Live API** pro využití modelu `gemini-2.5-flash-native-audio-dialog`, který nabízí neomezené limity (Unlimited RPM/RPD) v aktuálním tieru.
 

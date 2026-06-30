@@ -21,19 +21,18 @@ Pro zálohování dat a synchronizaci s kalendářem:
 
 ---
 
-## 2. Přehled AI modelů a náklady 🧠
+## 2. Přehled AI modelů 🧠
 
-V nastavení si můžete zvolit mozek aplikace. Ceny jsou odvozeny z průměrného diktátu (cca 1000 vstupních a 200 výstupních tokenů*).
+V nastavení si můžete zvolit mozek aplikace. Aktuální seznam vychází z registru modelů v `battle-plan/src/services/geminiService.ts`.
 
-| Model | Charakteristika | Relativní kvalita | Cena (za 1M tokenů) | Odhad/měsíc** |
-| :--- | :--- | :--- | :--- | :--- |
-| **gemini-2.0-flash** | **Doporučeno.** Nejlepší poměr rychlost/inteligence. | ⭐⭐⭐⭐ | ~$0.10 in / $0.40 out | **~7 Kč** (0.27$) |
-| **gemini-1.5-flash** | **Úsporný.** Extrémně levný, vhodný pro rychlé poznámky. | ⭐⭐⭐ | ~$0.075 in / $0.30 out | **~5 Kč** (0.20$) |
-| **gemini-2.5-flash** | **Premium.** Vyšší přesnost a lepší pochopení kontextu. | ⭐⭐⭐⭐⭐ | ~$0.30 in / $2.50 out | **~30 Kč** (1.20$) |
-| **gemini-1.5-pro** | **Analytik.** Pro velmi dlouhé zápisy a komplexní projekty. | ⭐⭐⭐⭐⭐ | ~$1.25 in / $5.00 out | **~85 Kč** (3.30$) |
+| Model | Charakteristika | Doporučené použití |
+| :--- | :--- | :--- |
+| **gemini-3-flash-preview** | **Výchozí model.** Nejnovější rychlý model v aplikaci. | Denní diktování a běžné aktualizace záznamů. |
+| **gemini-2.5-flash** | Rychlý a kvalitní model pro širší úlohy. | Běžná práce, když preview model není vhodný. |
+| **gemini-2.5-flash-lite** | Lehčí varianta pro úspornější zpracování. | Jednoduché diktáty a rychlé poznámky. |
+| **gemini-2.5-pro** | Nejsilnější volba v seznamu. | Dlouhé, komplexní nebo nejednoznačné vstupy. |
 
-*\* Přibližná cena za 1 milion tokenů (vstup/výstup). Pro většinu uživatelů platí bezplatný limit (Free Tier).*  
-*\*\* Odhadovaná cena při intenzivním používání **50 diktátů denně po dobu 30 dnů**.*
+Ceníky a dostupnost modelů se mohou měnit podle Google AI účtu a regionu. Pokud řešíte náklady, berte jako závazný zdroj aktuální ceník Google AI Studio.
 
 ---
 
@@ -44,6 +43,7 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 ### Jak nahrávat
 - **Hlavní mikrofon (dole):** Vytvoří nový záznam (úkol, schůzku nebo myšlenku).
 - **Mikrofon u úkolu:** Aktualizuje konkrétní úkol (např. "Změň čas na 14:00" nebo "Doplň poznámku").
+- **Diktování v záložce Práce:** Vytvoří pracovní činnost s projektem, lidmi, hodinami, datem a popisem. Před uložením se zobrazí potvrzovací okno.
 
 ### Inteligentní funkce
 - **Detekce ticha:** Stačí mluvit. Jakmile se na pár sekund odmlčíte, aplikace nahrávání sama ukončí a odešle k analýze.
@@ -63,6 +63,15 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 - **Plán:** Váš strategický přehled pro dnešní den. Zobrazuje vše, co vyžaduje pozornost.
 - **Týden:** Profesionální časová osa (7:00 – 19:00). Úkoly se v tomto pohledu zobrazují přesně v den svého **deadline**.
 - **Úkoly / Schůzky / Myšlenky:** Filtrované seznamy pro hloubkovou práci.
+- **Práce:** Evidence reálně odpracovaných činností. Každý záznam má projekt, lidi, počet hodin, datum a popis. Zobrazení lze přepnout mezi kartami, kalendářem a tabulkou.
+- **Návrhy:** Schvalování návrhů od Anu před jejich zápisem do plánu.
+
+### Práce (Pracovní činnosti)
+Záložka **Práce** slouží pro večerní evidenci toho, co se skutečně dělalo.
+- **Přidat činnost:** Ruční formulář pro projekt, datum, lidi, hodiny a popis.
+- **Diktovat:** Hlasový vstup vytáhne pracovní činnost přes Gemini a otevře potvrzení před uložením.
+- **Projekty:** Projekt je povinný kvůli pozdějšímu přehledu a synchronizaci.
+- **Filtrování schůzek:** Pokud záznam vypadá jako schůzka nebo jednání, nezapočítá se do sumy práce a UI ukáže, kolik záznamů bylo skryto.
 
 ### Focus Mode (Detailní editace)
 Kliknutím na jakýkoliv úkol otevřete **Focus Mode**. Ten maximalizuje prostor pro psaní poznámek a umožňuje detailní nastavení:
@@ -79,6 +88,7 @@ Vaše data jsou v bezpečí a dostupná všude.
 - **Google Drive:** Aplikace automaticky zálohuje vaše data i nastavení na váš Google Disk. **Přihlášení je nyní stabilní** – aplikace si obnovuje přístup na pozadí, abyste se nemuseli každou hodinu znovu přihlašovat.
 - **Google Kalendář:** U schůzek (Meetingů) se v detailu úkolu objeví tlačítko **Odeslat do Kalendáře**.
 - **Google Tasks:** Úkoly jsou obousměrně synchronizovány. Co splníte v Bitevním Plánu, odškrtne se i v Google Tasks a naopak.
+- **Pracovní činnosti:** Projekty a worklogy se synchronizují samostatně přes `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
 
 ---
 
@@ -89,4 +99,4 @@ Vaše data jsou v bezpečí a dostupná všude.
 3. **Diagnostika:** Pokud něco nefunguje, sekce **Diagnostika** v sidebaru vám ukáže technické logy a stav připojení k AI.
 
 ---
-*Vytvořeno pro verzi 3.0.0 – Bitevní Plán: Vždy o krok napřed.*
+*Aktualizováno pro verzi 4.1.0 – Bitevní Plán: Vždy o krok napřed.*

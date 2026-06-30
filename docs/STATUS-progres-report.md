@@ -1,5 +1,7 @@
 # PROJEKTOVÝ STATUS: Bitevní Plán (Audio AI PWA)
 
+> Archivni status k 31. 1. 2026. Aktualni orientacni dokument je `docs/README.md`; roadmapovy souhrn je v `../zadani.md`.
+
 Zpráva o stavu k: **31. 1. 2026, 14:40**
 Celkový progres projektu: **~95% (Produkční verze v testování)**
 
