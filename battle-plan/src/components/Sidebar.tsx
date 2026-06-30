@@ -30,7 +30,7 @@ export function Sidebar({
                     </div>
                     <span className="text-base font-black uppercase tracking-tight text-white leading-none">Bitevní Plán</span>
                 </div>
-                <span className="text-sm text-slate-500 font-bold tracking-widest uppercase ml-10 opacity-70">Desktop Suite v4.0.0</span>
+                <span className="text-sm text-slate-500 font-bold tracking-widest uppercase ml-10 opacity-70">Desktop Suite v4.1.0</span>
             </div>
 
             <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-6">
