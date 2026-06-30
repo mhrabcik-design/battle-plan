@@ -59,7 +59,9 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   }, [googleAuth.isSignedIn, onAddLog]);
 
   useEffect(() => {
-    loadAll();
+    queueMicrotask(() => {
+      loadAll();
+    });
     const t = setInterval(loadAll, 30_000);
     return () => clearInterval(t);
   }, [loadAll]);
@@ -101,6 +103,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             .join('\n')
         : '';
       const fullDescription = (suggestion.description ?? '') + noteSection;
+      const now = new Date().getTime();
 
       const newId = await db.tasks.add({
         title: suggestion.title,
@@ -110,8 +113,8 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         urgency: suggestion.context.priority === 'high' ? 3 : suggestion.context.priority === 'low' ? 1 : 2,
         date: deadline,
         deadline: deadline,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
       });
 
       // Post action reply

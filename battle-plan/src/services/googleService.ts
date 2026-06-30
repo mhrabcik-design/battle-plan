@@ -353,7 +353,7 @@ class GoogleService {
             const eightAmDate = new Date(`${dateStr}T08:00:00`);
             const minutesBefore8AM = Math.floor((baseDate.getTime() - eightAmDate.getTime()) / 60000);
 
-            let overrides: any[] = [];
+            const overrides: any[] = [];
 
             if (task.status !== 'completed') {
                 overrides.push({ method: 'popup', minutes: 24 * 60 }); // 24 hodin předem

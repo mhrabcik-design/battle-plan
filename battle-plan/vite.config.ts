@@ -2,9 +2,15 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import packageJson from './package.json'
 
 export default defineConfig({
   base: '/battle-plan/',
+  define: {
+    __APP_VERSION__: JSON.stringify(packageJson.version),
+    __BUILD_TIME__: JSON.stringify(process.env.BP_BUILD_TIME ?? new Date().toISOString()),
+    __BUILD_COMMIT__: JSON.stringify(process.env.BP_BUILD_COMMIT ?? process.env.GITHUB_SHA ?? ''),
+  },
   plugins: [
     react(),
     tailwindcss(),

@@ -45,10 +45,10 @@ Klicove aktualni principy:
 | Oblast | Aktualni rozhodnuti |
 | --- | --- |
 | Aplikace | `battle-plan/`, React + TypeScript + Vite |
-| Verze | `4.2.1` |
+| Verze | `4.3.0` |
 | UI | desktop-first office rozhrani, responzivni mobilni PWA |
 | AI modely v kodu | `gemini-3-flash-preview` jako default; dale `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro` |
-| Audio | REST API, normalizace audio blobu na podporovany inline audio format; WorkLogs maji vlastni extractor |
+| Audio | REST API, sdilena audio AI pipeline pro pripravu blobu; WorkLogs maji vlastni extractor |
 | Data | Dexie schema v8, soft delete u tasku, `updatedAt` pro merge, `projects` a `workLogs` pro Praci |
 | Google | OAuth, Drive backup/restore, Tasks, Calendar, `/Anu-BattlePlan/` slozka |
 | Drive soubory | `battle_plan_data.json`, `work_logs_data.json`, agent/suggestions soubory podle integrace Anu |
@@ -66,13 +66,13 @@ Verzovani pouziva format `major.minor.patch`:
 Release disciplina:
 
 1. Pred produkcnim deployem zvedni verzi v `battle-plan/package.json`.
-2. Viditelna verze v UI musi odpovidat `package.json`; nema zustat natvrdo stary text.
+2. Viditelna verze v UI a Diagnostice musi odpovidat `package.json`; nema zustat natvrdo stary text.
 3. Po buildu nasad `battle-plan/dist` na `gh-pages`; samotny push do `main` neaktualizuje web `mhrabcik-design.github.io/battle-plan/`.
 4. V commitu nebo souhrnu udelej jasne, jaka verze je nasazena a co se v ni zmenilo.
 
 ## Aktualni modul Prace
 
-Zalozka `Prace` (`viewMode: worklogs`) je aktualni jadro verze 4.2.1.
+Zalozka `Prace` (`viewMode: worklogs`) zustava aktualni jadro evidence prace; verze 4.3.0 pridava runtime diagnostiku a sdilenou audio pipeline kolem existujiciho WorkLogs zakladu.
 
 | Cast | Soubor |
 | --- | --- |

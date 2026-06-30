@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 import { db, type WorkLog, type Project } from '../db';
 
 /**
@@ -232,7 +230,8 @@ export async function mergeCloudToLocal(
             const local = localWorkLogsByCompositeKey.get(key);
             if (!local) {
                 // Cloud-only → přidej (s novým ID)
-                const { id: _ignored, ...withoutId } = cw;
+                const withoutId = { ...cw };
+                delete withoutId.id;
                 await db.workLogs.add({
                     ...withoutId,
                     source: withoutId.source ?? 'voice',
@@ -256,7 +255,8 @@ export async function mergeCloudToLocal(
         for (const cp of cloudProjects) {
             const local = localProjectsByName.get(cp.name.toLowerCase());
             if (!local) {
-                const { id: _ignored, ...withoutId } = cp;
+                const withoutId = { ...cp };
+                delete withoutId.id;
                 await db.projects.add({
                     ...withoutId,
                     isActive: withoutId.isActive ?? true,

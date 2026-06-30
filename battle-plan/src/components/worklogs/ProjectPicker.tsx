@@ -32,7 +32,9 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
     };
 
     useEffect(() => {
-        loadProjects();
+        queueMicrotask(() => {
+            loadProjects();
+        });
     }, []);
 
     // Zavři dropdown při kliknutí mimo

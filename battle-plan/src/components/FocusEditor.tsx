@@ -366,7 +366,7 @@ function DurationAllDayEditor({
     const [durationText, setDurationText] = useState<string>(formatDuration(editingTask.duration));
 
     useEffect(() => {
-        setDurationText(formatDuration(editingTask.duration));
+        queueMicrotask(() => setDurationText(formatDuration(editingTask.duration)));
     }, [editingTask.duration]);
 
     const handleDurationBlur = () => {

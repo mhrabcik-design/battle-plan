@@ -1,6 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { db, type WorkLog, type Project } from '../db.ts';
 import {
+    fetchWithTimeout,
+    getErrorMessage,
+    getRetryDelay,
+    isRetryableFetchError,
+    prepareGeminiAudio,
+    sleep,
+} from './audioAiPipeline.ts';
+import {
     calculatePersonHours,
     createWorkLogProposal,
     dateRegex,
@@ -296,26 +304,6 @@ export async function applyExtractedWorkLog(
 
 // === Audio processing (paralelní geminiService.processAudio, ale s WorkLog promptem) ===
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const FETCH_TIMEOUT = 30000;
-
-const fetchWithTimeout = async (url: string, options: RequestInit, timeout = FETCH_TIMEOUT): Promise<Response> => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-    try {
-        return await fetch(url, { ...options, signal: controller.signal });
-    } finally {
-        clearTimeout(timeoutId);
-    }
-};
-
-const normalizeMimeType = (type: string | undefined): string | null => {
-    if (!type) return null;
-    const supported = new Set(['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/aiff', 'audio/aac', 'audio/ogg', 'audio/flac', 'audio/webm']);
-    if (supported.has(type)) return type === 'audio/mp3' ? 'audio/mpeg' : type;
-    return 'audio/wav';
-};
-
 const buildWorkLogSystemPrompt = (referenceDate = new Date()): string => {
     const todayIso = toIsoDate(referenceDate);
     const todayLabel = referenceDate.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -346,13 +334,7 @@ export async function processWorkLogAudio(
 
     const modelId = (await db.settings.get('gemini_model'))?.value ?? 'gemini-2.5-flash';
 
-    // Normalizace audia (stejný princip jako v geminiService)
-    const base64Data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
+    const audio = await prepareGeminiAudio(blob);
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
     const maxAttempts = 4;
@@ -370,7 +352,7 @@ export async function processWorkLogAudio(
                     contents: [{
                         parts: [
                             { text: buildWorkLogSystemPrompt() },
-                            { inline_data: { mime_type: normalizeMimeType(blob.type) ?? 'audio/wav', data: base64Data } },
+                            { inline_data: { mime_type: audio.mimeType, data: audio.base64Data } },
                         ],
                     }],
                     generation_config: {
@@ -390,7 +372,7 @@ export async function processWorkLogAudio(
                 lastError = `${response.status}: ${msg}`;
 
                 if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 10000);
+                    const delay = getRetryDelay(attempt);
                     onRetry?.(attempt, delay);
                     await sleep(delay);
                     continue;
@@ -419,13 +401,14 @@ export async function processWorkLogAudio(
 
             return sanitizeExtractedWorkLog(parsed);
         } catch (e) {
-            lastError = e instanceof Error ? e.message : String(e);
-            if (attempt < maxAttempts) {
-                const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 10000);
+            lastError = getErrorMessage(e);
+            if (attempt < maxAttempts && isRetryableFetchError(e)) {
+                const delay = getRetryDelay(attempt);
                 onRetry?.(attempt, delay);
                 await sleep(delay);
                 continue;
             }
+            break;
         }
     }
 

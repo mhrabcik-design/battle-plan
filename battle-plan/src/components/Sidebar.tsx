@@ -10,6 +10,7 @@ interface SidebarProps {
     setShowSettings: (show: boolean) => void;
     isProcessing: boolean;
     suggestionsBadge: number;
+    appVersion: string;
 }
 
 export function Sidebar({
@@ -19,7 +20,8 @@ export function Sidebar({
     navItems,
     setShowSettings,
     isProcessing,
-    suggestionsBadge
+    suggestionsBadge,
+    appVersion
 }: SidebarProps) {
     return (
         <aside className="hidden md:flex flex-col w-64 border-r border-white/5 bg-[#05070a]/90 backdrop-blur-2xl shadow-2xl shrink-0 relative z-[60]">
@@ -30,7 +32,7 @@ export function Sidebar({
                     </div>
                     <span className="text-base font-black uppercase tracking-tight text-white leading-none">Bitevní Plán</span>
                 </div>
-                <span className="text-sm text-slate-500 font-bold tracking-widest uppercase ml-10 opacity-70">Desktop Suite v4.2.1</span>
+                <span className="text-sm text-slate-500 font-bold tracking-widest uppercase ml-10 opacity-70">Desktop Suite v{appVersion}</span>
             </div>
 
             <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-6">

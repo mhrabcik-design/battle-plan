@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 export interface AgentSuggestion {
   id: string;
   created_at: number;

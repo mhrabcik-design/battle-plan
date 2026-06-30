@@ -22,14 +22,14 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
 
     const logs = useLiveQuery(async () => {
         return await db.workLogs.orderBy('date').reverse().toArray();
-    }, []) ?? [];
+    }, []);
 
     const projects = useLiveQuery(async () => {
         return await db.projects.toArray();
     }, []) ?? [];
 
     const { workLogs: effectiveLogs, hiddenCount } = useMemo(
-        () => filterWorkLogsForPrace(logs),
+        () => filterWorkLogsForPrace(logs ?? []),
         [logs],
     );
 

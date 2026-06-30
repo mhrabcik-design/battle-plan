@@ -7,6 +7,7 @@
 ✅ Škálování UI (Font Slider) funkční.
 ✅ Multipart Google Drive Sync opraven (mobil i PC).
 ✅ Záložka Práce / Pracovní činnosti je v mainu jako verze 4.2.1.
+✅ Runtime diagnostika, build identity a sdílená audio AI pipeline jsou připravené jako verze 4.3.0.
 
 ## Cíl
 Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-First aplikaci** s hlubokou integrací do Google ekosystému.
