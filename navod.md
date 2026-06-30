@@ -100,4 +100,4 @@ Vaše data jsou v bezpečí a dostupná všude.
 3. **Diagnostika:** Pokud něco nefunguje, sekce **Diagnostika** v sidebaru vám ukáže technické logy a stav připojení k AI.
 
 ---
-*Aktualizováno pro verzi 4.2.0 – Bitevní Plán: Vždy o krok napřed.*
+*Aktualizováno pro verzi 4.2.1 – Bitevní Plán: Vždy o krok napřed.*

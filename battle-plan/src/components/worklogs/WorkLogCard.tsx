@@ -2,7 +2,12 @@ import { useState } from 'react';
 import { Trash2, Edit3, Save, X } from 'lucide-react';
 import { db, type WorkLog, type Project } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
-import { hasExplainedPersonHours } from '../../utils/workLogBatch';
+import {
+    countPeopleInText,
+    derivePersonHourMetadata,
+    getWorkLogRowIssues,
+    parseDecimalHours,
+} from '../../utils/workLogBatch';
 
 interface WorkLogCardProps {
     log: WorkLog;
@@ -27,7 +32,49 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
     const [project, setProject] = useState<Project | null>(null);
     const [people, setPeople] = useState(log.people);
     const [hours, setHours] = useState(String(log.hours));
+    const [hoursPerPerson, setHoursPerPerson] = useState(log.hoursPerPerson == null ? '' : String(log.hoursPerPerson));
     const [description, setDescription] = useState(log.description ?? '');
+
+    const showPersonHourEditor = log.hours > 24 || log.hoursPerPerson != null || hoursPerPerson !== '';
+
+    const startEditing = () => {
+        setDate(log.date);
+        setProject(null);
+        setPeople(log.people);
+        setHours(String(log.hours));
+        setHoursPerPerson(log.hoursPerPerson == null ? '' : String(log.hoursPerPerson));
+        setDescription(log.description ?? '');
+        setEditing(true);
+    };
+
+    const updatePeople = (value: string) => {
+        setPeople(value);
+        const metadata = derivePersonHourMetadata({
+            people: value,
+            hours: parseDecimalHours(hours),
+            hoursPerPerson,
+        });
+        if (metadata.hoursPerPerson) {
+            setHours(String(metadata.hours));
+        }
+    };
+
+    const updateHoursPerPerson = (value: string) => {
+        setHoursPerPerson(value);
+        const metadata = derivePersonHourMetadata({
+            people,
+            hours: parseDecimalHours(hours),
+            hoursPerPerson: value,
+        });
+        if (metadata.hoursPerPerson) {
+            setHours(String(metadata.hours));
+        }
+    };
+
+    const updateTotalHours = (value: string) => {
+        setHours(value);
+        setHoursPerPerson('');
+    };
 
     const handleDelete = async () => {
         if (log.id == null) return;
@@ -37,10 +84,24 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
 
     const handleSave = async () => {
         if (log.id == null) return;
-        const hoursNum = parseFloat(hours.replace(',', '.'));
-        if (Number.isNaN(hoursNum) || hoursNum <= 0) return;
-        if (!hasExplainedPersonHours(hoursNum, log.peopleCount, log.hoursPerPerson)) {
-            alert('Hodiny nad 24 jsou povolené jen u záznamů s výpočtem člověkohodin.');
+        const hoursNum = parseDecimalHours(hours);
+        const metadata = derivePersonHourMetadata({
+            people,
+            hours: hoursNum,
+            hoursPerPerson,
+        });
+        const saveHours = metadata.hours;
+        const issues = getWorkLogRowIssues({
+            projectSelected: true,
+            date,
+            people,
+            hours: saveHours,
+            peopleCount: metadata.peopleCount,
+            hoursPerPerson: metadata.hoursPerPerson,
+            requirePeople: Boolean(metadata.hoursPerPerson) || saveHours > 24,
+        });
+        if (issues.length > 0) {
+            alert(issues.join(' '));
             return;
         }
 
@@ -54,7 +115,10 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
         const updates: Partial<WorkLog> = {
             date,
             people: people.trim(),
-            hours: hoursNum,
+            hours: saveHours,
+            hoursPerPerson: metadata.hoursPerPerson,
+            peopleCount: metadata.peopleCount,
+            calculationNote: metadata.calculationNote,
             description: description.trim() || undefined,
             updatedAt: Date.now(),
         };
@@ -81,7 +145,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                         <input
                             type="text"
                             value={people}
-                            onChange={(e) => setPeople(e.target.value)}
+                            onChange={(e) => updatePeople(e.target.value)}
                             placeholder="Kdo byl"
                             className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white"
                         />
@@ -90,11 +154,31 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                             step="0.25"
                             min="0"
                             value={hours}
-                            onChange={(e) => setHours(e.target.value)}
+                            onChange={(e) => updateTotalHours(e.target.value)}
                             placeholder="Hodiny"
                             className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white"
                         />
                     </div>
+                    {showPersonHourEditor && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <input
+                                type="number"
+                                step="0.25"
+                                min="0"
+                                value={hoursPerPerson}
+                                onChange={(e) => updateHoursPerPerson(e.target.value)}
+                                placeholder="H / osoba"
+                                className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white"
+                            />
+                            <div className="md:col-span-2 px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-500 uppercase tracking-widest">
+                                {derivePersonHourMetadata({
+                                    people,
+                                    hours: parseDecimalHours(hours),
+                                    hoursPerPerson,
+                                }).calculationNote || (countPeopleInText(people) > 0 ? 'Bez výpočtu člověkohodin' : 'Doplň lidi pro výpočet')}
+                            </div>
+                        </div>
+                    )}
                     <div className="space-y-1.5">
                         <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Projekt</label>
                         <ProjectPicker
@@ -160,7 +244,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                     <div className="flex flex-col gap-1">
                         <button
                             type="button"
-                            onClick={() => setEditing(true)}
+                            onClick={startEditing}
                             className="p-1.5 text-slate-500 hover:text-indigo-400 transition-all"
                             title="Upravit"
                         >

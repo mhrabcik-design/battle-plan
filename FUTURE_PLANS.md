@@ -49,7 +49,7 @@ Cílem je udělat z Bitevního Plánu aktivního hlídače tvého času, nejen p
 
 ## 🧰 3. Práce / WorkLogs F7+
 
-Navazuje na verzi 4.2.0, kde je hotové MVP záložky Práce, hlasový vstup, batch diktování člověkohodin a Drive sync.
+Navazuje na verzi 4.2.1, kde je hotové MVP záložky Práce, hlasový vstup, batch diktování člověkohodin, tvrdší validace a Drive sync.
 
 ### Prioritní náměty:
 - **Stabilní clientId:** Přidat UUID/clientId do `Project` a `WorkLog`, aby sync nemusel používat `name` a composite key `date|projectName|people`.

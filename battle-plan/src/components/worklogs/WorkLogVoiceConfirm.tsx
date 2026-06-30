@@ -4,7 +4,7 @@ import { Mic, Save, X, AlertTriangle, RotateCcw, Trash2 } from 'lucide-react';
 import { db, type Project, type WorkLog } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
 import { findProjectByName, type ApplyResult, type ExtractedWorkLog, type ExtractedWorkLogBatch } from '../../services/workLogExtractor';
-import { hasExplainedPersonHours } from '../../utils/workLogBatch';
+import { derivePersonHourMetadata, getWorkLogRowIssues, parseDecimalHours } from '../../utils/workLogBatch';
 
 interface WorkLogVoiceConfirmProps {
     extracted: ExtractedWorkLogBatch;
@@ -17,14 +17,6 @@ type EditableEntry = ExtractedWorkLog & {
     project: Project | null;
 };
 
-const parseHours = (value: number | string | undefined): number => {
-    const parsed = typeof value === 'number' ? value : parseFloat(String(value ?? '').replace(',', '.'));
-    return Number.isNaN(parsed) ? 0 : parsed;
-};
-
-const peopleCountFromText = (people: string): number =>
-    people.split(',').map((p) => p.trim()).filter(Boolean).length;
-
 export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: WorkLogVoiceConfirmProps) {
     const [entries, setEntries] = useState<EditableEntry[]>(
         extracted.entries.map((entry, index) => ({
@@ -36,7 +28,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
     const [saving, setSaving] = useState(false);
 
     const totalHours = useMemo(
-        () => entries.reduce((sum, entry) => sum + parseHours(entry.hours), 0),
+        () => entries.reduce((sum, entry) => sum + parseDecimalHours(entry.hours), 0),
         [entries],
     );
 
@@ -64,14 +56,16 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
             if (entry.localId !== localId) return entry;
             const next = { ...entry, ...updates };
             if ('hoursPerPerson' in updates || 'people' in updates) {
-                const hoursPerPerson = parseHours(next.hoursPerPerson);
-                const peopleCount = peopleCountFromText(next.people);
-                if (hoursPerPerson > 0 && peopleCount > 0) {
-                    const total = Math.round(hoursPerPerson * peopleCount * 100) / 100;
-                    next.hours = total;
-                    next.peopleCount = peopleCount;
-                    next.calculationNote = `${peopleCount} ${peopleCount === 1 ? 'člověk' : peopleCount < 5 ? 'lidé' : 'lidí'} × ${hoursPerPerson} h = ${total} h`;
-                }
+                Object.assign(next, derivePersonHourMetadata({
+                    people: next.people,
+                    hours: parseDecimalHours(next.hours),
+                    hoursPerPerson: next.hoursPerPerson,
+                }));
+            }
+            if ('hours' in updates) {
+                next.hoursPerPerson = undefined;
+                next.peopleCount = undefined;
+                next.calculationNote = undefined;
             }
             return next;
         }));
@@ -87,12 +81,16 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
             return;
         }
 
-        const invalid = entries.find((entry) => {
-            const hours = parseHours(entry.hours);
-            return !entry.project || !entry.date || hours <= 0 || !hasExplainedPersonHours(hours, entry.peopleCount, entry.hoursPerPerson);
-        });
+        const invalid = entries.find((entry) => getWorkLogRowIssues({
+            projectSelected: Boolean(entry.project),
+            date: entry.date,
+            people: entry.people,
+            hours: entry.hours,
+            peopleCount: entry.peopleCount,
+            hoursPerPerson: entry.hoursPerPerson,
+        }).length > 0);
         if (invalid) {
-            alert('Zkontrolujte projekt, datum a výpočet hodin u všech řádků.');
+            alert('Zkontrolujte neúplné řádky. U diktované práce musí být projekt, datum, lidi a platné hodiny.');
             return;
         }
 
@@ -109,7 +107,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                         projectId: project.id!,
                         projectName: project.name,
                         people: entry.people.trim(),
-                        hours: parseHours(entry.hours),
+                        hours: parseDecimalHours(entry.hours),
                         hoursPerPerson: entry.hoursPerPerson,
                         peopleCount: entry.peopleCount,
                         calculationNote: entry.calculationNote,
@@ -186,8 +184,17 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                         )}
 
                         <div className="space-y-3">
-                            {entries.map((entry, index) => (
-                                <div key={entry.localId} className="bg-slate-950/50 border border-slate-800 rounded-xl p-3 space-y-3">
+                            {entries.map((entry, index) => {
+                                const rowIssues = getWorkLogRowIssues({
+                                    projectSelected: Boolean(entry.project),
+                                    date: entry.date,
+                                    people: entry.people,
+                                    hours: entry.hours,
+                                    peopleCount: entry.peopleCount,
+                                    hoursPerPerson: entry.hoursPerPerson,
+                                });
+                                return (
+                                <div key={entry.localId} className={`bg-slate-950/50 border rounded-xl p-3 space-y-3 ${rowIssues.length > 0 ? 'border-amber-500/40' : 'border-slate-800'}`}>
                                     <div className="flex items-center justify-between gap-2">
                                         <div className="text-xs font-black text-slate-500 uppercase tracking-widest">
                                             Záznam {index + 1}
@@ -239,7 +246,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                                                 step="0.25"
                                                 min="0"
                                                 value={entry.hoursPerPerson ?? ''}
-                                                onChange={(e) => updateEntry(entry.localId, { hoursPerPerson: parseHours(e.target.value) })}
+                                                onChange={(e) => updateEntry(entry.localId, { hoursPerPerson: e.target.value === '' ? undefined : parseDecimalHours(e.target.value) })}
                                                 className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:border-indigo-500 outline-none"
                                             />
                                         </div>
@@ -251,7 +258,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                                                 step="0.25"
                                                 min="0"
                                                 value={entry.hours}
-                                                onChange={(e) => updateEntry(entry.localId, { hours: parseHours(e.target.value), calculationNote: undefined })}
+                                                onChange={(e) => updateEntry(entry.localId, { hours: parseDecimalHours(e.target.value), hoursPerPerson: undefined, peopleCount: undefined, calculationNote: undefined })}
                                                 className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:border-indigo-500 outline-none"
                                             />
                                         </div>
@@ -269,9 +276,15 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                                         <div className="md:col-span-5 text-xs text-slate-500">
                                             {entry.calculationNote || 'Bez výpočtu člověkohodin'}
                                         </div>
+                                        {rowIssues.length > 0 && (
+                                            <div className="md:col-span-5 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                                                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                                                <span>{rowIssues.join(' ')}</span>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
-                            ))}
+                            )})}
                         </div>
                     </div>
 

@@ -884,7 +884,7 @@ function App() {
           {viewMode === 'debug' && (
             <div className="flex-1 flex flex-col gap-4 min-h-0">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v4.2.0)</h2>
+                <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v4.2.1)</h2>
                 <button
                   onClick={() => setDebugLogs([])}
                   className="px-3 py-1 bg-slate-800 hover:bg-red-900/20 text-slate-400 hover:text-red-400 rounded-lg text-sm font-black uppercase transition-all"

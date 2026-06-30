@@ -6,7 +6,7 @@
 ✅ AI Indikátor (Klíč + Online) implementován.
 ✅ Škálování UI (Font Slider) funkční.
 ✅ Multipart Google Drive Sync opraven (mobil i PC).
-✅ Záložka Práce / Pracovní činnosti je v mainu jako verze 4.2.0.
+✅ Záložka Práce / Pracovní činnosti je v mainu jako verze 4.2.1.
 
 ## Cíl
 Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-First aplikaci** s hlubokou integrací do Google ekosystému.
@@ -198,4 +198,4 @@ Oddělit reálnou odvedenou práci od úkolů a schůzek, aby bylo možné veče
 - Zvážit, zda meeting filtr má zůstat pouze heuristický, nebo má být explicitní typ / příznak v datech.
 
 ---
-*Verze 4.2.0 rozšiřuje Práci o batch diktování s člověkohodinami a potvrzovacím přehledem více denních záznamů.*
+*Verze 4.2.1 zpřísňuje validaci Práce po batch diktování: nejisté datum, chybějící lidi a zastaralé člověkohodiny už nejdou tiše uložit.*

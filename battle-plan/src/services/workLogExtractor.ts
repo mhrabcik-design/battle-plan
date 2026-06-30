@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { db, type WorkLog, type Project } from '../db';
+import { db, type WorkLog, type Project } from '../db.ts';
 import {
     calculatePersonHours,
     createWorkLogProposal,
@@ -7,7 +7,7 @@ import {
     hasExplainedPersonHours,
     normalizePeopleList,
     toIsoDate,
-} from '../utils/workLogBatch';
+} from '../utils/workLogBatch.ts';
 
 /**
  * WorkLog extractor — z Gemini audio transkripce vytáhne strukturovaný WorkLog.
@@ -142,10 +142,12 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
         ? raw.confirmationReasons.map((r: unknown) => String(r).trim()).filter(Boolean)
         : [];
     const entries: ExtractedWorkLog[] = [];
+    let needsConfirmation = Boolean(raw.needsConfirmation);
 
     for (const entryRaw of entriesRaw) {
         if (!entryRaw || typeof entryRaw !== 'object') continue;
         const people = normalizePeopleList(entryRaw.people);
+        const entryAssumptions: string[] = [];
         const hoursPerPerson = Number(entryRaw.hoursPerPerson);
         const totalHoursRaw = Number(entryRaw.totalHours ?? entryRaw.hours);
         const hasHoursPerPerson = !Number.isNaN(hoursPerPerson) && hoursPerPerson > 0;
@@ -165,7 +167,16 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
 
         let date = typeof entryRaw.date === 'string' ? entryRaw.date.trim() : '';
         if (!dateRegex.test(date)) {
-            date = toIsoDate(new Date());
+            date = '';
+            entryAssumptions.push('AI neurčilo platné datum práce. Vyber datum ručně.');
+            confirmationReasons.push('Některý řádek nemá platné datum práce.');
+            needsConfirmation = true;
+        }
+
+        if (people.length === 0) {
+            entryAssumptions.push('AI neurčilo lidi. Doplň alespoň jednoho člověka.');
+            confirmationReasons.push('Některý řádek nemá vyplněné lidi.');
+            needsConfirmation = true;
         }
 
         const proposal = createWorkLogProposal({
@@ -175,7 +186,7 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
             totalHours,
             description: typeof entryRaw.description === 'string' ? entryRaw.description : '',
             date,
-            assumptions,
+            assumptions: entryAssumptions,
             calculationNote: typeof entryRaw.calculationNote === 'string' ? entryRaw.calculationNote : undefined,
         });
 
@@ -191,8 +202,8 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
         data: {
             entries,
             assumptions,
-            needsConfirmation: Boolean(raw.needsConfirmation) || confirmationReasons.length > 0,
-            confirmationReasons,
+            needsConfirmation: needsConfirmation || confirmationReasons.length > 0,
+            confirmationReasons: Array.from(new Set(confirmationReasons)),
         },
     };
 }

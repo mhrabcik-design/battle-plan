@@ -42,14 +42,78 @@ export const anonymousWorkers = (count: number, startAt = 1): string[] =>
 export const calculatePersonHours = (peopleCount: number, hoursPerPerson: number): number =>
     Math.round(peopleCount * hoursPerPerson * 100) / 100;
 
+export const parseDecimalHours = (value: number | string | undefined): number => {
+    const parsed = typeof value === 'number' ? value : parseFloat(String(value ?? '').replace(',', '.'));
+    return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+export const countPeopleInText = (people: string): number => normalizePeopleList(people).length;
+
 export const hasExplainedPersonHours = (totalHours: number, peopleCount?: number, hoursPerPerson?: number): boolean => {
     if (totalHours <= 24) return true;
     if (!peopleCount || peopleCount < 2 || !hoursPerPerson || hoursPerPerson <= 0) return false;
     return Math.abs(calculatePersonHours(peopleCount, hoursPerPerson) - totalHours) < 0.01;
 };
 
-const formatCalculationNote = (peopleCount: number, hoursPerPerson: number, totalHours: number): string =>
+export const formatCalculationNote = (peopleCount: number, hoursPerPerson: number, totalHours: number): string =>
     `${peopleCount} ${peopleCount === 1 ? 'člověk' : peopleCount < 5 ? 'lidé' : 'lidí'} × ${hoursPerPerson} h = ${totalHours} h`;
+
+export const derivePersonHourMetadata = (input: {
+    people: string;
+    hours: number;
+    hoursPerPerson?: number | string;
+}): Pick<ExtractedWorkLog, 'hours' | 'hoursPerPerson' | 'peopleCount' | 'calculationNote'> => {
+    const hoursPerPerson = parseDecimalHours(input.hoursPerPerson);
+    const peopleCount = countPeopleInText(input.people);
+    if (hoursPerPerson > 0 && peopleCount > 0) {
+        const hours = calculatePersonHours(peopleCount, hoursPerPerson);
+        return {
+            hours,
+            hoursPerPerson,
+            peopleCount,
+            calculationNote: formatCalculationNote(peopleCount, hoursPerPerson, hours),
+        };
+    }
+    return {
+        hours: input.hours,
+        hoursPerPerson: undefined,
+        peopleCount: undefined,
+        calculationNote: undefined,
+    };
+};
+
+export const getWorkLogRowIssues = (input: {
+    projectSelected?: boolean;
+    date?: string;
+    people?: string;
+    hours?: number | string;
+    peopleCount?: number;
+    hoursPerPerson?: number | string;
+    requirePeople?: boolean;
+}): string[] => {
+    const issues: string[] = [];
+    const hours = parseDecimalHours(input.hours);
+    const peopleCount = countPeopleInText(input.people ?? '');
+    const mathPeopleCount = peopleCount || input.peopleCount;
+    const hoursPerPerson = parseDecimalHours(input.hoursPerPerson);
+
+    if (input.projectSelected === false) {
+        issues.push('Vyber projekt.');
+    }
+    if (!input.date || !dateRegex.test(input.date)) {
+        issues.push('Vyber platné datum práce.');
+    }
+    if (input.requirePeople !== false && peopleCount < 1) {
+        issues.push('Doplň lidi.');
+    }
+    if (hours <= 0) {
+        issues.push('Doplň kladný počet hodin.');
+    } else if (!hasExplainedPersonHours(hours, mathPeopleCount, hoursPerPerson || undefined)) {
+        issues.push('Hodiny nad 24 musí sedět na výpočet lidé × hodiny na osobu.');
+    }
+
+    return issues;
+};
 
 export const createWorkLogProposal = (input: {
     projectName?: string;
@@ -79,7 +143,7 @@ export const createWorkLogProposal = (input: {
         calculationNote: input.calculationNote ?? (hasHoursPerPerson ? formatCalculationNote(Math.max(people.length, 1), hoursPerPerson, totalHours) : undefined),
         assumptions: input.assumptions ?? [],
         description: input.description?.trim() || '',
-        date: dateRegex.test(input.date) ? input.date : toIsoDate(new Date()),
+        date: dateRegex.test(input.date) ? input.date : '',
     };
 };
 
