@@ -17,7 +17,7 @@ import { WeeklyCalendar } from './components/WeeklyCalendar';
 import { SuggestionsPage } from './pages/SuggestionsPage';
 import { WorkLogsPage } from './pages/WorkLogsPage';
 import { workLogsSync, mergeCloudToLocal, mergeLocalToCloud, type MergeResult } from './services/workLogsSync';
-import { processWorkLogAudio, type ExtractedWorkLog } from './services/workLogExtractor';
+import { processWorkLogAudio, type ExtractedWorkLogBatch } from './services/workLogExtractor';
 import { WorkLogVoiceConfirm } from './components/worklogs/WorkLogVoiceConfirm';
 import {
   formatTimeLeft,
@@ -80,7 +80,7 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
-  const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLog | null>(null);
+  const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLogBatch | null>(null);
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
 
@@ -549,7 +549,8 @@ function App() {
           (attempt, delay) => addLog(`AI Přetíženo - Pokus č.${attempt} (čekám ${delay / 1000}s)…`, 'info')
         );
         if (result.ok) {
-          addLog(`AI extrahovalo: ${result.data.projectName || '?'} (${result.data.hours}h)`, 'info');
+          const totalHours = result.data.entries.reduce((sum, entry) => sum + entry.hours, 0);
+          addLog(`AI extrahovalo: ${result.data.entries.length} návrhů (${totalHours.toFixed(2)}h)`, 'info');
           setWorkLogExtracted(result.data);
         } else {
           addLog(`AI extrakce selhala: ${result.error}`, 'error');
@@ -883,7 +884,7 @@ function App() {
           {viewMode === 'debug' && (
             <div className="flex-1 flex flex-col gap-4 min-h-0">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v4.1.0)</h2>
+                <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v4.2.0)</h2>
                 <button
                   onClick={() => setDebugLogs([])}
                   className="px-3 py-1 bg-slate-800 hover:bg-red-900/20 text-slate-400 hover:text-red-400 rounded-lg text-sm font-black uppercase transition-all"
@@ -960,8 +961,9 @@ function App() {
               <WorkLogVoiceConfirm
                 extracted={workLogExtracted}
                 onConfirmed={(result) => {
-                  if ('ok' in result && result.ok && 'workLog' in result) {
-                    addLog(`Činnost uložena z hlasu: ${result.workLog.projectName} (${result.workLog.hours}h)`, 'info');
+                  if ('ok' in result && result.ok && 'workLogs' in result) {
+                    const totalHours = result.workLogs.reduce((sum, log) => sum + log.hours, 0);
+                    addLog(`Činnosti uloženy z hlasu: ${result.workLogs.length} záznamů (${totalHours.toFixed(2)}h)`, 'info');
                   }
                   setWorkLogExtracted(null);
                 }}

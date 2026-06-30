@@ -1,5 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { db, type WorkLog, type Project } from '../db';
+import {
+    calculatePersonHours,
+    createWorkLogProposal,
+    dateRegex,
+    hasExplainedPersonHours,
+    normalizePeopleList,
+    toIsoDate,
+} from '../utils/workLogBatch';
 
 /**
  * WorkLog extractor — z Gemini audio transkripce vytáhne strukturovaný WorkLog.
@@ -12,33 +20,59 @@ import { db, type WorkLog, type Project } from '../db';
 
 export const WORKLOG_SYSTEM_PROMPT = `
 Jsi asistent pro evidenci pracovních činností elektroinstalační firmy.
-Z diktovaného textu (v češtině) extrahuj PŘESNĚ tyto informace do JSON:
+Z diktovaného textu (v češtině) extrahuj pracovní činnosti do JSON.
 
 {
-  "projectName": string,        // název projektu (zachovej přesně jak uživatel říká)
-  "people": string,             // jména oddělená čárkou (zachovej přesně, např. "Pepa, Lukáš"). Prázdné string "" pokud nikdo nezmíněn.
-  "hours": number,              // počet hodin (desetinné číslo povoleno: 8, 8.5, 7.25)
-  "description": string,        // co se dělalo (volitelné, vynech pokud nic)
-  "date": string                // ISO YYYY-MM-DD (dnes, pokud nezmíněno jinak)
+  "entries": [
+    {
+      "projectName": string,
+      "people": string[],
+      "hoursPerPerson": number,
+      "totalHours": number,
+      "description": string,
+      "date": string,
+      "calculationNote": string
+    }
+  ],
+  "assumptions": string[],
+  "needsConfirmation": boolean,
+  "confirmationReasons": string[]
 }
 
 Pravidla:
+- Dnes je {{TODAY_ISO}} ({{TODAY_LABEL}}). Relativní data počítej vždy proti tomuto datu.
 - Pokud uživatel řekne "včera" → date = včerejší den
 - Pokud uživatel řekne "dneska" nebo "dnes" → date = dnešní den
 - Pokud řekne konkrétní datum ("15. června") → převeď na YYYY-MM-DD
-- Pokud zmíní víc lidí: "Pepa, Lukáš a Tom" → "Pepa, Lukáš, Tom"
+- "minulý týden" znamená pondělí až pátek minulého týdne, pokud uživatel výslovně nezmíní víkend.
+- "každý den" v kontextu práce znamená každý pracovní den v aktivním období.
+- "ve středu", "v pátek" apod. uvnitř období upravuje jen tento den.
+- Dodatečné fráze "teď jsem si vzpomněl", "ještě", "vlastně", "oprava" jsou korekce předchozího rozsahu, ne samostatná nesouvisející práce.
+- Pokud zmíní víc lidí: "Pepa, Lukáš a Tom" → ["Pepa", "Lukáš", "Tom"]
+- "já" mapuj na "Martin", pokud není z kontextu jasné jiné jméno.
+- Vztah bez jména zachovej smysluplně: "Sergej a jeho brácha" → ["Sergej", "Sergejův bratr"].
+- Neznámé počty lidí pojmenuj stabilně v rámci diktátu: "dva lidi" → ["Pracovník 1", "Pracovník 2"].
+- "ještě jeden člověk navíc" přidá "Pracovník 1" pouze k dotčenému dni nebo rozsahu.
 - Pokud nezmíní projekt: projectName = ""
-- Pokud nezmíní lidi: people = ""
-- Pokud nezmíní hodiny: uhodni z kontextu (např. "celý den" = 8)
+- Pokud nezmíní lidi ani počet: people = [] a needsConfirmation = true
+- Pokud nezmíní hodiny: uhodni jen z jasného kontextu (např. "celý den" = 8), jinak needsConfirmation = true
 - Pokud nezmíní co dělali: description = ""
+- totalHours jsou člověkohodiny: počet lidí × hoursPerPerson. Např. 3 lidé × 10 h = 30.
+- calculationNote vždy vysvětli stručně česky, např. "3 lidé × 10 h = 30 h".
+- Schůzka/jednání nemá navyšovat práci, pokud uživatel jasně neříká, že šlo o odpracovanou činnost.
 
-Příklad vstupu: "Včera na KB Plaza, byli tam se mnou Pepa a Lukáš, dělali jsme 8 hodin, tahali kabely v 3. patře"
+Příklad vstupu: "Minulý týden na Plaza jsme byli každý den já, Sergej a jeho brácha. 10 hodin denně. Teď jsem si vzpomněl, ve středu tam byl ještě jeden člověk navíc."
 Příklad výstupu: {
-  "projectName": "KB Plaza",
-  "people": "Pepa, Lukáš",
-  "hours": 8,
-  "description": "tahali kabely v 3. patře",
-  "date": "2026-06-28"
+  "entries": [
+    { "projectName": "Plaza", "people": ["Martin", "Sergej", "Sergejův bratr"], "hoursPerPerson": 10, "totalHours": 30, "description": "", "date": "2026-06-22", "calculationNote": "3 lidé × 10 h = 30 h" },
+    { "projectName": "Plaza", "people": ["Martin", "Sergej", "Sergejův bratr"], "hoursPerPerson": 10, "totalHours": 30, "description": "", "date": "2026-06-23", "calculationNote": "3 lidé × 10 h = 30 h" },
+    { "projectName": "Plaza", "people": ["Martin", "Sergej", "Sergejův bratr", "Pracovník 1"], "hoursPerPerson": 10, "totalHours": 40, "description": "", "date": "2026-06-24", "calculationNote": "4 lidé × 10 h = 40 h" },
+    { "projectName": "Plaza", "people": ["Martin", "Sergej", "Sergejův bratr"], "hoursPerPerson": 10, "totalHours": 30, "description": "", "date": "2026-06-25", "calculationNote": "3 lidé × 10 h = 30 h" },
+    { "projectName": "Plaza", "people": ["Martin", "Sergej", "Sergejův bratr"], "hoursPerPerson": 10, "totalHours": 30, "description": "", "date": "2026-06-26", "calculationNote": "3 lidé × 10 h = 30 h" }
+  ],
+  "assumptions": ["Minulý týden byl vyložen jako pondělí až pátek.", "Hodiny jsou počítány jako člověkohodiny."],
+  "needsConfirmation": false,
+  "confirmationReasons": []
 }
 
 Vrať POUZE čistý JSON bez markdownu.
@@ -46,20 +80,39 @@ Vrať POUZE čistý JSON bez markdownu.
 
 /** Výsledek extrakce — buď ready k uložení, nebo potřebuje doplnit projekt, nebo chyba. */
 export type WorkLogExtractionResult =
-    | { ok: true; data: { projectName: string; people: string; hours: number; description: string; date: string } }
+    | { ok: true; data: ExtractedWorkLogBatch }
     | { ok: false; error: string };
 
-/** Extrahovaná data z Gemini (ještě bez projectId). */
+/** Jeden návrh WorkLogu z hlasové extrakce (ještě bez projectId). */
 export interface ExtractedWorkLog {
     projectName: string;
     people: string;
     hours: number;
+    hoursPerPerson?: number;
+    peopleCount?: number;
+    calculationNote?: string;
+    assumptions?: string[];
     description?: string;
     date: string;
 }
 
+/** Batch návrh z hlasové extrakce. */
+export interface ExtractedWorkLogBatch {
+    entries: ExtractedWorkLog[];
+    assumptions: string[];
+    needsConfirmation: boolean;
+    confirmationReasons: string[];
+}
+
+export const createEmptyWorkLogBatch = (): ExtractedWorkLogBatch => ({
+    entries: [],
+    assumptions: [],
+    needsConfirmation: false,
+    confirmationReasons: [],
+});
+
 /** Pokusí se najít projekt v DB — case-insensitive match, přesná shoda, contains. */
-export async function findProjectByName(name: string, allProjects: Project[]): Promise<Project | null> {
+export function findProjectByName(name: string, allProjects: Project[]): Project | null {
     if (!name || !name.trim()) return null;
     const needle = name.trim().toLowerCase();
     // 1. Přesná shoda (case-insensitive)
@@ -81,27 +134,65 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
         return { ok: false, error: 'AI nevrátilo žádná data' };
     }
 
-    // Hodiny — povinné, > 0, <= 24
-    const hours = Number(raw.hours);
-    if (Number.isNaN(hours) || hours <= 0 || hours > 24) {
-        return { ok: false, error: 'Neplatné hodiny (musí být 0–24)' };
+    const entriesRaw = Array.isArray(raw.entries) ? raw.entries : [raw];
+    const assumptions = Array.isArray(raw.assumptions)
+        ? raw.assumptions.map((a: unknown) => String(a).trim()).filter(Boolean)
+        : [];
+    const confirmationReasons = Array.isArray(raw.confirmationReasons)
+        ? raw.confirmationReasons.map((r: unknown) => String(r).trim()).filter(Boolean)
+        : [];
+    const entries: ExtractedWorkLog[] = [];
+
+    for (const entryRaw of entriesRaw) {
+        if (!entryRaw || typeof entryRaw !== 'object') continue;
+        const people = normalizePeopleList(entryRaw.people);
+        const hoursPerPerson = Number(entryRaw.hoursPerPerson);
+        const totalHoursRaw = Number(entryRaw.totalHours ?? entryRaw.hours);
+        const hasHoursPerPerson = !Number.isNaN(hoursPerPerson) && hoursPerPerson > 0;
+        const totalHours = !Number.isNaN(totalHoursRaw) && totalHoursRaw > 0
+            ? totalHoursRaw
+            : hasHoursPerPerson
+                ? calculatePersonHours(Math.max(people.length, 1), hoursPerPerson)
+                : NaN;
+
+        if (Number.isNaN(totalHours) || totalHours <= 0) {
+            return { ok: false, error: 'Neplatné hodiny (musí být větší než 0)' };
+        }
+
+        if (!hasExplainedPersonHours(totalHours, people.length, hasHoursPerPerson ? hoursPerPerson : undefined)) {
+            return { ok: false, error: 'Člověkohodiny nad 24 musí mít počet lidí a hodiny na osobu' };
+        }
+
+        let date = typeof entryRaw.date === 'string' ? entryRaw.date.trim() : '';
+        if (!dateRegex.test(date)) {
+            date = toIsoDate(new Date());
+        }
+
+        const proposal = createWorkLogProposal({
+            projectName: typeof entryRaw.projectName === 'string' ? entryRaw.projectName : '',
+            people,
+            hoursPerPerson: hasHoursPerPerson ? hoursPerPerson : undefined,
+            totalHours,
+            description: typeof entryRaw.description === 'string' ? entryRaw.description : '',
+            date,
+            assumptions,
+            calculationNote: typeof entryRaw.calculationNote === 'string' ? entryRaw.calculationNote : undefined,
+        });
+
+        entries.push(proposal);
     }
 
-    // Datum — YYYY-MM-DD, fallback dnes
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    let date = typeof raw.date === 'string' ? raw.date.trim() : '';
-    if (!dateRegex.test(date)) {
-        date = new Date().toISOString().split('T')[0];
+    if (entries.length === 0) {
+        return { ok: false, error: 'AI nevrátilo žádný pracovní záznam' };
     }
 
     return {
         ok: true,
         data: {
-            projectName: typeof raw.projectName === 'string' ? raw.projectName.trim() : '',
-            people: typeof raw.people === 'string' ? raw.people.trim() : '',
-            hours,
-            description: typeof raw.description === 'string' ? raw.description.trim() : '',
-            date,
+            entries,
+            assumptions,
+            needsConfirmation: Boolean(raw.needsConfirmation) || confirmationReasons.length > 0,
+            confirmationReasons,
         },
     };
 }
@@ -111,7 +202,7 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
  * Vrací buď vytvořený WorkLog, nebo potřebu ručního doplnění projektu, nebo chybu.
  */
 export type ApplyResult =
-    | { ok: true; workLog: WorkLog }
+    | { ok: true; workLog: WorkLog; workLogs: WorkLog[] }
     | { ok: false; error: string }
     | { needsProject: true; extracted: ExtractedWorkLog };
 
@@ -130,7 +221,7 @@ export async function applyExtractedWorkLog(
 
     // 2. …nebo hledáme podle jména
     if (!project) {
-        project = await findProjectByName(extracted.projectName, activeProjects);
+        project = findProjectByName(extracted.projectName, activeProjects);
     }
 
     if (!project) {
@@ -145,6 +236,10 @@ export async function applyExtractedWorkLog(
         projectName: project.name, // použijeme canonical name z DB
         people: extracted.people,
         hours: extracted.hours,
+        hoursPerPerson: extracted.hoursPerPerson,
+        peopleCount: extracted.peopleCount,
+        calculationNote: extracted.calculationNote,
+        assumptions: extracted.assumptions,
         description: extracted.description || undefined,
         source: 'voice',
         createdAt: now,
@@ -160,11 +255,31 @@ export async function applyExtractedWorkLog(
             projectName: project.name,
             people: extracted.people,
             hours: extracted.hours,
+            hoursPerPerson: extracted.hoursPerPerson,
+            peopleCount: extracted.peopleCount,
+            calculationNote: extracted.calculationNote,
+            assumptions: extracted.assumptions,
             description: extracted.description || undefined,
             source: 'voice',
             createdAt: now,
             updatedAt: now,
         },
+        workLogs: [{
+            id: id as number,
+            date: extracted.date,
+            projectId: project.id!,
+            projectName: project.name,
+            people: extracted.people,
+            hours: extracted.hours,
+            hoursPerPerson: extracted.hoursPerPerson,
+            peopleCount: extracted.peopleCount,
+            calculationNote: extracted.calculationNote,
+            assumptions: extracted.assumptions,
+            description: extracted.description || undefined,
+            source: 'voice',
+            createdAt: now,
+            updatedAt: now,
+        }],
     };
 }
 
@@ -188,6 +303,14 @@ const normalizeMimeType = (type: string | undefined): string | null => {
     const supported = new Set(['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/aiff', 'audio/aac', 'audio/ogg', 'audio/flac', 'audio/webm']);
     if (supported.has(type)) return type === 'audio/mp3' ? 'audio/mpeg' : type;
     return 'audio/wav';
+};
+
+const buildWorkLogSystemPrompt = (referenceDate = new Date()): string => {
+    const todayIso = toIsoDate(referenceDate);
+    const todayLabel = referenceDate.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    return WORKLOG_SYSTEM_PROMPT
+        .replaceAll('{{TODAY_ISO}}', todayIso)
+        .replaceAll('{{TODAY_LABEL}}', todayLabel);
 };
 
 /**
@@ -235,7 +358,7 @@ export async function processWorkLogAudio(
                 body: JSON.stringify({
                     contents: [{
                         parts: [
-                            { text: WORKLOG_SYSTEM_PROMPT },
+                            { text: buildWorkLogSystemPrompt() },
                             { inline_data: { mime_type: normalizeMimeType(blob.type) ?? 'audio/wav', data: base64Data } },
                         ],
                     }],

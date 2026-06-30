@@ -1,12 +1,13 @@
 {
   "name": "battle-plan",
   "private": true,
-  "version": "4.1.0",
+  "version": "4.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:worklogs": "node --experimental-strip-types src/services/workLogExtractor.test.ts",
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"

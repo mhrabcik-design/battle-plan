@@ -6,7 +6,7 @@
 ✅ AI Indikátor (Klíč + Online) implementován.
 ✅ Škálování UI (Font Slider) funkční.
 ✅ Multipart Google Drive Sync opraven (mobil i PC).
-✅ Záložka Práce / Pracovní činnosti je v mainu jako verze 4.1.0.
+✅ Záložka Práce / Pracovní činnosti je v mainu jako verze 4.2.0.
 
 ## Cíl
 Transformovat aplikaci z "mobilu v prohlížeči" na profesionální **Desktop-First aplikaci** s hlubokou integrací do Google ekosystému.
@@ -174,13 +174,13 @@ Oddělit reálnou odvedenou práci od úkolů a schůzek, aby bylo možné veče
 
 2. **Projekty a záznamy:** ✅
    - `Project` drží název, barvu a aktivitu projektu.
-   - `WorkLog` drží datum práce, projekt, lidi, hodiny, popis a zdroj (`voice` nebo `manual`).
+   - `WorkLog` drží datum práce, projekt, lidi, reportované hodiny, volitelný výpočet člověkohodin, popis a zdroj (`voice` nebo `manual`).
    - Projekty jsou soft-deletované přes `isActive`, aby historické worklogy zůstaly čitelné.
 
 3. **Hlasové zadání Práce:** ✅
    - `WorkLogVoiceBar` umožňuje diktování přímo v záložce Práce.
-   - `workLogExtractor.ts` používá Gemini REST prompt specializovaný na pracovní činnosti.
-   - `WorkLogVoiceConfirm` dává uživateli možnost potvrdit / doplnit projekt před uložením.
+   - `workLogExtractor.ts` používá Gemini REST prompt specializovaný na pracovní činnosti a umí batch návrhy pro relativní období.
+   - `WorkLogVoiceConfirm` dává uživateli možnost potvrdit / doplnit projekt, upravit více denních návrhů a uložit je najednou.
 
 4. **Synchronizace Práce:** ✅
    - `workLogsSync.ts` ukládá `work_logs_data.json` do složky `/Anu-BattlePlan/`.
@@ -198,4 +198,4 @@ Oddělit reálnou odvedenou práci od úkolů a schůzek, aby bylo možné veče
 - Zvážit, zda meeting filtr má zůstat pouze heuristický, nebo má být explicitní typ / příznak v datech.
 
 ---
-*Všechny cíle pro verzi 4.1.0 byly naplněny podle aktuálního stavu dokumentace. Systém je robustní, rychlý a připravený na další Compound Engineering plánování.*
+*Verze 4.2.0 rozšiřuje Práci o batch diktování s člověkohodinami a potvrzovacím přehledem více denních záznamů.*

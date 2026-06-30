@@ -5,7 +5,7 @@ import { useAudioRecorder } from '../../hooks/useAudioRecorder';
 import {
     processWorkLogAudio,
     type ApplyResult,
-    type ExtractedWorkLog,
+    type ExtractedWorkLogBatch,
 } from '../../services/workLogExtractor';
 import { db, type WorkLog } from '../../db';
 import { WorkLogVoiceConfirm } from './WorkLogVoiceConfirm';
@@ -30,16 +30,12 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
         clearAudio,
     } = useAudioRecorder();
     const [processing, setProcessing] = useState(false);
-    const [extracted, setExtracted] = useState<ExtractedWorkLog | null>(null);
+    const [extracted, setExtracted] = useState<ExtractedWorkLogBatch | null>(null);
     const [manualProjectRequired, setManualProjectRequired] = useState(false);
     const processingRef = useRef(false);
-    const [probeError, setProbeError] = useState<string | null>(null);
-
-    useEffect(() => {
-        if (!hasMediaRecorderSupport()) {
-            setProbeError('Tento prohlížeč nepodporuje MediaRecorder');
-        }
-    }, []);
+    const [probeError, setProbeError] = useState<string | null>(() =>
+        hasMediaRecorderSupport() ? null : 'Tento prohlížeč nepodporuje MediaRecorder',
+    );
 
     const handleToggle = useCallback(async () => {
         if (isRecording) {
@@ -81,17 +77,12 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
                 return;
             }
 
-            setExtracted({
-                projectName: result.data.projectName,
-                people: result.data.people,
-                hours: result.data.hours,
-                description: result.data.description,
-                date: result.data.date,
-            });
+            setExtracted(result.data);
             clearAudio();
             processingRef.current = false;
             setProcessing(false);
-            onInfo?.('Diktování rozpoznáno — zkontroluj a ulož.');
+            const totalHours = result.data.entries.reduce((sum, entry) => sum + entry.hours, 0);
+            onInfo?.(`Diktování rozpoznáno — ${result.data.entries.length} návrhů, ${totalHours.toFixed(2)} h.`);
         })();
 
         return () => {
@@ -103,13 +94,22 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
         (result: ApplyResult) => {
             // Diskriminace přes 'workLog' / 'needsProject' / 'error' (ApplyResult je union)
             if ('workLog' in result) {
+                if (result.workLogs.length > 1) {
+                    const totalHours = result.workLogs.reduce((sum, log) => sum + log.hours, 0);
+                    onInfo?.(`Uloženo ${result.workLogs.length} záznamů práce (${totalHours.toFixed(2)} h).`);
+                }
                 onSaved?.(result.workLog);
                 setExtracted(null);
                 setManualProjectRequired(false);
                 return;
             }
             if ('needsProject' in result) {
-                setExtracted(result.extracted);
+                setExtracted({
+                    entries: [result.extracted],
+                    assumptions: result.extracted.assumptions ?? [],
+                    needsConfirmation: true,
+                    confirmationReasons: ['AI nerozpoznalo projekt. Vyber ho v otevřeném okně.'],
+                });
                 setManualProjectRequired(true);
                 onInfo?.('AI nerozpoznalo projekt. Vyber ho v otevřeném okně.');
                 return;

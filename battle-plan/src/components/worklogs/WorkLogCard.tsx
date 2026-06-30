@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Trash2, Edit3, Save, X } from 'lucide-react';
 import { db, type WorkLog, type Project } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
+import { hasExplainedPersonHours } from '../../utils/workLogBatch';
 
 interface WorkLogCardProps {
     log: WorkLog;
@@ -38,6 +39,10 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
         if (log.id == null) return;
         const hoursNum = parseFloat(hours.replace(',', '.'));
         if (Number.isNaN(hoursNum) || hoursNum <= 0) return;
+        if (!hasExplainedPersonHours(hoursNum, log.peopleCount, log.hoursPerPerson)) {
+            alert('Hodiny nad 24 jsou povolené jen u záznamů s výpočtem člověkohodin.');
+            return;
+        }
 
         // Načti projekt pokud ho máme
         let proj = project;
@@ -145,6 +150,9 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                                 <span className="text-indigo-400 uppercase tracking-widest text-[10px]">voice</span>
                             )}
                         </div>
+                        {log.calculationNote && (
+                            <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-widest">{log.calculationNote}</p>
+                        )}
                         {log.description && (
                             <p className="text-xs text-slate-500 mt-2 line-clamp-2">{log.description}</p>
                         )}

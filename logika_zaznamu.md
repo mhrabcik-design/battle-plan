@@ -43,10 +43,12 @@ AI rozlišuje tři základní typy záznamů, pro které má specifická pravidl
 ### 🧰 4. Specializovaný profil: PRÁCE (WorkLog)
 *Zaměřeno na evidenci reálně odvedené práce, ne na plánování.*
 - **Kde se používá:** Pouze v záložce `Práce`.
-- **Extrahovaná pole:** `projectName`, `people`, `hours`, `description`, `date`.
+- **Extrahovaná pole:** batch návrhy `entries[]` s projektem, lidmi, člověkohodinami, popisem a datem.
 - **Projekt:** Musí odpovídat existujícímu projektu nebo ho uživatel ručně vybere v potvrzení.
-- **Hodiny:** Musí být větší než 0 a nejvýše 24.
+- **Hodiny:** U batch diktátu znamenají člověkohodiny. Např. 3 lidé × 10 h = 30 h za den.
 - **Datum:** Je datum konání práce, ne datum diktování.
+- **Relativní období:** `minulý týden` se rozpadá na pracovní dny pondělí až pátek, pokud není řečen víkend.
+- **Neznámí pracovníci:** Počty bez jmen se zapisují jako `Pracovník 1`, `Pracovník 2` atd.
 - **Oddělení od schůzek:** WorkLog nemá nahrazovat meetingy. Záznamy vypadající jako schůzky se ve výpisu Práce konzervativně filtrují.
 
 ---
@@ -77,4 +79,4 @@ Od verze 4.0.0 se striktně rozlišuje mezi `date` (Datum konání / začátek a
 6. **Práce je oddělená datová doména:** `workLogs` a `projects` jsou samostatné Dexie tabulky a synchronizují se přes `work_logs_data.json`. Nejsou to `tasks`.
 
 ---
-*Bitevní Plán v4.1.0 – Vždy o krok napřed.*
+*Bitevní Plán v4.2.0 – Vždy o krok napřed.*

@@ -63,7 +63,12 @@ export interface WorkLog {
     projectId: number;     // FK → Project.id
     projectName: string;   // denormalizovaný název (zůstane i když se projekt smaže/přejmenuje)
     people: string;        // volný text: "Pepa, Lukáš"
-    hours: number;         // desetinné číslo (8, 8.5, 7.25)
+    hours: number;         // reportované hodiny; u batch hlasu člověkohodiny
+    hoursPerPerson?: number;
+    peopleCount?: number;
+    calculationNote?: string;
+    assumptions?: string[];
+    extractionBatchId?: string;
     description?: string;  // co se dělalo
     source: 'voice' | 'manual';
     updatedAt: number;

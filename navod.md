@@ -43,7 +43,7 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 ### Jak nahrávat
 - **Hlavní mikrofon (dole):** Vytvoří nový záznam (úkol, schůzku nebo myšlenku).
 - **Mikrofon u úkolu:** Aktualizuje konkrétní úkol (např. "Změň čas na 14:00" nebo "Doplň poznámku").
-- **Diktování v záložce Práce:** Vytvoří pracovní činnost s projektem, lidmi, hodinami, datem a popisem. Před uložením se zobrazí potvrzovací okno.
+- **Diktování v záložce Práce:** Vytvoří jednu nebo více pracovních činností s projektem, lidmi, člověkohodinami, datem a popisem. Před uložením se zobrazí potvrzovací okno.
 
 ### Inteligentní funkce
 - **Detekce ticha:** Stačí mluvit. Jakmile se na pár sekund odmlčíte, aplikace nahrávání sama ukončí a odešle k analýze.
@@ -63,13 +63,14 @@ Hlas je nejrychlejší cesta, jak dostat myšlenku do plánu.
 - **Plán:** Váš strategický přehled pro dnešní den. Zobrazuje vše, co vyžaduje pozornost.
 - **Týden:** Profesionální časová osa (7:00 – 19:00). Úkoly se v tomto pohledu zobrazují přesně v den svého **deadline**.
 - **Úkoly / Schůzky / Myšlenky:** Filtrované seznamy pro hloubkovou práci.
-- **Práce:** Evidence reálně odpracovaných činností. Každý záznam má projekt, lidi, počet hodin, datum a popis. Zobrazení lze přepnout mezi kartami, kalendářem a tabulkou.
+- **Práce:** Evidence reálně odpracovaných činností. Každý záznam má projekt, lidi, reportované hodiny, datum a popis. Zobrazení lze přepnout mezi kartami, kalendářem a tabulkou.
 - **Návrhy:** Schvalování návrhů od Anu před jejich zápisem do plánu.
 
 ### Práce (Pracovní činnosti)
 Záložka **Práce** slouží pro večerní evidenci toho, co se skutečně dělalo.
 - **Přidat činnost:** Ruční formulář pro projekt, datum, lidi, hodiny a popis.
-- **Diktovat:** Hlasový vstup vytáhne pracovní činnost přes Gemini a otevře potvrzení před uložením.
+- **Diktovat:** Hlasový vstup vytáhne pracovní činnost přes Gemini a otevře potvrzení před uložením. Delší diktát typu „minulý týden každý den 3 lidi po 10 hodinách“ se rozpadne na více denních návrhů.
+- **Člověkohodiny:** U batch diktování se součet počítá jako počet lidí × hodiny na osobu, např. 3 lidé × 10 h = 30 h.
 - **Projekty:** Projekt je povinný kvůli pozdějšímu přehledu a synchronizaci.
 - **Filtrování schůzek:** Pokud záznam vypadá jako schůzka nebo jednání, nezapočítá se do sumy práce a UI ukáže, kolik záznamů bylo skryto.
 
@@ -99,4 +100,4 @@ Vaše data jsou v bezpečí a dostupná všude.
 3. **Diagnostika:** Pokud něco nefunguje, sekce **Diagnostika** v sidebaru vám ukáže technické logy a stav připojení k AI.
 
 ---
-*Aktualizováno pro verzi 4.1.0 – Bitevní Plán: Vždy o krok napřed.*
+*Aktualizováno pro verzi 4.2.0 – Bitevní Plán: Vždy o krok napřed.*

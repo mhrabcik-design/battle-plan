@@ -45,7 +45,7 @@ Klicove aktualni principy:
 | Oblast | Aktualni rozhodnuti |
 | --- | --- |
 | Aplikace | `battle-plan/`, React + TypeScript + Vite |
-| Verze | `4.1.0` |
+| Verze | `4.2.0` |
 | UI | desktop-first office rozhrani, responzivni mobilni PWA |
 | AI modely v kodu | `gemini-3-flash-preview` jako default; dale `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro` |
 | Audio | REST API, normalizace audio blobu na podporovany inline audio format; WorkLogs maji vlastni extractor |
@@ -53,9 +53,26 @@ Klicove aktualni principy:
 | Google | OAuth, Drive backup/restore, Tasks, Calendar, `/Anu-BattlePlan/` slozka |
 | Drive soubory | `battle_plan_data.json`, `work_logs_data.json`, agent/suggestions soubory podle integrace Anu |
 
+## Release a verzovani
+
+Kazdy deploy na GitHub Pages musi byt dohledatelny podle viditelne verze v aplikaci.
+
+Verzovani pouziva format `major.minor.patch`:
+
+- `patch` (`4.1.1`) pro drobne opravy, UI texty, deploy fixy a bezpecne lokalni zmeny bez nove produktove oblasti.
+- `minor` (`4.2.0`) pro nove funkce nebo vyznamne rozsireni existujici oblasti, napr. dalsi modul Prace nebo reporting.
+- `major` (`5.0.0`) pro zasadni produktovou etapu, zmenu datoveho modelu s migraci, nebo chovani, ktere meni zpusob pouzivani aplikace.
+
+Release disciplina:
+
+1. Pred produkcnim deployem zvedni verzi v `battle-plan/package.json`.
+2. Viditelna verze v UI musi odpovidat `package.json`; nema zustat natvrdo stary text.
+3. Po buildu nasad `battle-plan/dist` na `gh-pages`; samotny push do `main` neaktualizuje web `mhrabcik-design.github.io/battle-plan/`.
+4. V commitu nebo souhrnu udelej jasne, jaka verze je nasazena a co se v ni zmenilo.
+
 ## Aktualni modul Prace
 
-Zalozka `Prace` (`viewMode: worklogs`) je aktualni jadro verze 4.1.0.
+Zalozka `Prace` (`viewMode: worklogs`) je aktualni jadro verze 4.2.0.
 
 | Cast | Soubor |
 | --- | --- |
@@ -73,7 +90,7 @@ Soucasne hranice Prace:
 
 - WorkLog reprezentuje odpracovanou cinnost, ne schuzku.
 - Projekt je povinny; kdyz AI nerozpozna projekt, uzivatel ho vybere v potvrzovacim dialogu.
-- Hodiny musi byt v rozsahu `> 0` a `<= 24`.
+- Hodiny musi byt `> 0`; u batch hlasu predstavuji clovekohodiny a mohou byt nad 24, pokud maji vypocet `pocet lidi x hodin na osobu`.
 - Sync pro F6 pouziva winner-wins podle `updatedAt`; WorkLog merge zatim nema UUID a pouziva composite key `date|projectName|people`.
 - F7+ by melo resit stabilni `clientId` pro projekty/worklogy a reporting worker.
 
@@ -84,8 +101,9 @@ Pro novou praci:
 1. Zacni timto souborem a pak otevri relevantni kanonicky dokument.
 2. Pokud jde o produktove chovani, pouzij `ce-brainstorm` nebo `ce-doc-review` nad kanonickymi dokumenty.
 3. Pokud jde o implementaci, pouzij `ce-plan` nad aktualnim stavem `main` a cituj repo-relative soubory z oddilu "Aktualni modul Prace".
-4. Historicke `docs/PLAN-*` soubory neber jako zdroj pravdy; ber je jako audit rozhodnuti.
-5. Verifikace pro Praci zacina u `battle-plan/docs/F5-verification-report.md` a `battle-plan/docs/F6-verification-report.md`, ale stale chybi standardni `npm test` suite.
+4. Pokud zmena pujde na GitHub Pages, zahrn do scope i bump verze podle oddilu "Release a verzovani".
+5. Historicke `docs/PLAN-*` soubory neber jako zdroj pravdy; ber je jako audit rozhodnuti.
+6. Verifikace pro Praci zacina u `battle-plan/docs/F5-verification-report.md` a `battle-plan/docs/F6-verification-report.md`, ale stale chybi standardni `npm test` suite.
 
 ## Archiv planu
 
