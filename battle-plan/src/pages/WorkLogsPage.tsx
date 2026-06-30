@@ -1,11 +1,13 @@
-import { useState, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Briefcase, Table2, Calendar as CalendarIcon } from 'lucide-react';
+import { Plus, Briefcase, Table2, Calendar as CalendarIcon, Filter } from 'lucide-react';
 import { db, type WorkLog } from '../db';
 import { WorkLogForm } from '../components/worklogs/WorkLogForm';
 import { WorkLogCard } from '../components/worklogs/WorkLogCard';
 import { WorkLogTable } from '../components/worklogs/WorkLogTable';
 import { WorkLogCalendar } from '../components/worklogs/WorkLogCalendar';
+import { WorkLogVoiceBar } from '../components/worklogs/WorkLogVoiceBar';
+import { filterWorkLogsForPrace } from '../utils/workLogFilter';
 
 interface WorkLogsPageProps {
     googleAuth: { isSignedIn: boolean; accessToken: string | null };
@@ -26,15 +28,33 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
         return await db.projects.toArray();
     }, []) ?? [];
 
-    const totalHours = useMemo(
-        () => logs.reduce((sum: number, l: WorkLog) => sum + l.hours, 0),
-        [logs]
+    const { workLogs: effectiveLogs, hiddenCount } = useMemo(
+        () => filterWorkLogsForPrace(logs),
+        [logs],
     );
 
-    const handleSaved = (log: WorkLog) => {
-        onAddLog?.(`Činnost uložena: ${log.projectName} (${log.hours} h)`, 'info');
-        setShowForm(false);
-    };
+    const totalHours = useMemo(
+        () => effectiveLogs.reduce((sum: number, l: WorkLog) => sum + l.hours, 0),
+        [effectiveLogs],
+    );
+
+    const handleSaved = useCallback(
+        (log: WorkLog) => {
+            onAddLog?.(`Činnost uložena: ${log.projectName} (${log.hours} h)`, 'info');
+            setShowForm(false);
+        },
+        [onAddLog],
+    );
+
+    const handleVoiceError = useCallback(
+        (msg: string) => onAddLog?.(msg, 'error'),
+        [onAddLog],
+    );
+
+    const handleVoiceInfo = useCallback(
+        (msg: string) => onAddLog?.(msg, 'info'),
+        [onAddLog],
+    );
 
     return (
         <div className="space-y-6">
@@ -46,6 +66,15 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
                     </h2>
                     <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">
                         Večerní diktování → měsíční přehled
+                        {hiddenCount > 0 && (
+                            <span
+                                className="ml-2 inline-flex items-center gap-1 text-[10px] font-bold text-slate-400 normal-case tracking-normal"
+                                title="Automaticky skryté záznamy, které vypadají jako schůze / jednání. Práce eviduje jen reálnou manuální práci."
+                            >
+                                <Filter className="w-3 h-3" />
+                                {hiddenCount} skryto jako schůze
+                            </span>
+                        )}
                     </p>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
@@ -89,6 +118,14 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
                             {totalHours.toFixed(2)} <span className="text-xs text-slate-500">h</span>
                         </div>
                     </div>
+
+                    {/* Voice vstup — přímo v hlavičce Práce, vedle „Přidat činnost" */}
+                    <WorkLogVoiceBar
+                        onSaved={handleSaved}
+                        onError={handleVoiceError}
+                        onInfo={handleVoiceInfo}
+                    />
+
                     <button
                         type="button"
                         onClick={() => setShowForm((s) => !s)}
@@ -114,7 +151,7 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
 
             {/* Pohled */}
             {view === 'cards' && (
-                logs.length === 0 ? (
+                effectiveLogs.length === 0 ? (
                     <div className="p-16 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
                         <Briefcase className="w-12 h-12 text-slate-800 mx-auto mb-4" />
                         <p className="text-slate-500 font-bold uppercase text-xs tracking-widest mb-2">
@@ -126,7 +163,7 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {logs.map((log) => (
+                        {effectiveLogs.map((log) => (
                             <WorkLogCard key={log.id} log={log} />
                         ))}
                     </div>
@@ -134,11 +171,11 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
             )}
 
             {view === 'calendar' && (
-                <WorkLogCalendar logs={logs} projects={projects} />
+                <WorkLogCalendar logs={effectiveLogs} projects={projects} />
             )}
 
             {view === 'table' && (
-                <WorkLogTable logs={logs} embedded={true} />
+                <WorkLogTable logs={effectiveLogs} embedded={true} />
             )}
         </div>
     );
