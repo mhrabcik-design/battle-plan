@@ -56,6 +56,9 @@ const NAV_ITEMS = [
 
 const ROW_HEIGHT = 80;
 const CALENDAR_HOURS = Array.from({ length: 13 }, (_, i) => i + 7);
+const TASK_GRID_VIEW_MODES: ViewMode[] = ['battle', 'tasks', 'meetings', 'thoughts'];
+const TASK_QUERY_VIEW_MODES: ViewMode[] = [...TASK_GRID_VIEW_MODES, 'week'];
+const EMPTY_TASKS: Task[] = [];
 
 function App() {
   const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
@@ -179,6 +182,10 @@ function App() {
 
 
   const localTasks = useLiveQuery(async () => {
+    if (!TASK_QUERY_VIEW_MODES.includes(viewMode)) {
+      return [];
+    }
+
     if (viewMode === 'battle') {
       return await db.tasks
         .where('status').equals('pending')
@@ -208,15 +215,14 @@ function App() {
     let collection;
     if (viewMode === 'tasks') collection = db.tasks.where('type').equals('task').and(t => !t.isDeleted);
     else if (viewMode === 'meetings') collection = db.tasks.where('type').equals('meeting').and(t => !t.isDeleted);
-    else if (viewMode === 'thoughts') collection = db.tasks.where('type').anyOf(['thought', 'note']).and(t => !t.isDeleted);
-    else collection = db.tasks.filter(t => !t.isDeleted);
+    else collection = db.tasks.where('type').anyOf(['thought', 'note']).and(t => !t.isDeleted);
 
     const all = await collection.toArray();
     return all.sort((a, b) => {
       if (a.status === b.status) return (b.urgency || 0) - (a.urgency || 0);
       return a.status === 'completed' ? 1 : -1;
     });
-  }, [viewMode, weekOffset]) || [];
+  }, [viewMode, weekOffset]) ?? EMPTY_TASKS;
 
   // Mapped Google Tasks
   const googleTasksMapped: UnifiedTask[] = useMemo(() => {
@@ -718,6 +724,7 @@ function App() {
   const memoizedIsOverCapacity = useCallback((task: UnifiedTask) => isOverCapacity(currentTime, task), [currentTime]);
   const memoizedGetDeadlineColor = useCallback((date?: string, time?: string) => getDeadlineColor(currentTime, date, time), [currentTime]);
   const memoizedFormatTimeLeft = useCallback((date?: string, time?: string) => formatTimeLeft(currentTime, date, time), [currentTime]);
+  const showTaskGrid = TASK_GRID_VIEW_MODES.includes(viewMode);
 
   return (
     <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
@@ -914,7 +921,7 @@ function App() {
           )}
 
 
-          {viewMode !== 'week' && (
+          {showTaskGrid && (
             <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-start">
               <AnimatePresence mode="popLayout">
                 {tasks.length === 0 ? (
