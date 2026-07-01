@@ -43,13 +43,13 @@ Cílem je udělat z Bitevního Plánu aktivního hlídače tvého času, nejen p
 ## 🛠️ Další drobné náměty:
 - **Bulk Operations:** Možnost označit více úkolů a hromadně jim změnit termín nebo prioritu pomocí hlasu („Všechny dnešní úkoly odsuň na zítra“).
 - **Widget do systému:** Malá "plovoucí" ikona mikrofonu, která zůstane nad všemi okny pro okamžitý diktát bez přepínání do prohlížeče.
-- **Automatizace verzí:** Odvodit viditelnou verzi v UI z `package.json` nebo build metadat a přidat release checklist, aby každý deploy na GitHub Pages zvedl `patch`, `minor`, nebo `major` podle typu změny.
+- **Automatizace verzí:** Build identity už odvozuje viditelnou verzi z `package.json`; další krok je automatický release checklist před deployem na GitHub Pages.
 
 ---
 
 ## 🧰 3. Práce / WorkLogs F7+
 
-Navazuje na verzi 4.2.1, kde je hotové MVP záložky Práce, hlasový vstup, batch diktování člověkohodin, tvrdší validace a Drive sync.
+Navazuje na verzi 4.2.1, kde je hotové MVP záložky Práce, hlasový vstup, batch diktování člověkohodin, tvrdší validace a Drive sync. Verze 4.3.0 přidává runtime diagnostiku a sdílenou audio pipeline pro další bezpečnější rozvoj.
 
 ### Prioritní náměty:
 - **Stabilní clientId:** Přidat UUID/clientId do `Project` a `WorkLog`, aby sync nemusel používat `name` a composite key `date|projectName|people`.

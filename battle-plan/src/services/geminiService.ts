@@ -1,9 +1,14 @@
 import { db, type Task } from '../db';
+import {
+    fetchWithTimeout,
+    getErrorMessage,
+    getRetryDelay,
+    isAbortError,
+    isRetryableFetchError,
+    prepareGeminiAudio,
+    sleep,
+} from './audioAiPipeline';
 import { getSystemPrompt } from './semanticEngine';
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const FETCH_TIMEOUT = 30000;
 export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
 export const AVAILABLE_GEMINI_MODELS = [
     DEFAULT_GEMINI_MODEL,
@@ -11,20 +16,6 @@ export const AVAILABLE_GEMINI_MODELS = [
     'gemini-2.5-flash-lite',
     'gemini-2.5-pro',
 ];
-
-const GEMINI_INLINE_AUDIO_MIME_TYPES = new Set([
-    'audio/wav',
-    'audio/mp3',
-    'audio/mpeg',
-    'audio/aiff',
-    'audio/aac',
-    'audio/ogg',
-    'audio/flac',
-]);
-
-type WindowWithWebkitAudio = typeof window & {
-    webkitAudioContext?: typeof AudioContext;
-};
 
 interface GeminiErrorResponse {
     error?: {
@@ -39,98 +30,6 @@ interface GeminiModelListItem {
 
 interface GeminiModelListResponse extends GeminiErrorResponse {
     models?: GeminiModelListItem[];
-}
-
-function getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-function isAbortError(error: unknown): boolean {
-    return error instanceof DOMException && error.name === 'AbortError';
-}
-
-function isRetryableFetchError(error: unknown): boolean {
-    return isAbortError(error)
-        || error instanceof TypeError
-        || (error instanceof Error && error.message.includes('Failed to fetch'));
-}
-
-function fetchWithTimeout(url: string, options: RequestInit, timeout: number = FETCH_TIMEOUT): Promise<Response> {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(id));
-}
-
-function normalizeMimeType(mimeType: string): string {
-    return mimeType.split(';')[0]?.trim().toLowerCase() || '';
-}
-
-function writeAscii(view: DataView, offset: number, value: string) {
-    for (let i = 0; i < value.length; i++) {
-        view.setUint8(offset + i, value.charCodeAt(i));
-    }
-}
-
-function audioBufferToWavBlob(audioBuffer: AudioBuffer): Blob {
-    const sampleRate = audioBuffer.sampleRate;
-    const sampleCount = audioBuffer.length;
-    const bytesPerSample = 2;
-    const channelCount = 1;
-    const dataSize = sampleCount * channelCount * bytesPerSample;
-    const buffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(buffer);
-
-    writeAscii(view, 0, 'RIFF');
-    view.setUint32(4, 36 + dataSize, true);
-    writeAscii(view, 8, 'WAVE');
-    writeAscii(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, channelCount, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * channelCount * bytesPerSample, true);
-    view.setUint16(32, channelCount * bytesPerSample, true);
-    view.setUint16(34, 16, true);
-    writeAscii(view, 36, 'data');
-    view.setUint32(40, dataSize, true);
-
-    const channels = Array.from({ length: audioBuffer.numberOfChannels }, (_, i) => audioBuffer.getChannelData(i));
-    let offset = 44;
-    for (let i = 0; i < sampleCount; i++) {
-        const mixedSample = channels.reduce((sum, channel) => sum + channel[i], 0) / channels.length;
-        const sample = Math.max(-1, Math.min(1, mixedSample));
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-        offset += bytesPerSample;
-    }
-
-    return new Blob([buffer], { type: 'audio/wav' });
-}
-
-async function convertToWav(blob: Blob): Promise<Blob> {
-    const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudio).webkitAudioContext;
-    if (!AudioContextCtor) throw new Error('Prohlížeč neumí dekódovat audio pro převod do WAV.');
-
-    const audioContext = new AudioContextCtor();
-    try {
-        const decoded = await audioContext.decodeAudioData(await blob.arrayBuffer());
-        return audioBufferToWavBlob(decoded);
-    } finally {
-        await audioContext.close();
-    }
-}
-
-async function normalizeAudioForGemini(blob: Blob): Promise<Blob> {
-    const mimeType = normalizeMimeType(blob.type);
-    if (mimeType && GEMINI_INLINE_AUDIO_MIME_TYPES.has(mimeType) && !blob.type.includes('codecs=')) {
-        return blob;
-    }
-
-    try {
-        return await convertToWav(blob);
-    } catch (e) {
-        console.error('Audio normalization failed', e);
-        throw new Error(`Nahrávku se nepodařilo převést do formátu WAV. Původní typ: ${blob.type || 'neznámý'}.`);
-    }
 }
 
 export class GeminiService {
@@ -237,16 +136,9 @@ export class GeminiService {
             if (!this.apiKey) throw new Error("API klíč nebyl nalezen.");
 
             const modelId = await this.getModel();
-            const normalizedBlob = await normalizeAudioForGemini(blob);
+            const audio = await prepareGeminiAudio(blob);
 
             console.log(`REST API using model: ${modelId}`);
-
-            const base64Data = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-                reader.onerror = reject;
-                reader.readAsDataURL(normalizedBlob);
-            });
 
             const nowObj = new Date();
             const today = nowObj.toISOString().split('T')[0];
@@ -285,7 +177,7 @@ export class GeminiService {
                             contents: [{
                                 parts: [
                                     { text: systemPrompt },
-                                    { inline_data: { mime_type: normalizeMimeType(normalizedBlob.type) || "audio/wav", data: base64Data } }
+                                    { inline_data: { mime_type: audio.mimeType, data: audio.base64Data } }
                                 ]
                             }],
                             generation_config: {
@@ -304,7 +196,7 @@ export class GeminiService {
                         }
 
                         if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts) {
-                            const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 10000);
+                            const delay = getRetryDelay(attempt);
                             console.warn(`Attempt ${attempt} failed (status ${response.status}). Retrying in ${delay}ms...`);
                             if (onRetry) onRetry(attempt, delay);
                             await sleep(delay);
@@ -335,7 +227,7 @@ export class GeminiService {
                     }
 
                     if (isRetryableFetchError(err)) {
-                        const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 10000);
+                        const delay = getRetryDelay(attempt);
                         if (onRetry) onRetry(attempt, delay);
                         await sleep(delay);
                         continue;

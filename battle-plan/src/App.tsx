@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
+import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
 import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
@@ -27,6 +28,7 @@ import {
   getUrgencyColor
 } from './utils/calendarUtils';
 import { applySemanticResult } from './services/semanticEngine';
+import { buildInfo } from './utils/buildInfo';
 
 const AVAILABLE_MODELS = AVAILABLE_GEMINI_MODELS;
 
@@ -60,6 +62,8 @@ const TASK_GRID_VIEW_MODES: ViewMode[] = ['battle', 'tasks', 'meetings', 'though
 const TASK_QUERY_VIEW_MODES: ViewMode[] = [...TASK_GRID_VIEW_MODES, 'week'];
 const EMPTY_TASKS: Task[] = [];
 
+const formatError = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
 function App() {
   const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
   const [viewMode, setViewMode] = useState<ViewMode>('battle');
@@ -81,6 +85,7 @@ function App() {
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
   const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLogBatch | null>(null);
+  const { syncHealth, updateSyncHealth } = useSyncDiagnostics();
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
 
@@ -154,8 +159,19 @@ function App() {
         }
 
         setGoogleAuth(status);
+        updateSyncHealth('google', {
+          state: status.isSignedIn ? 'ok' : 'idle',
+          detail: status.isSignedIn ? 'Přihlášeno ke Google službám' : 'Nepřihlášeno',
+          lastSuccess: status.isSignedIn ? new Date().toLocaleString('cs-CZ') : null,
+          lastError: null,
+        });
       } catch (e) {
         console.error("Google init failed", e);
+        updateSyncHealth('google', {
+          state: 'error',
+          detail: 'Google inicializace selhala',
+          lastError: formatError(e),
+        });
       }
     };
     initGoogle();
@@ -163,6 +179,12 @@ function App() {
     const handleAuthChange = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       setGoogleAuth(detail);
+      updateSyncHealth('google', {
+        state: detail?.isSignedIn ? 'ok' : 'idle',
+        detail: detail?.isSignedIn ? 'Přihlášeno ke Google službám' : 'Odpojeno od Google služeb',
+        lastSuccess: detail?.isSignedIn ? new Date().toLocaleString('cs-CZ') : null,
+        lastError: null,
+      });
     };
     window.addEventListener('google-auth-change', handleAuthChange);
 
@@ -178,7 +200,7 @@ function App() {
       window.removeEventListener('google-auth-change', handleAuthChange);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [updateSyncHealth]);
 
 
   const localTasks = useLiveQuery(async () => {
@@ -267,7 +289,13 @@ function App() {
 
   // Auto-sync check on start AND on focus/visibility change
   useEffect(() => {
-    if (!googleAuth.isSignedIn) return;
+    if (!googleAuth.isSignedIn) {
+      queueMicrotask(() => {
+        updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
+        updateSyncHealth('worklogs', { state: 'idle', detail: 'Čeká na Google přihlášení' });
+      });
+      return;
+    }
 
     googleService.getTaskLists().then(setGoogleTaskLists);
 
@@ -327,6 +355,17 @@ function App() {
           setLastSync(now);
           localStorage.setItem('last_drive_sync', now);
           localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
+          updateSyncHealth('tasks', {
+            state: 'ok',
+            detail: 'Drive data načtena',
+            lastSuccess: now,
+            lastError: null,
+          });
+        } else {
+          updateSyncHealth('tasks', {
+            state: 'stale',
+            detail: 'Drive data nejsou dostupná nebo jsou prázdná',
+          });
         }
 
         // === F6: WorkLogs + Projects sync ===
@@ -342,10 +381,32 @@ function App() {
                 'info'
               );
             }
+            updateSyncHealth('worklogs', {
+              state: 'ok',
+              detail: wl.timestamp > 0 ? 'WorkLogs načteny z Drive' : 'WorkLogs soubor zatím neexistuje',
+              lastSuccess: new Date().toLocaleString('cs-CZ'),
+              lastError: null,
+            });
+          } else {
+            updateSyncHealth('worklogs', {
+              state: 'stale',
+              detail: 'WorkLogs soubor zatím neexistuje',
+            });
           }
+        } else {
+          updateSyncHealth('worklogs', {
+            state: 'stale',
+            detail: 'WorkLogs sync není inicializovaný',
+          });
         }
       } catch (e) {
         console.error("Auto-sync check failed", e);
+        const message = formatError(e);
+        updateSyncHealth('tasks', {
+          state: 'error',
+          detail: 'Automatická synchronizace selhala',
+          lastError: message,
+        });
       }
     };
 
@@ -366,31 +427,47 @@ function App() {
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
     };
-  }, [googleAuth.isSignedIn, addLog]);
+  }, [googleAuth.isSignedIn, addLog, updateSyncHealth]);
 
   // Suggestions badge: count open suggestions, poll every 60s
   useEffect(() => {
     if (!googleAuth.isSignedIn) {
-      setSuggestionsBadge(0);
+      queueMicrotask(() => {
+        setSuggestionsBadge(0);
+        updateSyncHealth('suggestions', { state: 'idle', detail: 'Čeká na Google přihlášení' });
+      });
       return;
     }
 
     const refreshBadge = async () => {
       try {
         await suggestionsSync.init();
-        if (!suggestionsSync.initialized) return;
+        if (!suggestionsSync.initialized) {
+          updateSyncHealth('suggestions', { state: 'stale', detail: 'Suggestions sync není inicializovaný' });
+          return;
+        }
         const sugs = await suggestionsSync.fetchSuggestions();
         const open = sugs.filter((s) => s.status === 'open').length;
         setSuggestionsBadge(open);
+        updateSyncHealth('suggestions', {
+          state: 'ok',
+          detail: `${open} otevřených návrhů`,
+          lastSuccess: new Date().toLocaleString('cs-CZ'),
+          lastError: null,
+        });
       } catch (e) {
-        // Silent fail for badge
+        updateSyncHealth('suggestions', {
+          state: 'error',
+          detail: 'Načtení návrhů selhalo',
+          lastError: formatError(e),
+        });
       }
     };
 
     refreshBadge();
     const t = setInterval(refreshBadge, 60_000);
     return () => clearInterval(t);
-  }, [googleAuth.isSignedIn]);
+  }, [googleAuth.isSignedIn, updateSyncHealth]);
 
   // Agent bridge: poslouchá agent-pending-writes.json z Anu
   useEffect(() => {
@@ -446,20 +523,14 @@ function App() {
   const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
   // F6: workLogs + projects hash pro auto-backup trigger
-  const [workLogsDataHash, setWorkLogsDataHash] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const allWL = await db.workLogs.toArray();
-      const allP = await db.projects.toArray();
-      if (!cancelled) {
-        const h = allWL.length * 1_000_000 + allWL.reduce((s, w) => s + (w.updatedAt || 0), 0)
-                + allP.length * 10_000 + allP.reduce((s, p) => s + (p.updatedAt || 0), 0);
-        setWorkLogsDataHash(h);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [workLogExtracted]);
+  const workLogsDataHash = useLiveQuery(async () => {
+    const [allWorkLogs, allProjects] = await Promise.all([
+      db.workLogs.toArray(),
+      db.projects.toArray(),
+    ]);
+    return allWorkLogs.length * 1_000_000 + allWorkLogs.reduce((sum, workLog) => sum + (workLog.updatedAt || 0), 0)
+      + allProjects.length * 10_000 + allProjects.reduce((sum, project) => sum + (project.updatedAt || 0), 0);
+  }, []) ?? 0;
 
   // Auto-backup on change
   useEffect(() => {
@@ -476,15 +547,26 @@ function App() {
           setLastSync(now);
           localStorage.setItem('last_drive_sync', now);
           localStorage.setItem('last_drive_sync_ts', savedTimestamp.toString());
+          updateSyncHealth('tasks', {
+            state: 'ok',
+            detail: 'Automatická záloha na Disk úspěšná',
+            lastSuccess: now,
+            lastError: null,
+          });
           addLog('Automatická záloha na Disk úspěšná');
         }
       } catch (e) {
         console.error('Auto-backup failed', e);
+        updateSyncHealth('tasks', {
+          state: 'error',
+          detail: 'Automatická záloha na Disk selhala',
+          lastError: formatError(e),
+        });
       }
     }, 10000);
 
     return () => clearTimeout(timer);
-  }, [tasksHash, googleAuth.isSignedIn, addLog]);
+  }, [tasksHash, googleAuth.isSignedIn, addLog, updateSyncHealth]);
 
   // F6: Auto-backup workLogs + projects (paralelní trigger na workLogsDataHash)
   useEffect(() => {
@@ -494,15 +576,31 @@ function App() {
       try {
         const ok = await mergeLocalToCloud();
         if (ok) {
+          updateSyncHealth('worklogs', {
+            state: 'ok',
+            detail: 'WorkLogs záloha na Disk úspěšná',
+            lastSuccess: new Date().toLocaleString('cs-CZ'),
+            lastError: null,
+          });
           addLog('WorkLogs záloha na Disk úspěšná', 'info');
+        } else {
+          updateSyncHealth('worklogs', {
+            state: 'stale',
+            detail: 'WorkLogs záloha nebyla provedena',
+          });
         }
       } catch (e) {
         console.error('WorkLogs auto-backup failed', e);
+        updateSyncHealth('worklogs', {
+          state: 'error',
+          detail: 'WorkLogs záloha na Disk selhala',
+          lastError: formatError(e),
+        });
       }
     }, 10000);
 
     return () => clearTimeout(timer);
-  }, [workLogsDataHash, googleAuth.isSignedIn, addLog]);
+  }, [workLogsDataHash, googleAuth.isSignedIn, addLog, updateSyncHealth]);
 
   useEffect(() => {
     db.settings.get('gemini_api_key').then(setting => {
@@ -532,6 +630,17 @@ function App() {
     geminiService.clearModelCache();
     await geminiService.init();
   };
+
+  const applyAiResult = useCallback(async (result: Partial<Task>, updateId: number | null) => {
+    const semanticOutput = await applySemanticResult(result, updateId, googleAuth);
+    if (!semanticOutput) return;
+
+    if (updateId && semanticOutput.updatedId) {
+      if (editingTask && editingTask.id === updateId) {
+        setEditingTask(prev => prev ? { ...prev, ...semanticOutput.result } : null);
+      }
+    }
+  }, [googleAuth, editingTask]);
 
   const handleProcessAudio = useCallback(async (blob: Blob) => {
     if (isProcessingRef.current) return;
@@ -593,24 +702,13 @@ function App() {
       setActiveVoiceUpdateId(null);
       clearAudio();
     }
-  }, [selectedModel, addLog, clearAudio, viewMode]);
+  }, [selectedModel, addLog, clearAudio, viewMode, applyAiResult]);
 
   useEffect(() => {
     if (audioBlob && !isProcessingRef.current) {
       handleProcessAudio(audioBlob);
     }
   }, [audioBlob, handleProcessAudio]);
-
-  const applyAiResult = useCallback(async (result: Partial<Task>, updateId: number | null) => {
-    const semanticOutput = await applySemanticResult(result, updateId, googleAuth);
-    if (!semanticOutput) return;
-
-    if (updateId && semanticOutput.updatedId) {
-      if (editingTask && editingTask.id === updateId) {
-        setEditingTask(prev => prev ? { ...prev, ...semanticOutput.result } : null);
-      }
-    }
-  }, [googleAuth, editingTask]);
 
   const toggleSubtask = useCallback(async (task: UnifiedTask, subTaskId: string) => {
     if (!task.id || !task.subTasks) return;
@@ -737,6 +835,7 @@ function App() {
         setShowSettings={setShowSettings}
         isProcessing={isProcessing}
         suggestionsBadge={suggestionsBadge}
+        appVersion={buildInfo.version}
       />
 
       {/* MAIN CONTENT AREA */}
@@ -884,13 +983,60 @@ function App() {
           {viewMode === 'debug' && (
             <div className="flex-1 flex flex-col gap-4 min-h-0">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-black text-white uppercase tracking-widest">Systémové Logy (v4.2.1)</h2>
+                <h2 className="text-sm font-black text-white uppercase tracking-widest">Diagnostika systému (v{buildInfo.version})</h2>
                 <button
                   onClick={() => setDebugLogs([])}
                   className="px-3 py-1 bg-slate-800 hover:bg-red-900/20 text-slate-400 hover:text-red-400 rounded-lg text-sm font-black uppercase transition-all"
                 >
                   Smazat
                 </button>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
+                  <h3 className="text-xs font-black text-slate-500 uppercase mb-3">Build a prostředí</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-slate-500">Verze:</span> <span className="text-white">{buildInfo.version}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Kanál:</span> <span className="text-white">{buildInfo.channelLabel}</span>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="text-slate-500">Origin:</span> <span className="text-white break-all">{buildInfo.origin}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Build:</span> <span className="text-white">{buildInfo.buildTime}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Commit:</span> <span className="text-white">{buildInfo.commit ? buildInfo.commit.slice(0, 12) : 'local'}</span>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="text-slate-500">OAuth:</span> <span className="text-slate-300">{buildInfo.oauthOriginHint}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
+                  <h3 className="text-xs font-black text-slate-500 uppercase mb-3">Sync stav</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {Object.entries(syncHealth).map(([key, item]) => {
+                      const tone = item.state === 'ok' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                        : item.state === 'error' ? 'text-red-400 bg-red-500/10 border-red-500/20'
+                          : item.state === 'stale' ? 'text-amber-300 bg-amber-500/10 border-amber-500/20'
+                            : 'text-slate-400 bg-slate-900/50 border-slate-700/50';
+                      return (
+                        <div key={key} className={`p-3 rounded-xl border ${tone}`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-black uppercase tracking-widest">{item.label}</span>
+                            <span className="text-[10px] font-black uppercase">{item.state}</span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-slate-300">{item.detail}</p>
+                          {item.lastSuccess && <p className="mt-1 text-[10px] text-slate-500">OK: {item.lastSuccess}</p>}
+                          {item.lastError && <p className="mt-1 text-[10px] text-red-300 break-all">Chyba: {item.lastError}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
               <div className="flex-1 bg-slate-900/50 rounded-2xl border border-slate-800 overflow-y-auto p-4 font-mono text-xs space-y-1">
                 {debugLogs.length === 0 ? (

@@ -59,30 +59,30 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
         setProcessing(true);
 
         (async () => {
-            const apiKey = (await db.settings.get('gemini_api_key'))?.value ?? '';
-            if (!apiKey) {
-                onError?.('Gemini API klíč chybí. Nastav ho v Konfiguraci.');
+            try {
+                const apiKey = (await db.settings.get('gemini_api_key'))?.value ?? '';
+                if (!apiKey) {
+                    onError?.('Gemini API klíč chybí. Nastav ho v Konfiguraci.');
+                    return;
+                }
+
+                const result = await processWorkLogAudio(audioBlob);
+                if (!result.ok) {
+                    onError?.(`AI extrakce selhala: ${result.error}`);
+                    return;
+                }
+
+                setExtracted(result.data);
+                const totalHours = result.data.entries.reduce((sum, entry) => sum + entry.hours, 0);
+                onInfo?.(`Diktování rozpoznáno — ${result.data.entries.length} návrhů, ${totalHours.toFixed(2)} h.`);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : 'Neznámá chyba';
+                onError?.(`AI extrakce selhala: ${message}`);
+            } finally {
                 clearAudio();
                 processingRef.current = false;
                 setProcessing(false);
-                return;
             }
-
-            const result = await processWorkLogAudio(audioBlob);
-            if (!result.ok) {
-                onError?.(`AI extrakce selhala: ${result.error}`);
-                clearAudio();
-                processingRef.current = false;
-                setProcessing(false);
-                return;
-            }
-
-            setExtracted(result.data);
-            clearAudio();
-            processingRef.current = false;
-            setProcessing(false);
-            const totalHours = result.data.entries.reduce((sum, entry) => sum + entry.hours, 0);
-            onInfo?.(`Diktování rozpoznáno — ${result.data.entries.length} návrhů, ${totalHours.toFixed(2)} h.`);
         })();
 
         return () => {

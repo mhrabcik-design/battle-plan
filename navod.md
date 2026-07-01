@@ -97,7 +97,7 @@ Vaše data jsou v bezpečí a dostupná všude.
 
 1. **Diktujte detaily:** "Schůzka s Petrem zítra v 10 v Mánesu, téma je nová smlouva." – AI se postará o zbytek.
 2. **Škálování:** Pokud je na vás písmo příliš malé, použijte jezdec **Velikost písma** v nastavení.
-3. **Diagnostika:** Pokud něco nefunguje, sekce **Diagnostika** v sidebaru vám ukáže technické logy a stav připojení k AI.
+3. **Diagnostika:** Pokud něco nefunguje, sekce **Diagnostika** v sidebaru ukáže verzi buildu, origin, kanál nasazení, OAuth nápovědu, technické logy a oddělený stav Google/Drive syncu.
 
 ---
-*Aktualizováno pro verzi 4.2.1 – Bitevní Plán: Vždy o krok napřed.*
+*Aktualizováno pro verzi 4.3.0 – Bitevní Plán: Vždy o krok napřed.*

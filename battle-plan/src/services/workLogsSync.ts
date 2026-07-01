@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 import { db, type WorkLog, type Project } from '../db';
+import { WORKLOGS_FILENAME, buildWorkLogsFileMetadata } from './workLogsDriveMetadata';
 
 /**
  * WorkLogsSync — Drive I/O pro `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
@@ -16,7 +15,6 @@ import { db, type WorkLog, type Project } from '../db';
  */
 
 const FOLDER_NAME = 'Anu-BattlePlan';
-const WORKLOGS_FILENAME = 'work_logs_data.json';
 const FOLDER_CACHE_KEY = 'bp_folder_id';
 
 interface WorkLogsFile {
@@ -24,6 +22,22 @@ interface WorkLogsFile {
     last_updated?: number;
     workLogs: WorkLog[];
     projects: Project[];
+}
+
+interface DriveUploadResponse {
+    body?: string;
+    result?: { id?: string };
+}
+
+function getUploadedDriveFileId(response: DriveUploadResponse): string | null {
+    if (response.result?.id) return response.result.id;
+    if (!response.body) return null;
+    try {
+        const parsed = JSON.parse(response.body) as { id?: string };
+        return parsed.id ?? null;
+    } catch {
+        return null;
+    }
 }
 
 class WorkLogsSync {
@@ -124,7 +138,7 @@ class WorkLogsSync {
         });
 
         const boundary = '-------314159265358979323846';
-        const metadata = { name: WORKLOGS_FILENAME, mimeType: 'application/json' };
+        const metadata = buildWorkLogsFileMetadata(this.folderId, this.fileId);
         const body =
             '--' + boundary + '\r\n' +
             'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
@@ -144,13 +158,16 @@ class WorkLogsSync {
                     body: body,
                 });
             } else {
-                // Vytvoření nového souboru (fileId si uložíme později při loadAll)
-                await window.gapi.client.request({
+                const response = await window.gapi.client.request({
                     path: `/upload/drive/v3/files?uploadType=multipart`,
                     method: 'POST',
                     headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
                     body: body,
-                });
+                }) as DriveUploadResponse;
+                const createdFileId = getUploadedDriveFileId(response);
+                if (createdFileId) {
+                    this.fileId = createdFileId;
+                }
             }
             return Date.now();
         } catch (e) {
@@ -232,7 +249,8 @@ export async function mergeCloudToLocal(
             const local = localWorkLogsByCompositeKey.get(key);
             if (!local) {
                 // Cloud-only → přidej (s novým ID)
-                const { id: _ignored, ...withoutId } = cw;
+                const withoutId = { ...cw };
+                delete withoutId.id;
                 await db.workLogs.add({
                     ...withoutId,
                     source: withoutId.source ?? 'voice',
@@ -256,7 +274,8 @@ export async function mergeCloudToLocal(
         for (const cp of cloudProjects) {
             const local = localProjectsByName.get(cp.name.toLowerCase());
             if (!local) {
-                const { id: _ignored, ...withoutId } = cp;
+                const withoutId = { ...cp };
+                delete withoutId.id;
                 await db.projects.add({
                     ...withoutId,
                     isActive: withoutId.isActive ?? true,
