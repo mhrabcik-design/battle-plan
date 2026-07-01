@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:worklogs": "node --experimental-strip-types src/services/workLogExtractor.test.ts",
+    "test:worklogs": "node --experimental-strip-types src/services/workLogExtractor.test.ts && node --experimental-strip-types src/services/workLogsSync.test.ts",
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"

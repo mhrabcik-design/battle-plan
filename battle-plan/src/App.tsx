@@ -523,20 +523,14 @@ function App() {
   const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
   // F6: workLogs + projects hash pro auto-backup trigger
-  const [workLogsDataHash, setWorkLogsDataHash] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const allWL = await db.workLogs.toArray();
-      const allP = await db.projects.toArray();
-      if (!cancelled) {
-        const h = allWL.length * 1_000_000 + allWL.reduce((s, w) => s + (w.updatedAt || 0), 0)
-                + allP.length * 10_000 + allP.reduce((s, p) => s + (p.updatedAt || 0), 0);
-        setWorkLogsDataHash(h);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [workLogExtracted]);
+  const workLogsDataHash = useLiveQuery(async () => {
+    const [allWorkLogs, allProjects] = await Promise.all([
+      db.workLogs.toArray(),
+      db.projects.toArray(),
+    ]);
+    return allWorkLogs.length * 1_000_000 + allWorkLogs.reduce((sum, workLog) => sum + (workLog.updatedAt || 0), 0)
+      + allProjects.length * 10_000 + allProjects.reduce((sum, project) => sum + (project.updatedAt || 0), 0);
+  }, []) ?? 0;
 
   // Auto-backup on change
   useEffect(() => {
