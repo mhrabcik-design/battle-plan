@@ -1,13 +1,13 @@
 {
   "name": "battle-plan",
   "private": true,
-  "version": "4.3.1",
+  "version": "4.3.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:worklogs": "node --experimental-strip-types src/services/workLogExtractor.test.ts && node --experimental-strip-types src/services/workLogsSync.test.ts && node --experimental-strip-types src/utils/workLogsSyncStatus.test.ts",
+    "test:worklogs": "node --experimental-strip-types src/services/workLogExtractor.test.ts && node --experimental-strip-types src/services/workLogsSync.test.ts && node --experimental-strip-types src/utils/workLogsSyncStatus.test.ts && node --experimental-strip-types src/utils/workLogSyncIdentity.test.ts",
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"

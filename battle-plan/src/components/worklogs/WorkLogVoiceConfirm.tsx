@@ -5,6 +5,7 @@ import { db, type Project, type WorkLog } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
 import { findProjectByName, type ApplyResult, type ExtractedWorkLog, type ExtractedWorkLogBatch } from '../../services/workLogExtractor';
 import { derivePersonHourMetadata, getWorkLogRowIssues, parseDecimalHours } from '../../utils/workLogBatch';
+import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
 
 interface WorkLogVoiceConfirmProps {
     extracted: ExtractedWorkLogBatch;
@@ -103,6 +104,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                 for (const entry of entries) {
                     const project = entry.project!;
                     const workLog: Omit<WorkLog, 'id'> = {
+                        syncId: createWorkLogSyncId(),
                         date: entry.date,
                         projectId: project.id!,
                         projectName: project.name,

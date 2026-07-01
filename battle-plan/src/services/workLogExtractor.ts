@@ -16,6 +16,7 @@ import {
     normalizePeopleList,
     toIsoDate,
 } from '../utils/workLogBatch.ts';
+import { createWorkLogSyncId } from '../utils/workLogSyncIdentity.ts';
 
 /**
  * WorkLog extractor — z Gemini audio transkripce vytáhne strukturovaný WorkLog.
@@ -249,7 +250,9 @@ export async function applyExtractedWorkLog(
 
     // 3. Ulož WorkLog
     const now = Date.now();
+    const syncId = createWorkLogSyncId();
     const id = await db.workLogs.add({
+        syncId,
         date: extracted.date,
         projectId: project.id!,
         projectName: project.name, // použijeme canonical name z DB
@@ -269,6 +272,7 @@ export async function applyExtractedWorkLog(
         ok: true,
         workLog: {
             id: id as number,
+            syncId,
             date: extracted.date,
             projectId: project.id!,
             projectName: project.name,
@@ -285,6 +289,7 @@ export async function applyExtractedWorkLog(
         },
         workLogs: [{
             id: id as number,
+            syncId,
             date: extracted.date,
             projectId: project.id!,
             projectName: project.name,
