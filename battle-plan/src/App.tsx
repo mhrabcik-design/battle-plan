@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase } from 'lucide-react';
+import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
@@ -935,9 +935,22 @@ function App() {
                 <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
                   <CheckCircle2 className="w-5 h-5 text-white" />
                 </div>
-                <h1 className="text-xl font-black text-white uppercase tracking-tight">Bitevní Plán</h1>
+                <div>
+                  <h1 className="text-xl font-black text-white uppercase tracking-tight leading-none">Bitevní Plán</h1>
+                  <p className="mt-1 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                    v{buildInfo.version}
+                  </p>
+                </div>
               </div>
               <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setViewMode('debug')}
+                  className={`p-2 border border-white/5 rounded-xl ${viewMode === 'debug' ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400'}`}
+                  aria-label="Diagnostika"
+                  title="Diagnostika"
+                >
+                  <FileText className="w-4 h-4" />
+                </button>
                 <button
                   onClick={() => setShowSettings(true)}
                   className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400"

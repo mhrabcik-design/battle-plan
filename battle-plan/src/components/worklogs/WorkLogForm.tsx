@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Save, X, Plus } from 'lucide-react';
 import { db, type WorkLog, type Project } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
+import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
 
 interface WorkLogFormProps {
     onSaved?: (log: WorkLog) => void;
@@ -35,7 +36,9 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
         setSaving(true);
         try {
             const now = Date.now();
+            const syncId = createWorkLogSyncId();
             const id = await db.workLogs.add({
+                syncId,
                 date,
                 projectId: project.id!,
                 projectName: project.name,
@@ -48,6 +51,7 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
             });
             const saved: WorkLog = {
                 id: id as number,
+                syncId,
                 date,
                 projectId: project.id!,
                 projectName: project.name,

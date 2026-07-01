@@ -1,5 +1,6 @@
 import { db, type WorkLog, type Project } from '../db';
 import { WORKLOGS_FILENAME, buildWorkLogsFileMetadata } from './workLogsDriveMetadata';
+import { getWorkLogSyncKey } from '../utils/workLogSyncIdentity';
 
 /**
  * WorkLogsSync — Drive I/O pro `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
@@ -231,9 +232,7 @@ export async function mergeCloudToLocal(
 
     const localWorkLogsByCompositeKey = new Map<string, WorkLog>();
     for (const wl of localWorkLogs) {
-        // Composite key = date + projectName + people (bez hours, protože hours se může měnit při editaci)
-        // POZOR: lepší by bylo mít clientId UUID v záznamech — TODO F7+
-        const key = `${wl.date}|${wl.projectName}|${wl.people}`;
+        const key = getWorkLogSyncKey(wl);
         localWorkLogsByCompositeKey.set(key, wl);
     }
 
@@ -245,7 +244,7 @@ export async function mergeCloudToLocal(
     await db.transaction('rw', [db.workLogs, db.projects], async () => {
         // === WorkLogs ===
         for (const cw of cloudWorkLogs) {
-            const key = `${cw.date}|${cw.projectName}|${cw.people}`;
+            const key = getWorkLogSyncKey(cw);
             const local = localWorkLogsByCompositeKey.get(key);
             if (!local) {
                 // Cloud-only → přidej (s novým ID)
@@ -307,6 +306,10 @@ export async function mergeLocalToCloud(): Promise<boolean> {
     if (!workLogsSync.initialized) {
         await workLogsSync.init();
         if (!workLogsSync.initialized) return false;
+    }
+    const cloud = await workLogsSync.loadAll();
+    if (cloud.timestamp > 0) {
+        await mergeCloudToLocal(cloud.workLogs, cloud.projects);
     }
     const allWorkLogs = await db.workLogs.toArray();
     const allProjects = await db.projects.toArray();

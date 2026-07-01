@@ -59,6 +59,7 @@ export interface Project {
 /** Jeden záznam pracovní činnosti (diktovaný / manuální). */
 export interface WorkLog {
     id?: number;
+    syncId?: string;        // stabilní identita pro slučování mezi zařízeními
     date: string;          // ISO date YYYY-MM-DD — datum konání práce (NE diktování)
     projectId: number;     // FK → Project.id
     projectName: string;   // denormalizovaný název (zůstane i když se projekt smaže/přejmenuje)
