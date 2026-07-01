@@ -29,6 +29,7 @@ import {
 } from './utils/calendarUtils';
 import { applySemanticResult } from './services/semanticEngine';
 import { buildInfo } from './utils/buildInfo';
+import { getMissingWorkLogsFileStatus, hasLocalWorkLogsData } from './utils/workLogsSyncStatus';
 
 const AVAILABLE_MODELS = AVAILABLE_GEMINI_MODELS;
 
@@ -388,10 +389,34 @@ function App() {
               lastError: null,
             });
           } else {
+            const localCounts = {
+              workLogs: await db.workLogs.count(),
+              projects: await db.projects.count(),
+            };
+            const missingStatus = getMissingWorkLogsFileStatus(localCounts);
             updateSyncHealth('worklogs', {
-              state: 'stale',
-              detail: 'WorkLogs soubor zatím neexistuje',
+              state: missingStatus.state,
+              detail: missingStatus.detail,
+              lastError: null,
             });
+            if (hasLocalWorkLogsData(localCounts)) {
+              const created = await mergeLocalToCloud();
+              updateSyncHealth('worklogs', created
+                ? {
+                    state: 'ok',
+                    detail: 'WorkLogs soubor vytvořen na Drive',
+                    lastSuccess: new Date().toLocaleString('cs-CZ'),
+                    lastError: null,
+                  }
+                : {
+                    state: 'error',
+                    detail: 'WorkLogs soubor se nepodařilo vytvořit',
+                  }
+              );
+              if (created) {
+                addLog('WorkLogs soubor vytvořen na Drive', 'info');
+              }
+            }
           }
         } else {
           updateSyncHealth('worklogs', {
