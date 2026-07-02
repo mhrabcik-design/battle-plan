@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Mic, Loader2, AlertCircle, CalendarDays, Clock3, Users, Briefcase, ClipboardList } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAudioRecorder } from '../../hooks/useAudioRecorder';
@@ -14,6 +14,14 @@ interface WorkLogVoiceBarProps {
     onSaved?: (log: WorkLog) => void;
     onError?: (message: string) => void;
     onInfo?: (message: string) => void;
+    onControllerChange?: (controller: WorkLogVoiceController | null) => void;
+}
+
+export interface WorkLogVoiceController {
+    toggle: () => Promise<void>;
+    isRecording: boolean;
+    processing: boolean;
+    disabled: boolean;
 }
 
 const hasMediaRecorderSupport = (): boolean =>
@@ -29,7 +37,7 @@ const guidanceItems = [
     { icon: ClipboardList, text: 'co se dělalo' },
 ];
 
-export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarProps) {
+export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }: WorkLogVoiceBarProps) {
     const {
         isRecording,
         audioBlob,
@@ -139,6 +147,24 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
     );
 
     const disabled = !hasMediaRecorderSupport() || processing;
+    const controller = useMemo<WorkLogVoiceController>(
+        () => ({
+            toggle: handleToggle,
+            isRecording,
+            processing,
+            disabled,
+        }),
+        [handleToggle, isRecording, processing, disabled],
+    );
+
+    useEffect(() => {
+        onControllerChange?.(controller);
+    }, [controller, onControllerChange]);
+
+    useEffect(() => {
+        return () => onControllerChange?.(null);
+    }, [onControllerChange]);
+
     const title = !hasMediaRecorderSupport()
         ? 'Tvůj prohlížeč nepodporuje MediaRecorder'
         : processing

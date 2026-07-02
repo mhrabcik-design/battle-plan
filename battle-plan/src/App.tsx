@@ -17,6 +17,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { WeeklyCalendar } from './components/WeeklyCalendar';
 import { SuggestionsPage } from './pages/SuggestionsPage';
 import { WorkLogsPage } from './pages/WorkLogsPage';
+import type { WorkLogVoiceController } from './components/worklogs/WorkLogVoiceBar';
 import { workLogsSync, mergeCloudToLocal, mergeLocalToCloud, type MergeResult } from './services/workLogsSync';
 import { processWorkLogAudio, type ExtractedWorkLogBatch } from './services/workLogExtractor';
 import { WorkLogVoiceConfirm } from './components/worklogs/WorkLogVoiceConfirm';
@@ -86,6 +87,7 @@ function App() {
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
   const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLogBatch | null>(null);
+  const [workLogVoiceController, setWorkLogVoiceController] = useState<WorkLogVoiceController | null>(null);
   const { syncHealth, updateSyncHealth } = useSyncDiagnostics();
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
@@ -849,6 +851,11 @@ function App() {
   const memoizedGetDeadlineColor = useCallback((date?: string, time?: string) => getDeadlineColor(currentTime, date, time), [currentTime]);
   const memoizedFormatTimeLeft = useCallback((date?: string, time?: string) => formatTimeLeft(currentTime, date, time), [currentTime]);
   const showTaskGrid = TASK_GRID_VIEW_MODES.includes(viewMode);
+  const activeWorkLogVoiceController = viewMode === 'worklogs' ? workLogVoiceController : null;
+  const isWorkLogVoiceMode = !!activeWorkLogVoiceController;
+  const floatingMicIsRecording = activeWorkLogVoiceController?.isRecording ?? isRecording;
+  const floatingMicIsProcessing = activeWorkLogVoiceController?.processing ?? isProcessing;
+  const floatingMicDisabled = activeWorkLogVoiceController?.disabled ?? isProcessing;
 
   return (
     <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
@@ -1003,6 +1010,7 @@ function App() {
             <WorkLogsPage
               googleAuth={googleAuth}
               onAddLog={(msg, type) => addLog(msg, type)}
+              onVoiceControllerChange={setWorkLogVoiceController}
             />
           )}
 
@@ -1200,12 +1208,18 @@ function App() {
               <div className="fixed bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:right-10 md:translate-x-0 z-[110] transition-all duration-500">
                 <div className="relative">
                   <AnimatePresence>
-                    {isRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
+                    {floatingMicIsRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId || isWorkLogVoiceMode ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
                   </AnimatePresence>
                   <button
-                    onClick={isRecording ? () => {
-                      stopRecording();
-                    } : async () => {
+                    onClick={async () => {
+                      if (activeWorkLogVoiceController) {
+                        await activeWorkLogVoiceController.toggle();
+                        return;
+                      }
+                      if (isRecording) {
+                        stopRecording();
+                        return;
+                      }
                       const targetId = null;
                       activeVoiceUpdateIdRef.current = targetId;
                       setActiveVoiceUpdateId(targetId);
@@ -1218,10 +1232,11 @@ function App() {
                         addLog(`Mikrofon: ${formatError(err)}`, 'error');
                       });
                     }}
-                    disabled={isProcessing}
-                    className={`relative z-10 w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${isRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : isProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
+                    disabled={floatingMicDisabled}
+                    title={isWorkLogVoiceMode ? 'Nadiktovat pracovní činnost' : 'Spustit diktování'}
+                    className={`relative z-10 w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${floatingMicIsRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : floatingMicIsProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
                   >
-                    {isProcessing ? <div className="w-5 h-5 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (isRecording ? <MicOff className="w-5 h-5 md:w-8 md:h-8 text-white" /> : <Mic className="w-5 h-5 md:w-8 md:h-8 text-white" />)}
+                    {floatingMicIsProcessing ? <div className="w-5 h-5 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (floatingMicIsRecording ? <MicOff className="w-5 h-5 md:w-8 md:h-8 text-white" /> : <Mic className="w-5 h-5 md:w-8 md:h-8 text-white" />)}
                   </button>
                 </div>
               </div>
