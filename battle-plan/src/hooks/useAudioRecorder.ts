@@ -146,6 +146,7 @@ export function useAudioRecorder() {
             checkSilence();
         } catch (err) {
             console.error('Failed to start recording', err);
+            throw err;
         }
     }, []);
 
