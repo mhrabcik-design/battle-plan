@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Mic, Loader2, AlertCircle } from 'lucide-react';
+import { Mic, Loader2, AlertCircle, CalendarDays, Clock3, Users, Briefcase, ClipboardList } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAudioRecorder } from '../../hooks/useAudioRecorder';
 import {
@@ -20,6 +20,14 @@ const hasMediaRecorderSupport = (): boolean =>
     typeof window !== 'undefined' &&
     'MediaRecorder' in window &&
     !!navigator.mediaDevices?.getUserMedia;
+
+const guidanceItems = [
+    { icon: Briefcase, text: 'projekt nebo zakázku' },
+    { icon: CalendarDays, text: 'datum nebo období' },
+    { icon: Users, text: 'kdo tam pracoval' },
+    { icon: Clock3, text: 'kolik hodin na osobu nebo celkem' },
+    { icon: ClipboardList, text: 'co se dělalo' },
+];
 
 export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarProps) {
     const {
@@ -165,6 +173,51 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
                     {processing ? 'Parsuji…' : isRecording ? 'Zastavit' : 'Diktovat'}
                 </span>
             </button>
+
+            {isRecording && (
+                <motion.div
+                    initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                    className="fixed left-3 right-3 bottom-24 md:left-auto md:right-8 md:bottom-8 md:w-[26rem] z-[80] rounded-2xl border border-indigo-400/30 bg-slate-950/95 shadow-2xl shadow-indigo-950/40 backdrop-blur-xl p-4"
+                >
+                    <div className="flex items-start gap-3">
+                        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-500/15 text-red-300 ring-1 ring-red-400/30">
+                            <motion.span
+                                className="h-2.5 w-2.5 rounded-full bg-red-400"
+                                animate={{ opacity: [1, 0.35, 1] }}
+                                transition={{ repeat: Infinity, duration: 1 }}
+                            />
+                        </div>
+                        <div className="min-w-0 space-y-3">
+                            <div>
+                                <p className="text-xs font-black uppercase tracking-widest text-indigo-200">
+                                    Řekni pracovní záznam
+                                </p>
+                                <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                                    Nejlépe funguje jedna souvislá věta se zakázkou, lidmi, časem a činností.
+                                </p>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                {guidanceItems.map(({ icon: Icon, text }) => (
+                                    <div key={text} className="flex items-center gap-2 text-xs font-bold text-slate-300">
+                                        <Icon className="h-3.5 w-3.5 text-indigo-300" />
+                                        <span>{text}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                    Příklad
+                                </p>
+                                <p className="mt-1 text-xs leading-relaxed text-slate-300">
+                                    Dnes na projektu Plaza jsme byli Martin a Sergej, každý 8 hodin, montovali jsme kabeláž.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </motion.div>
+            )}
 
             {manualProjectRequired && (
                 <div className="text-[10px] text-amber-400 uppercase tracking-widest font-bold">
