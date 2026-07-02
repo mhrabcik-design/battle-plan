@@ -40,6 +40,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
     const [processing, setProcessing] = useState(false);
     const [extracted, setExtracted] = useState<ExtractedWorkLogBatch | null>(null);
     const [manualProjectRequired, setManualProjectRequired] = useState(false);
+    const [showRecordingGuide, setShowRecordingGuide] = useState(false);
     const processingRef = useRef(false);
     const [probeError, setProbeError] = useState<string | null>(() =>
         hasMediaRecorderSupport() ? null : 'Tento prohlížeč nepodporuje MediaRecorder',
@@ -47,22 +48,26 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
 
     const handleToggle = useCallback(async () => {
         if (isRecording) {
+            setShowRecordingGuide(false);
             stopRecording();
             return;
         }
         try {
+            setShowRecordingGuide(true);
             await startRecording();
             setProbeError(null);
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Nepodařilo se spustit mikrofon';
             onError?.(`Mikrofon: ${message}`);
             setProbeError(message);
+            setShowRecordingGuide(false);
         }
     }, [isRecording, startRecording, stopRecording, onError]);
 
     useEffect(() => {
         if (!audioBlob) return;
         if (processingRef.current) return;
+        setShowRecordingGuide(false);
         processingRef.current = true;
         setProcessing(true);
 
@@ -174,7 +179,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
                 </span>
             </button>
 
-            {isRecording && (
+            {showRecordingGuide && (
                 <motion.div
                     initial={{ opacity: 0, y: 12, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -192,7 +197,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo }: WorkLogVoiceBarPro
                         <div className="min-w-0 space-y-3">
                             <div>
                                 <p className="text-xs font-black uppercase tracking-widest text-indigo-200">
-                                    Řekni pracovní záznam
+                                    {isRecording ? 'Řekni pracovní záznam' : 'Připravuji mikrofon'}
                                 </p>
                                 <p className="mt-1 text-xs leading-relaxed text-slate-400">
                                     Nejlépe funguje jedna souvislá věta se zakázkou, lidmi, časem a činností.

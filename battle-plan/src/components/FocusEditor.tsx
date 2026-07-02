@@ -11,7 +11,7 @@ interface FocusEditorProps {
     activeVoiceUpdateId: number | null;
     isRecording: boolean;
     stopRecording: () => void;
-    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void;
+    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void | Promise<void>;
     setActiveVoiceUpdateId: (id: number | null) => void;
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
     handleDeleteTask: (task: UnifiedTask) => void;
@@ -71,11 +71,13 @@ export function FocusEditor({
                                     } else {
                                         activeVoiceUpdateIdRef.current = editingTask.id!;
                                         setActiveVoiceUpdateId(editingTask.id!);
-                                        startRecording({
+                                        void Promise.resolve(startRecording({
                                             enableFeedback: true,
                                             onSilence: () => stopRecording(),
                                             silenceThreshold: -45,
                                             silenceDuration: 4000
+                                        })).catch((err: unknown) => {
+                                            console.error('Focus voice recording failed', err);
                                         });
                                     }
                                 }}
@@ -316,11 +318,13 @@ export function FocusEditor({
                                         } else {
                                             activeVoiceUpdateIdRef.current = editingTask.id!;
                                             setActiveVoiceUpdateId(editingTask.id!);
-                                            startRecording({
+                                            void Promise.resolve(startRecording({
                                                 enableFeedback: true,
                                                 onSilence: () => stopRecording(),
                                                 silenceThreshold: -45,
                                                 silenceDuration: 4000
+                                            })).catch((err: unknown) => {
+                                                console.error('Focus voice recording failed', err);
                                             });
                                         }
                                     }}

@@ -17,7 +17,7 @@ interface TaskCardProps {
     stopRecording: () => void;
     setActiveVoiceUpdateId: (id: number) => void;
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
-    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void;
+    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void | Promise<void>;
 }
 
 export function TaskCard({
@@ -151,11 +151,13 @@ export function TaskCard({
                             } else {
                                 setActiveVoiceUpdateId(task.id!);
                                 activeVoiceUpdateIdRef.current = task.id!;
-                                startRecording({
+                                void Promise.resolve(startRecording({
                                     enableFeedback: true,
                                     onSilence: () => stopRecording(),
                                     silenceThreshold: -45,
                                     silenceDuration: 4000
+                                })).catch((err: unknown) => {
+                                    console.error('Task voice recording failed', err);
                                 });
                             }
                         }}

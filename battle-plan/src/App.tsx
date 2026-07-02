@@ -1209,11 +1209,13 @@ function App() {
                       const targetId = null;
                       activeVoiceUpdateIdRef.current = targetId;
                       setActiveVoiceUpdateId(targetId);
-                      startRecording({
+                      void startRecording({
                         enableFeedback: true,
                         onSilence: () => stopRecording(),
                         silenceThreshold: -45,
                         silenceDuration: 5000 // Longer for main mic as it might be dictating longer thoughts
+                      }).catch((err) => {
+                        addLog(`Mikrofon: ${formatError(err)}`, 'error');
                       });
                     }}
                     disabled={isProcessing}
