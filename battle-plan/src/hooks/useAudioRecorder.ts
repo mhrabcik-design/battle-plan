@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
 export interface RecorderOptions {
     onSilence?: () => void;
@@ -176,6 +176,38 @@ export function useAudioRecorder() {
         const finalDuration = (Date.now() - startTimeRef.current) / 1000;
         setDuration(finalDuration);
         setIsRecording(false);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            isRecordingRef.current = false;
+
+            if (silenceTimerRef.current) {
+                clearTimeout(silenceTimerRef.current);
+                silenceTimerRef.current = null;
+            }
+
+            if (mediaRecorderRef.current) {
+                mediaRecorderRef.current.ondataavailable = null;
+                mediaRecorderRef.current.onstop = null;
+                if (mediaRecorderRef.current.state === 'recording') {
+                    mediaRecorderRef.current.stop();
+                }
+                mediaRecorderRef.current = null;
+            }
+
+            if (audioContextRef.current) {
+                void audioContextRef.current.close();
+                audioContextRef.current = null;
+            }
+
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+                streamRef.current = null;
+            }
+
+            chunksRef.current = [];
+        };
     }, []);
 
     return {
