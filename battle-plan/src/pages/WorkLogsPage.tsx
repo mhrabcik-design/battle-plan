@@ -6,17 +6,18 @@ import { WorkLogForm } from '../components/worklogs/WorkLogForm';
 import { WorkLogCard } from '../components/worklogs/WorkLogCard';
 import { WorkLogTable } from '../components/worklogs/WorkLogTable';
 import { WorkLogCalendar } from '../components/worklogs/WorkLogCalendar';
-import { WorkLogVoiceBar } from '../components/worklogs/WorkLogVoiceBar';
+import { WorkLogVoiceBar, type WorkLogVoiceController } from '../components/worklogs/WorkLogVoiceBar';
 import { filterWorkLogsForPrace } from '../utils/workLogFilter';
 
 interface WorkLogsPageProps {
     googleAuth: { isSignedIn: boolean; accessToken: string | null };
     onAddLog?: (message: string, type?: 'info' | 'error') => void;
+    onVoiceControllerChange?: (controller: WorkLogVoiceController | null) => void;
 }
 
 type View = 'cards' | 'calendar' | 'table';
 
-export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
+export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPageProps) {
     const [showForm, setShowForm] = useState(false);
     const [view, setView] = useState<View>('cards');
 
@@ -124,6 +125,7 @@ export function WorkLogsPage({ onAddLog }: WorkLogsPageProps) {
                         onSaved={handleSaved}
                         onError={handleVoiceError}
                         onInfo={handleVoiceInfo}
+                        onControllerChange={onVoiceControllerChange}
                     />
 
                     <button
