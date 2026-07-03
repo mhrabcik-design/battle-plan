@@ -1,4 +1,5 @@
 import type { Task } from '../db';
+import { DriveJsonStore } from './driveJsonStore';
 
 export interface AgentWrite {
   id: string;
@@ -8,74 +9,31 @@ export interface AgentWrite {
   applied_at?: number;
 }
 
-const FOLDER_NAME = 'Anu-BattlePlan';
 const PENDING_FILE = 'agent-pending-writes.json';
 
+interface PendingWritesFile {
+  writes?: AgentWrite[];
+}
+
 class AgentBridge {
-  private folderId: string | null = null;
   private fileId: string | null = null;
-  private accessToken: string | null = null;
   private processedIds: Set<string> = new Set();
   private isInitialized = false;
+  private readonly drive = new DriveJsonStore();
 
   async init(): Promise<void> {
     if (this.isInitialized) return;
-    if (!window.gapi?.client?.drive) {
-      console.warn('AgentBridge: GAPI not available');
-      return;
-    }
-    this.accessToken = localStorage.getItem('google_access_token');
-    if (!this.accessToken) {
-      console.warn('AgentBridge: Not signed in');
-      return;
-    }
-
-    // Cache folder ID v localStorage (reuse vzor z googleService.ts)
-    const cached = localStorage.getItem('bp_folder_id');
-    if (cached) {
-      this.folderId = cached;
-    } else {
-      try {
-        const r = await window.gapi.client.drive.files.list({
-          q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-          spaces: 'drive', fields: 'files(id)', pageSize: 1,
-        });
-        if (r.result.files?.[0]) {
-          this.folderId = r.result.files[0].id;
-          localStorage.setItem('bp_folder_id', this.folderId);
-        } else {
-          console.warn('AgentBridge: Folder /Anu-BattlePlan/ not found');
-          return;
-        }
-      } catch (e) {
-        console.error('AgentBridge: Failed to find folder', e);
-        return;
-      }
-    }
-    this.isInitialized = true;
+    this.isInitialized = await this.drive.init();
   }
 
   async fetchPendingWrites(): Promise<AgentWrite[]> {
-    if (!this.isInitialized || !this.folderId || !this.accessToken) return [];
+    if (!this.isInitialized) return [];
 
     try {
-      // Najdi soubor
-      const listR = await window.gapi.client.drive.files.list({
-        q: `name='${PENDING_FILE}' and '${this.folderId}' in parents and trashed=false`,
-        spaces: 'drive', fields: 'files(id)', pageSize: 1,
-      });
-      if (!listR.result.files?.[0]) return [];
-      this.fileId = listR.result.files[0].id;
-
-      // Stáhni obsah
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
-      );
-      if (!resp.ok) return [];
-
-      const data = await resp.json() as { writes?: AgentWrite[] };
-      const writes: AgentWrite[] = (data.writes ?? []).filter(
+      const loaded = await this.drive.readJsonFile<PendingWritesFile>(PENDING_FILE);
+      if (!loaded) return [];
+      this.fileId = loaded.fileId;
+      const writes: AgentWrite[] = (loaded.data.writes ?? []).filter(
         (w: AgentWrite) => !w.applied_at && !this.processedIds.has(w.id)
       );
       return writes;
@@ -120,16 +78,13 @@ class AgentBridge {
   }
 
   async markApplied(writeIds: string[]): Promise<void> {
-    if (!this.fileId || !this.accessToken || writeIds.length === 0) return;
+    if (!this.fileId || writeIds.length === 0) return;
 
     try {
-      // Stáhni aktuální stav
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
-      );
-      if (!resp.ok) return;
-      const data = await resp.json() as { writes?: AgentWrite[] };
+      const loaded = await this.drive.readJsonFile<PendingWritesFile>(PENDING_FILE);
+      if (!loaded) return;
+      this.fileId = loaded.fileId;
+      const data = loaded.data;
 
       // Označ jako aplikované
       const now = Date.now();
@@ -137,29 +92,8 @@ class AgentBridge {
         writeIds.includes(w.id) ? { ...w, applied_at: now } : w
       );
 
-      // Upload zpět (stejný multipart pattern jako v googleService.ts saveToDrive)
       const updatedData = { ...data, writes };
-      const fileContent = JSON.stringify(updatedData);
-      const boundary = '-------314159265358979323846';
-      const metadata = {
-        name: PENDING_FILE,
-        mimeType: 'application/json',
-      };
-      const body =
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        JSON.stringify(metadata) + '\r\n' +
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        fileContent + '\r\n' +
-        '--' + boundary + '--';
-
-      await window.gapi.client.request({
-        path: `/upload/drive/v3/files/${this.fileId}?uploadType=multipart`,
-        method: 'PATCH',
-        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-        body: body,
-      });
+      await this.drive.writeJsonFile(PENDING_FILE, updatedData, this.fileId);
 
       // Přidej do processedIds pro případ, že by se soubor stáhl znovu
       for (const id of writeIds) this.processedIds.add(id);

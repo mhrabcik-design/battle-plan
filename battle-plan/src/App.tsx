@@ -3,13 +3,18 @@ import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, Chev
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
+import { useDriveSyncOrchestration } from './hooks/useDriveSyncOrchestration';
+import { useSuggestionsBadge } from './hooks/useSuggestionsBadge';
+import { useAgentBridgePolling } from './hooks/useAgentBridgePolling';
+import { useTaskCommands } from './hooks/useTaskCommands';
+import { useGlobalVoiceProcessing } from './hooks/useGlobalVoiceProcessing';
 import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
-import { agentBridge } from './services/agentBridge';
-import { suggestionsSync } from './services/suggestionsSync';
-import type { ViewMode, UnifiedTask, GoogleAuthStatus } from './types';
+import { taskDriveBackup } from './services/taskDriveBackup';
+import { mergeLocalToCloud } from './services/workLogsSync';
+import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList, GoogleTaskRaw } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TaskCard } from './components/TaskCard';
 import { FocusEditor } from './components/FocusEditor';
@@ -18,8 +23,7 @@ import { WeeklyCalendar } from './components/WeeklyCalendar';
 import { SuggestionsPage } from './pages/SuggestionsPage';
 import { WorkLogsPage } from './pages/WorkLogsPage';
 import type { WorkLogVoiceController } from './components/worklogs/WorkLogVoiceBar';
-import { workLogsSync, mergeCloudToLocal, mergeLocalToCloud, type MergeResult } from './services/workLogsSync';
-import { processWorkLogAudio, type ExtractedWorkLogBatch } from './services/workLogExtractor';
+import type { ExtractedWorkLogBatch } from './services/workLogExtractor';
 import { WorkLogVoiceConfirm } from './components/worklogs/WorkLogVoiceConfirm';
 import {
   formatTimeLeft,
@@ -28,25 +32,9 @@ import {
   getWeekDays,
   getUrgencyColor
 } from './utils/calendarUtils';
-import { applySemanticResult } from './services/semanticEngine';
 import { buildInfo } from './utils/buildInfo';
-import { getMissingWorkLogsFileStatus, hasLocalWorkLogsData } from './utils/workLogsSyncStatus';
 
 const AVAILABLE_MODELS = AVAILABLE_GEMINI_MODELS;
-
-interface GoogleTaskList {
-  id: string;
-  title?: string;
-}
-
-interface GoogleTaskRaw {
-  id: string;
-  title: string;
-  notes?: string;
-  status?: string;
-  due?: string;
-  updated: string;
-}
 
 const NAV_ITEMS = [
   { id: 'battle', label: 'Plán', icon: List },
@@ -291,256 +279,20 @@ function App() {
     });
   }, [localTasks, googleTasksMapped, viewMode]);
 
-  // Auto-sync check on start AND on focus/visibility change
-  useEffect(() => {
-    if (!googleAuth.isSignedIn) {
-      queueMicrotask(() => {
-        updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
-        updateSyncHealth('worklogs', { state: 'idle', detail: 'Čeká na Google přihlášení' });
-      });
-      return;
-    }
+  useDriveSyncOrchestration({
+    googleAuth,
+    setGoogleAuth,
+    setGoogleTaskLists,
+    setApiKey,
+    setSelectedModel,
+    setUiScale,
+    setLastSync,
+    addLog,
+    updateSyncHealth,
+  });
 
-    googleService.getTaskLists().then(setGoogleTaskLists);
-
-    const checkSync = async () => {
-      try {
-        const status = googleService.getAuthStatus();
-        if (!status.isSignedIn && localStorage.getItem('google_access_token')) {
-          const success = await googleService.trySilentRefresh();
-          if (success) {
-            setGoogleAuth(googleService.getAuthStatus());
-          }
-        }
-
-        const payload = await googleService.loadFromDrive();
-        if (payload && payload.data) {
-          const cloudTimestamp = payload.timestamp || 0;
-
-          const { tasks: driveTasks, settings: driveSettings } = payload.data;
-
-          if (driveSettings) {
-            for (const s of driveSettings) {
-              await db.settings.put(s);
-              if (s.id === 'gemini_api_key') setApiKey(s.value);
-              if (s.id === 'gemini_model') setSelectedModel(s.value);
-              if (s.id === 'ui_scale') setUiScale(Number(s.value));
-            }
-          }
-
-          if (driveTasks && Array.isArray(driveTasks)) {
-            let changesMade = false;
-            await db.transaction('rw', db.tasks, async () => {
-              for (const cloudTask of driveTasks) {
-                if (!cloudTask.id) continue;
-                const localTask = await db.tasks.get(cloudTask.id);
-
-                if (!localTask) {
-                  await db.tasks.add(cloudTask);
-                  changesMade = true;
-                } else {
-                  const cloudUpdated = cloudTask.updatedAt || cloudTask.createdAt || 0;
-                  const localUpdated = localTask.updatedAt || localTask.createdAt || 0;
-
-                  if (cloudUpdated > localUpdated) {
-                    await db.tasks.put(cloudTask);
-                    changesMade = true;
-                  }
-                }
-              }
-            });
-
-            if (changesMade) {
-              addLog(`Synchronizace: Staženy novější změny z cloudu.`);
-            }
-          }
-
-          const now = new Date().toLocaleString('cs-CZ');
-          setLastSync(now);
-          localStorage.setItem('last_drive_sync', now);
-          localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
-          updateSyncHealth('tasks', {
-            state: 'ok',
-            detail: 'Drive data načtena',
-            lastSuccess: now,
-            lastError: null,
-          });
-        } else {
-          updateSyncHealth('tasks', {
-            state: 'stale',
-            detail: 'Drive data nejsou dostupná nebo jsou prázdná',
-          });
-        }
-
-        // === F6: WorkLogs + Projects sync ===
-        await workLogsSync.init();
-        if (workLogsSync.initialized) {
-          const wl = await workLogsSync.loadAll();
-          if (wl.timestamp > 0) {
-            const mergeResult: MergeResult = await mergeCloudToLocal(wl.workLogs, wl.projects);
-            if (mergeResult.workLogsAdded > 0 || mergeResult.workLogsUpdated > 0 ||
-                mergeResult.projectsAdded > 0 || mergeResult.projectsUpdated > 0) {
-              addLog(
-                `WorkLogs sync: +${mergeResult.workLogsAdded} logů, ~${mergeResult.workLogsUpdated} upd, +${mergeResult.projectsAdded} projektů, ~${mergeResult.projectsUpdated} upd.`,
-                'info'
-              );
-            }
-            updateSyncHealth('worklogs', {
-              state: 'ok',
-              detail: wl.timestamp > 0 ? 'WorkLogs načteny z Drive' : 'WorkLogs soubor zatím neexistuje',
-              lastSuccess: new Date().toLocaleString('cs-CZ'),
-              lastError: null,
-            });
-          } else {
-            const localCounts = {
-              workLogs: await db.workLogs.count(),
-              projects: await db.projects.count(),
-            };
-            const missingStatus = getMissingWorkLogsFileStatus(localCounts);
-            updateSyncHealth('worklogs', {
-              state: missingStatus.state,
-              detail: missingStatus.detail,
-              lastError: null,
-            });
-            if (hasLocalWorkLogsData(localCounts)) {
-              const created = await mergeLocalToCloud();
-              updateSyncHealth('worklogs', created
-                ? {
-                    state: 'ok',
-                    detail: 'WorkLogs soubor vytvořen na Drive',
-                    lastSuccess: new Date().toLocaleString('cs-CZ'),
-                    lastError: null,
-                  }
-                : {
-                    state: 'error',
-                    detail: 'WorkLogs soubor se nepodařilo vytvořit',
-                  }
-              );
-              if (created) {
-                addLog('WorkLogs soubor vytvořen na Drive', 'info');
-              }
-            }
-          }
-        } else {
-          updateSyncHealth('worklogs', {
-            state: 'stale',
-            detail: 'WorkLogs sync není inicializovaný',
-          });
-        }
-      } catch (e) {
-        console.error("Auto-sync check failed", e);
-        const message = formatError(e);
-        updateSyncHealth('tasks', {
-          state: 'error',
-          detail: 'Automatická synchronizace selhala',
-          lastError: message,
-        });
-      }
-    };
-
-    // Run on mount
-    checkSync();
-
-    // Run whenever app becomes visible (e.g. unlocking phone or switching tabs)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        checkSync();
-      }
-    };
-
-    window.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', checkSync); // Backup for some mobile browsers
-
-    return () => {
-      window.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', checkSync);
-    };
-  }, [googleAuth.isSignedIn, addLog, updateSyncHealth]);
-
-  // Suggestions badge: count open suggestions, poll every 60s
-  useEffect(() => {
-    if (!googleAuth.isSignedIn) {
-      queueMicrotask(() => {
-        setSuggestionsBadge(0);
-        updateSyncHealth('suggestions', { state: 'idle', detail: 'Čeká na Google přihlášení' });
-      });
-      return;
-    }
-
-    const refreshBadge = async () => {
-      try {
-        await suggestionsSync.init();
-        if (!suggestionsSync.initialized) {
-          updateSyncHealth('suggestions', { state: 'stale', detail: 'Suggestions sync není inicializovaný' });
-          return;
-        }
-        const sugs = await suggestionsSync.fetchSuggestions();
-        const open = sugs.filter((s) => s.status === 'open').length;
-        setSuggestionsBadge(open);
-        updateSyncHealth('suggestions', {
-          state: 'ok',
-          detail: `${open} otevřených návrhů`,
-          lastSuccess: new Date().toLocaleString('cs-CZ'),
-          lastError: null,
-        });
-      } catch (e) {
-        updateSyncHealth('suggestions', {
-          state: 'error',
-          detail: 'Načtení návrhů selhalo',
-          lastError: formatError(e),
-        });
-      }
-    };
-
-    refreshBadge();
-    const t = setInterval(refreshBadge, 60_000);
-    return () => clearInterval(t);
-  }, [googleAuth.isSignedIn, updateSyncHealth]);
-
-  // Agent bridge: poslouchá agent-pending-writes.json z Anu
-  useEffect(() => {
-    if (!googleAuth.isSignedIn) return;
-
-    let cancelled = false;
-
-    const checkAgentWrites = async () => {
-      if (cancelled) return;
-      try {
-        await agentBridge.init();
-        if (!agentBridge.initialized) return;
-
-        const writes = await agentBridge.fetchPendingWrites();
-        if (writes.length === 0) return;
-        if (cancelled) return;
-
-        addLog(`Anu: ${writes.length} nových zápisů ke zpracování`);
-
-        const applied: string[] = [];
-        for (const w of writes) {
-          if (cancelled) break;
-          const result = await agentBridge.applyWrite(w);
-          if (result.success) applied.push(w.id);
-        }
-
-        if (applied.length > 0 && !cancelled) {
-          await agentBridge.markApplied(applied);
-          addLog(`Anu: ${applied.length} zápisů úspěšně aplikováno`);
-        }
-      } catch (e) {
-        console.error('Agent bridge failed', e);
-      }
-    };
-
-    // Po mount, pak každých 30s
-    const initialTimer = setTimeout(checkAgentWrites, 3000);  // 3s po mount
-    const interval = setInterval(checkAgentWrites, 30_000);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(initialTimer);
-      clearInterval(interval);
-    };
-  }, [googleAuth.isSignedIn, addLog]);
+  useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth });
+  useAgentBridgePolling({ googleAuth, addLog });
 
   useEffect(() => {
     if (googleAuth.isSignedIn) {
@@ -550,7 +302,6 @@ function App() {
 
   const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
-  // F6: workLogs + projects hash pro auto-backup trigger
   const workLogsDataHash = useLiveQuery(async () => {
     const [allWorkLogs, allProjects] = await Promise.all([
       db.workLogs.toArray(),
@@ -568,7 +319,7 @@ function App() {
       try {
         const allTasks = await db.tasks.toArray();
         const allSettings = await db.settings.toArray();
-        const savedTimestamp = await googleService.saveToDrive({ tasks: allTasks, settings: allSettings });
+        const savedTimestamp = await taskDriveBackup.save({ tasks: allTasks, settings: allSettings });
 
         if (savedTimestamp) {
           const now = new Date().toLocaleString('cs-CZ');
@@ -596,7 +347,6 @@ function App() {
     return () => clearTimeout(timer);
   }, [tasksHash, googleAuth.isSignedIn, addLog, updateSyncHealth]);
 
-  // F6: Auto-backup workLogs + projects (paralelní trigger na workLogsDataHash)
   useEffect(() => {
     if (!googleAuth.isSignedIn || workLogsDataHash === 0) return;
 
@@ -659,194 +409,36 @@ function App() {
     await geminiService.init();
   };
 
-  const applyAiResult = useCallback(async (result: Partial<Task>, updateId: number | null) => {
-    const semanticOutput = await applySemanticResult(result, updateId, googleAuth);
-    if (!semanticOutput) return;
+  const {
+    applyAiResult,
+    toggleSubtask,
+    handleToggleTask,
+    handleDeleteTask,
+    handleSaveEdit,
+    handleSyncToGoogle,
+    handleExport,
+  } = useTaskCommands({
+    googleAuth,
+    activeTaskList,
+    editingTask,
+    setEditingTask,
+    setGoogleTasksRaw,
+    setIsProcessing,
+  });
 
-    if (updateId && semanticOutput.updatedId) {
-      if (editingTask && editingTask.id === updateId) {
-        setEditingTask(prev => prev ? { ...prev, ...semanticOutput.result } : null);
-      }
-    }
-  }, [googleAuth, editingTask]);
-
-  const handleProcessAudio = useCallback(async (blob: Blob) => {
-    if (isProcessingRef.current) return;
-    isProcessingRef.current = true;
-    setIsProcessing(true);
-
-    const updateId = activeVoiceUpdateIdRef.current;
-
-    // === F5: Pokud jsme v záložce Worklogs, jdeme worklog flow ===
-    if (viewMode === 'worklogs') {
-      addLog(`Pracovní činnost — zpracovávám diktát…`, 'info');
-      try {
-        const result = await processWorkLogAudio(
-          blob,
-          (attempt, delay) => addLog(`AI Přetíženo - Pokus č.${attempt} (čekám ${delay / 1000}s)…`, 'info')
-        );
-        if (result.ok) {
-          const totalHours = result.data.entries.reduce((sum, entry) => sum + entry.hours, 0);
-          addLog(`AI extrahovalo: ${result.data.entries.length} návrhů (${totalHours.toFixed(2)}h)`, 'info');
-          setWorkLogExtracted(result.data);
-        } else {
-          addLog(`AI extrakce selhala: ${result.error}`, 'error');
-          alert(`AI extrakce selhala: ${result.error}`);
-        }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        addLog('WorkLog AI Chyba: ' + msg, 'error');
-        alert(msg || 'Chyba při zpracování AI');
-      } finally {
-        isProcessingRef.current = false;
-        setIsProcessing(false);
-        activeVoiceUpdateIdRef.current = null;
-        setActiveVoiceUpdateId(null);
-        clearAudio();
-      }
-      return;
-    }
-
-    addLog(`Zpracovávám audio s modelem: ${selectedModel} (Update ID: ${updateId || 'NOVÝ'})`);
-
-    try {
-      const result = await geminiService.processAudio(
-        blob,
-        updateId || undefined,
-        (attempt, delay) => addLog(`AI Přetíženo - Pokus č.${attempt} (čekám ${delay / 1000}s)...`, 'info')
-      );
-      if (result) {
-        addLog(`AI analýza úspěšná: ${result.title} (${updateId ? 'AKTUALIZACE' : 'NOVÝ'})`);
-        await applyAiResult(result, updateId);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addLog('AI Chyba: ' + msg, 'error');
-      alert(msg || "Chyba při zpracování AI");
-    } finally {
-      isProcessingRef.current = false;
-      setIsProcessing(false);
-      activeVoiceUpdateIdRef.current = null;
-      setActiveVoiceUpdateId(null);
-      clearAudio();
-    }
-  }, [selectedModel, addLog, clearAudio, viewMode, applyAiResult]);
-
-  useEffect(() => {
-    if (audioBlob && !isProcessingRef.current) {
-      handleProcessAudio(audioBlob);
-    }
-  }, [audioBlob, handleProcessAudio]);
-
-  const toggleSubtask = useCallback(async (task: UnifiedTask, subTaskId: string) => {
-    if (!task.id || !task.subTasks) return;
-    const newSubTasks = task.subTasks.map(st => st.id === subTaskId ? { ...st, completed: !st.completed } : st);
-    const completedCount = newSubTasks.filter(st => st.completed).length;
-    const newProgress = Math.round((completedCount / newSubTasks.length) * 100);
-    const total = task.totalDuration || task.duration || 0;
-    const newDuration = Math.round(total * (1 - newProgress / 100));
-
-    await db.tasks.update(task.id, {
-      subTasks: newSubTasks,
-      progress: newProgress,
-      duration: newDuration,
-      totalDuration: total,
-      updatedAt: Date.now()
-    });
-  }, []);
-
-  const handleToggleTask = useCallback(async (task: UnifiedTask) => {
-    if (task.isGoogleTask && task.googleId && googleAuth.isSignedIn) {
-      const newStatus = task.status === 'completed' ? 'needsAction' : 'completed';
-      await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
-      googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
-    } else if (task.id) {
-      const newStatus = task.status === 'completed' ? 'pending' : 'completed';
-      await db.tasks.update(task.id, {
-        status: newStatus,
-        updatedAt: Date.now()
-      });
-      
-      if (task.googleEventId && googleAuth.isSignedIn) {
-        try {
-          const updatedTask = { ...task, status: newStatus };
-          await googleService.addToCalendar(updatedTask);
-        } catch (e) {
-          console.error("Failed to update calendar event on toggle", e);
-        }
-      }
-    }
-  }, [googleAuth.isSignedIn, activeTaskList]);
-
-  const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
-    if (!confirm('Opravdu smazat tento záznam?')) return;
-
-    if (task.isGoogleTask && task.googleId && googleAuth.isSignedIn) {
-      await googleService.deleteGoogleTask(task.googleId, task.googleListId);
-      googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
-    } else if (task.id) {
-      if (task.googleEventId && googleAuth.isSignedIn) {
-        try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
-      }
-      await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
-    }
-  }, [googleAuth.isSignedIn, activeTaskList]);
-
-  const handleSaveEdit = useCallback(async () => {
-    if (editingTask) {
-      if (editingTask.isGoogleTask && editingTask.googleId && googleAuth.isSignedIn) {
-        await googleService.updateGoogleTask(editingTask.googleId, {
-          title: editingTask.title,
-          notes: editingTask.description
-        }, editingTask.googleListId);
-        googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
-      } else if (editingTask.id) {
-        const taskData = { ...editingTask };
-        delete (taskData as Partial<UnifiedTask>).isGoogleTask;
-        delete (taskData as Partial<UnifiedTask>).googleId;
-        delete (taskData as Partial<UnifiedTask>).googleListId;
-        await db.tasks.update(editingTask.id, { ...taskData, updatedAt: Date.now() });
-        if (editingTask.type === 'meeting' && googleAuth.isSignedIn) {
-          try {
-            const eventId = await googleService.addToCalendar(editingTask);
-            if (eventId && eventId !== editingTask.googleEventId) {
-              await db.tasks.update(editingTask.id, { googleEventId: eventId, updatedAt: Date.now() });
-            }
-          } catch (e) {
-            console.error("Save Google sync failed", e);
-          }
-        }
-      }
-      setEditingTask(null);
-    }
-  }, [editingTask, googleAuth.isSignedIn, activeTaskList]);
-
-  const handleSyncToGoogle = useCallback(async (task: UnifiedTask) => {
-    if (!task.id || !googleAuth.isSignedIn) {
-      alert("Pro synchronizaci musíte být přihlášeni ke Googlu.");
-      return;
-    }
-    setIsProcessing(true);
-    try {
-      const eventId = await googleService.addToCalendar(task);
-      if (eventId) {
-        await db.tasks.update(task.id, { googleEventId: eventId, updatedAt: Date.now() });
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      alert(msg || "Chyba při synchronizaci s Googlem");
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [googleAuth.isSignedIn]);
-
-  const handleExport = useCallback((task: UnifiedTask) => {
-    const subTasksText = (task.subTasks || []).map(st => `${st.completed ? '✅' : '☐'} ${st.title}`).join('\n');
-    const body = `=== ${task.title} ===\nTermín: ${task.deadline || task.date || 'Neurčeno'} | Urgence: ${task.urgency}/3\nPokrok: ${task.progress || 0}%\n--------------------------------------\nPOPIS:\n${task.description || 'Bez popisu'}\n\n${subTasksText ? `PŘEHLED PODÚKOLŮ:\n${subTasksText}\n` : ''}INTERNÍ ZÁPIS:\n${task.internalNotes || 'Bez dodatečného zápisu'}\n\n--\nOdesláno z aplikace Bitevní Plán`.trim();
-    const subject = `${task.title} [BP]`;
-    const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailtoUrl;
-  }, []);
+  useGlobalVoiceProcessing({
+    audioBlob,
+    viewMode,
+    selectedModel,
+    activeVoiceUpdateIdRef,
+    isProcessingRef,
+    setIsProcessing,
+    setActiveVoiceUpdateId,
+    setWorkLogExtracted,
+    clearAudio,
+    addLog,
+    applyAiResult,
+  });
 
   const memoizedIsOverCapacity = useCallback((task: UnifiedTask) => isOverCapacity(currentTime, task), [currentTime]);
   const memoizedGetDeadlineColor = useCallback((date?: string, time?: string) => getDeadlineColor(currentTime, date, time), [currentTime]);

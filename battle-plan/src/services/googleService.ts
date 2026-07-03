@@ -56,7 +56,6 @@ const CLIENT_ID = (import.meta as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).
 // scope also includes drive.file semantics, so existing files remain accessible.
 // Re-authorization required after this change.
 const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks';
-const FOLDER_NAME = 'Anu-BattlePlan';
 
 export interface GoogleAuthStatus {
     state: GoogleAuthState;
@@ -68,7 +67,6 @@ export type GoogleAuthState = 'SIGNED_IN' | 'REFRESH_PENDING' | 'OFFLINE_AUTH' |
 class GoogleService {
     private tokenClient: TokenClient | null = null;
     private accessToken: string | null = null;
-    private folderIdCache: string | null = null;
     private expiresAt: number = 0;
     private userEmail: string | null = null;
 
@@ -295,7 +293,6 @@ class GoogleService {
         }
 
         this.accessToken = null;
-        this.folderIdCache = null;
         this.expiresAt = 0;
         this.userEmail = null;
         localStorage.removeItem('google_access_token');
@@ -479,124 +476,6 @@ class GoogleService {
         }
     }
 
-     
-    async getOrCreateFolder(): Promise<string> {
-        if (!this.accessToken) throw new Error('Not signed in');
-        if (this.folderIdCache) return this.folderIdCache;
-        const listResponse = await window.gapi.client.drive.files.list({
-            q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-            spaces: 'drive',
-            fields: 'files(id, name)',
-            pageSize: 1,
-        });
-        if (listResponse.result.files[0]) {
-            this.folderIdCache = listResponse.result.files[0].id;
-            return this.folderIdCache;
-        }
-        const createResponse = await window.gapi.client.request({
-            path: '/drive/v3/files',
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: FOLDER_NAME,
-                mimeType: 'application/vnd.google-apps.folder',
-            }),
-        });
-        const created = JSON.parse(createResponse.body || '{}');
-        if (!created.id) throw new Error('Failed to create Drive folder: no ID returned');
-        this.folderIdCache = created.id;
-        return this.folderIdCache as string;
-    }
-
-    async saveToDrive(data: any) {
-        if (!this.accessToken) return;
-        try {
-            const folderId = await this.getOrCreateFolder();
-            const listResponse = await window.gapi.client.drive.files.list({
-                spaces: 'drive',
-                q: `name = 'battle_plan_data.json' and '${folderId}' in parents and trashed=false`,
-                fields: 'files(id, name)',
-                pageSize: 1
-            });
-
-            const existingFile = listResponse.result.files[0];
-             
-            const metadata: any = {
-                name: 'battle_plan_data.json',
-                mimeType: 'application/json'
-            };
-            if (!existingFile) {
-                metadata.parents = [folderId];
-            }
-
-            const payload = {
-                version: '1.2',
-                timestamp: Date.now(),
-                data: data
-            };
-
-            const fileContent = JSON.stringify(payload);
-            const boundary = '-------314159265358979323846';
-            const body =
-                "--" + boundary + "\r\n" +
-                "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-                JSON.stringify(metadata) + "\r\n" +
-                "--" + boundary + "\r\n" +
-                "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-                fileContent + "\r\n" +
-                "--" + boundary + "--";
-
-            const path = existingFile
-                ? `/upload/drive/v3/files/${existingFile.id}?uploadType=multipart`
-                : '/upload/drive/v3/files?uploadType=multipart';
-
-            const response = await window.gapi.client.request({
-                path: path,
-                method: existingFile ? 'PATCH' : 'POST',
-                headers: {
-                    'Content-Type': `multipart/related; boundary=${boundary}`
-                },
-                body: body
-            });
-
-            if (response.status !== 200 && response.status !== 201) {
-                throw new Error(`Sync failed: ${response.statusText || response.status}`);
-            }
-            return payload.timestamp;
-        } catch (e: unknown) {
-            const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
-            console.error('Error saving to Drive', err);
-            if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
-                this.signOut();
-                throw new Error("Relace vypršela. Přihlaste se znovu v nastavení.");
-            }
-            const msg = err?.result?.error?.message || err?.message || "Chyba synchronizace";
-            throw new Error(`Disk Error: ${msg}`);
-        }
-    }
-
-    async loadFromDrive() {
-        if (!this.accessToken) return null;
-        try {
-            const folderId = await this.getOrCreateFolder();
-            const listResponse = await window.gapi.client.drive.files.list({
-                spaces: 'drive',
-                q: `name = 'battle_plan_data.json' and '${folderId}' in parents and trashed=false`,
-                fields: 'files(id, name)',
-                pageSize: 1
-            });
-            const existingFile = listResponse.result.files[0];
-            if (!existingFile) return null;
-            const response = await fetch(`https://www.googleapis.com/drive/v3/files/${existingFile.id}?alt=media`, {
-                headers: { 'Authorization': `Bearer ${this.accessToken}` }
-            });
-            if (!response.ok) return null;
-            return await response.json();
-        } catch (err) {
-            console.error('Error loading from Drive', err);
-            return null;
-        }
-    }
 }
 
 export const googleService = new GoogleService();

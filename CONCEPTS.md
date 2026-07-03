@@ -27,6 +27,11 @@ A scan-friendly view of sync health split by subsystem, such as Google auth, Tas
 
 Sync diagnostics should expose status, last success, and high-level errors without exposing tokens, raw Drive payloads, or raw audio.
 
+### Shared Drive JSON Store
+The browser-side Drive persistence layer for small JSON files in the shared BattlePlan folder, such as task backup data, WorkLogs data, suggestions, replies, and agent pending writes.
+
+The shared store owns folder lookup, cached folder identity, file lookup, JSON download, and multipart upload mechanics. Domain services still own payload shape, merge rules, diagnostics, and user-facing error meaning.
+
 ### Shared Audio AI Pipeline
 The browser-side voice-processing layer shared by task voice and WorkLog voice flows for recording, audio normalization, Gemini request preparation, retry/error handling, and missing-key messaging.
 
