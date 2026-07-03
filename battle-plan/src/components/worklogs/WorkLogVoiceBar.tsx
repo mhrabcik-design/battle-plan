@@ -146,6 +146,13 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
         [onSaved, onError, onInfo],
     );
 
+    const handleCancelled = useCallback(() => {
+        setExtracted(null);
+        setManualProjectRequired(false);
+        clearAudio();
+        processingRef.current = false;
+    }, [clearAudio]);
+
     const disabled = !hasMediaRecorderSupport() || processing;
     const controller = useMemo<WorkLogVoiceController>(
         () => ({
@@ -267,10 +274,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
                 <WorkLogVoiceConfirm
                     extracted={extracted}
                     onConfirmed={handleConfirmed}
-                    onCancelled={() => {
-                        setExtracted(null);
-                        setManualProjectRequired(false);
-                    }}
+                    onCancelled={handleCancelled}
                 />
             )}
         </>
