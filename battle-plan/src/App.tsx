@@ -1159,7 +1159,11 @@ function App() {
                   }
                   setWorkLogExtracted(null);
                 }}
-                onCancelled={() => setWorkLogExtracted(null)}
+                onCancelled={() => {
+                  setWorkLogExtracted(null);
+                  clearAudio();
+                  isProcessingRef.current = false;
+                }}
               />
             )}
           </AnimatePresence>
