@@ -299,7 +299,7 @@ export function FocusEditor({
                     </button>
 
                     <div className="flex items-center gap-4">
-                        {editingTask.type === 'meeting' && !editingTask.isGoogleTask && googleAuth.isSignedIn && (
+                        {editingTask.type === 'meeting' && !editingTask.isGoogleTask && (googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING') && (
                             <button
                                 onClick={() => handleSyncToGoogle(editingTask)}
                                 className={`px-8 py-3.5 rounded-xl text-sm font-black uppercase flex items-center gap-2 transition-all ${editingTask.googleEventId ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-emerald-400 border border-emerald-500/30'}`}

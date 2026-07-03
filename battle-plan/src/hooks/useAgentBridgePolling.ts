@@ -8,8 +8,10 @@ interface UseAgentBridgePollingArgs {
 }
 
 export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePollingArgs) {
+  const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+
   useEffect(() => {
-    if (!googleAuth.isSignedIn) return;
+    if (!hasUsableAuth) return;
 
     let cancelled = false;
 
@@ -49,6 +51,6 @@ export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePoll
       clearTimeout(initialTimer);
       clearInterval(interval);
     };
-  }, [googleAuth.isSignedIn, addLog]);
+  }, [hasUsableAuth, addLog]);
 }
 

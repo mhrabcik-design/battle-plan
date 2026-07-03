@@ -32,8 +32,10 @@ export function useDriveSyncOrchestration({
   addLog,
   updateSyncHealth,
 }: UseDriveSyncOrchestrationArgs) {
+  const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+
   useEffect(() => {
-    if (!googleAuth.isSignedIn) {
+    if (!hasUsableAuth) {
       queueMicrotask(() => {
         updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
         updateSyncHealth('worklogs', { state: 'idle', detail: 'Čeká na Google přihlášení' });
@@ -46,7 +48,7 @@ export function useDriveSyncOrchestration({
     const checkSync = async () => {
       try {
         const status = googleService.getAuthStatus();
-        if (!status.isSignedIn && localStorage.getItem('google_access_token')) {
+        if (status.state !== 'SIGNED_IN' && localStorage.getItem('google_access_token')) {
           const success = await googleService.trySilentRefresh();
           if (success) {
             setGoogleAuth(googleService.getAuthStatus());
@@ -192,6 +194,6 @@ export function useDriveSyncOrchestration({
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
     };
-  }, [googleAuth.isSignedIn, setGoogleAuth, setGoogleTaskLists, setApiKey, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
+  }, [hasUsableAuth, setGoogleAuth, setGoogleTaskLists, setApiKey, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
 }
 

@@ -214,7 +214,6 @@ class GoogleService {
             const refreshed = await this.trySilentRefresh();
             if (refreshed) {
                 if (this.computeState() === 'SIGNED_IN') return 'ok';
-                this.folderIdCache = null;
                 return 'auth-unavailable';
             }
             return 'auth-unavailable';
