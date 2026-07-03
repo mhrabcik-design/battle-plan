@@ -94,7 +94,7 @@ class GoogleService {
                     if (this.accessToken) {
                         window.gapi.client.setToken({ access_token: this.accessToken });
                         window.dispatchEvent(new CustomEvent('google-auth-change', {
-                            detail: this.getAuthStatus()
+                            detail: { state: this.getAuthState(), accessToken: this.accessToken }
                         }));
                     }
                     resolve();
@@ -124,7 +124,7 @@ class GoogleService {
                         }
 
                         window.dispatchEvent(new CustomEvent('google-auth-change', {
-                            detail: { isSignedIn: true, accessToken: this.accessToken }
+                            detail: { state: 'SIGNED_IN', accessToken: this.accessToken }
                         }));
                     },
                 });
@@ -181,7 +181,7 @@ class GoogleService {
                     window.gapi.client.setToken({ access_token: response.access_token });
 
                     window.dispatchEvent(new CustomEvent('google-auth-change', {
-                        detail: { isSignedIn: true, accessToken: this.accessToken }
+                        detail: { state: this.getAuthState(), accessToken: this.accessToken }
                     }));
 
                     done(true);
@@ -199,7 +199,7 @@ class GoogleService {
                 done(false);
             }
 
-            setTimeout(() => done(!!this.accessToken), 5000);
+            setTimeout(() => done(false), 5000);
         });
     }
 
@@ -228,6 +228,21 @@ class GoogleService {
 
     getAuthState(): GoogleAuthState {
         return this.computeState();
+    }
+
+    private async ensureFreshToken(): Promise<'ok' | 'auth-unavailable'> {
+        const state = this.computeState();
+        if (state === 'SIGNED_IN') return 'ok';
+        if (state === 'REFRESH_PENDING') {
+            const refreshed = await this.trySilentRefresh();
+            if (refreshed) {
+                if (this.computeState() === 'SIGNED_IN') return 'ok';
+                this.folderIdCache = null;
+                return 'auth-unavailable';
+            }
+            return 'auth-unavailable';
+        }
+        return 'auth-unavailable';
     }
 
     private computeState(): GoogleAuthState {
@@ -270,12 +285,12 @@ class GoogleService {
         localStorage.removeItem('google_token_expires_at');
         localStorage.removeItem('google_user_email');
         window.dispatchEvent(new CustomEvent('google-auth-change', {
-            detail: { isSignedIn: false, accessToken: null }
+            detail: { state: 'SIGNED_OUT', accessToken: null }
         }));
     }
 
     async getTaskLists() {
-        if (!this.accessToken) return [];
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return [];
         try {
             const response = await window.gapi.client.tasks.tasklists.list();
             return response.result.items || [];
@@ -286,7 +301,7 @@ class GoogleService {
     }
 
     async getTasks(taskListId: string = '@default') {
-        if (!this.accessToken) return [];
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return [];
         try {
             const response = await window.gapi.client.tasks.tasks.list({
                 tasklist: taskListId,
@@ -301,9 +316,9 @@ class GoogleService {
     }
 
     async createGoogleTask(title: string, notes: string = '', taskListId: string = '@default', dueDate?: string) {
-        if (!this.accessToken) return null;
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
         try {
-             
+
             const task: any = { title, notes };
             if (dueDate) {
                 const d = new Date(dueDate);
@@ -322,9 +337,9 @@ class GoogleService {
         }
     }
 
-     
+
     async updateGoogleTask(taskId: string, updates: any, taskListId: string = '@default') {
-        if (!this.accessToken) return null;
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
         try {
             const response = await window.gapi.client.tasks.tasks.patch({
                 tasklist: taskListId,
@@ -339,7 +354,7 @@ class GoogleService {
     }
 
     async deleteGoogleTask(taskId: string, taskListId: string = '@default') {
-        if (!this.accessToken) return;
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
         try {
             await window.gapi.client.tasks.tasks.delete({
                 tasklist: taskListId,
@@ -350,9 +365,9 @@ class GoogleService {
         }
     }
 
-     
+
     async addToCalendar(task: any) {
-        if (!this.accessToken) return;
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
 
         try {
             const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
@@ -408,7 +423,7 @@ class GoogleService {
             };
 
             const method = task.googleEventId ? 'update' : 'insert';
-             
+
             const params: any = {
                 'calendarId': 'primary',
                 'resource': event,
@@ -421,8 +436,7 @@ class GoogleService {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
-                this.signOut();
-                throw new Error("Relace vypršela. Prosím přihlaste se znovu v nastavení.");
+                return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || JSON.stringify(err);
             throw new Error(`Google Calendar Error: ${errorMsg}`);
@@ -430,7 +444,7 @@ class GoogleService {
     }
 
     async deleteFromCalendar(eventId: string) {
-        if (!this.accessToken) return;
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
         try {
             await window.gapi.client.calendar.events.delete({
                 'calendarId': 'primary',
@@ -441,8 +455,7 @@ class GoogleService {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
-                this.signOut();
-                throw new Error("Relace vypršela. Přihlaste se znovu.");
+                return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || "Neznámá chyba Googlu";
             throw new Error(`Kalendář smazání selhalo: ${errorMsg}`);

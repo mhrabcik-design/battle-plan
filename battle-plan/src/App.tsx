@@ -180,12 +180,13 @@ function App() {
     initGoogle();
 
     const handleAuthChange = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      setGoogleAuth(detail);
+      const detail = (e as CustomEvent).detail as { state?: 'SIGNED_IN' | 'REFRESH_PENDING' | 'OFFLINE_AUTH' | 'SIGNED_OUT' } | null;
+      const isSignedIn = detail?.state === 'SIGNED_IN';
+      setGoogleAuth(detail as never);
       updateSyncHealth('google', {
-        state: detail?.isSignedIn ? 'ok' : 'idle',
-        detail: detail?.isSignedIn ? 'Přihlášeno ke Google službám' : 'Odpojeno od Google služeb',
-        lastSuccess: detail?.isSignedIn ? new Date().toLocaleString('cs-CZ') : null,
+        state: isSignedIn ? 'ok' : 'idle',
+        detail: isSignedIn ? 'Přihlášeno ke Google službám' : 'Odpojeno od Google služeb',
+        lastSuccess: isSignedIn ? new Date().toLocaleString('cs-CZ') : null,
         lastError: null,
       });
     };
