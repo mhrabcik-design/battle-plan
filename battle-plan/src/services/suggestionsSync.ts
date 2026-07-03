@@ -1,3 +1,5 @@
+import { DriveJsonStore } from './driveJsonStore';
+
 export interface AgentSuggestion {
   id: string;
   created_at: number;
@@ -43,79 +45,29 @@ interface RepliesFile {
   replies: AgentSuggestionReply[];
 }
 
-const FOLDER_NAME = 'Anu-BattlePlan';
 const SUGGESTIONS_FILENAME = 'agent-suggestions.json';
 const REPLIES_FILENAME = 'agent-suggestion-replies.json';
 
 class SuggestionsSync {
-  private folderId: string | null = null;
   private suggestionsFileId: string | null = null;
   private repliesFileId: string | null = null;
-  private accessToken: string | null = null;
   private knownReplyIds: Set<string> = new Set();
   private isInitialized = false;
+  private readonly drive = new DriveJsonStore();
 
   async init(): Promise<void> {
     if (this.isInitialized) return;
-    if (!window.gapi?.client?.drive) {
-      console.warn('SuggestionsSync: GAPI not available');
-      return;
-    }
-    this.accessToken = localStorage.getItem('google_access_token');
-    if (!this.accessToken) {
-      console.warn('SuggestionsSync: Not signed in');
-      return;
-    }
-
-    const cached = localStorage.getItem('bp_folder_id');
-    if (cached) {
-      this.folderId = cached;
-    } else {
-      try {
-        const r = await window.gapi.client.drive.files.list({
-          q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-          spaces: 'drive',
-          fields: 'files(id)',
-          pageSize: 1,
-        });
-        if (r.result.files?.[0]) {
-          this.folderId = r.result.files[0].id;
-          localStorage.setItem('bp_folder_id', this.folderId);
-        } else {
-          console.warn('SuggestionsSync: Folder /Anu-BattlePlan/ not found');
-          return;
-        }
-      } catch (e) {
-        console.error('SuggestionsSync: Failed to find folder', e);
-        return;
-      }
-    }
-    this.isInitialized = true;
+    this.isInitialized = await this.drive.init();
   }
 
   async fetchSuggestions(): Promise<AgentSuggestion[]> {
-    if (!this.isInitialized || !this.folderId || !this.accessToken) return [];
+    if (!this.isInitialized) return [];
 
     try {
-      const listR = await window.gapi.client.drive.files.list({
-        q: `name='${SUGGESTIONS_FILENAME}' and '${this.folderId}' in parents and trashed=false`,
-        spaces: 'drive',
-        fields: 'files(id)',
-        pageSize: 1,
-      });
-      const fileMeta = listR.result.files?.[0];
-      if (!fileMeta) return [];
-      this.suggestionsFileId = fileMeta.id;
-
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${this.suggestionsFileId}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
-      );
-      if (!resp.ok) return [];
-
-      const data = (await resp.json()) as SuggestionsFile;
-      const all = data.suggestions ?? [];
-      return all;
+      const loaded = await this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME);
+      if (!loaded) return [];
+      this.suggestionsFileId = loaded.fileId;
+      return loaded.data.suggestions ?? [];
     } catch (e) {
       console.error('SuggestionsSync: fetchSuggestions failed', e);
       return [];
@@ -123,27 +75,13 @@ class SuggestionsSync {
   }
 
   async fetchReplies(suggestionId?: string): Promise<AgentSuggestionReply[]> {
-    if (!this.isInitialized || !this.folderId || !this.accessToken) return [];
+    if (!this.isInitialized) return [];
 
     try {
-      const listR = await window.gapi.client.drive.files.list({
-        q: `name='${REPLIES_FILENAME}' and '${this.folderId}' in parents and trashed=false`,
-        spaces: 'drive',
-        fields: 'files(id)',
-        pageSize: 1,
-      });
-      const fileMeta = listR.result.files?.[0];
-      if (!fileMeta) return [];
-      this.repliesFileId = fileMeta.id;
-
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${this.repliesFileId}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
-      );
-      if (!resp.ok) return [];
-
-      const data = (await resp.json()) as RepliesFile;
-      let replies = data.replies ?? [];
+      const loaded = await this.drive.readJsonFile<RepliesFile>(REPLIES_FILENAME);
+      if (!loaded) return [];
+      this.repliesFileId = loaded.fileId;
+      let replies = loaded.data.replies ?? [];
       if (suggestionId) {
         replies = replies.filter((r) => r.suggestion_id === suggestionId);
       }
@@ -158,16 +96,14 @@ class SuggestionsSync {
     suggestionId: string,
     updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null; title?: string; description?: string }
   ): Promise<{ success: boolean }> {
-    if (!this.isInitialized || !this.suggestionsFileId || !this.accessToken) {
+    if (!this.isInitialized || !this.suggestionsFileId) {
       return { success: false };
     }
     try {
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${this.suggestionsFileId}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
-      );
-      if (!resp.ok) return { success: false };
-      const data = (await resp.json()) as SuggestionsFile;
+      const loaded = await this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME);
+      if (!loaded) return { success: false };
+      this.suggestionsFileId = loaded.fileId;
+      const data = loaded.data;
       const idx = (data.suggestions ?? []).findIndex((s) => s.id === suggestionId);
       if (idx === -1) return { success: false };
 
@@ -184,25 +120,8 @@ class SuggestionsSync {
       if (updates.description !== undefined) {
         sug.description = updates.description;
       }
-      const updated = { ...data, suggestions: data.suggestions, last_updated: Date.now() };
-      const fileContent = JSON.stringify(updated);
-      const boundary = '-------314159265358979323846';
-      const metadata = { name: SUGGESTIONS_FILENAME, mimeType: 'application/json' };
-      const body =
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        JSON.stringify(metadata) + '\r\n' +
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        fileContent + '\r\n' +
-        '--' + boundary + '--';
-      await window.gapi.client.request({
-        path: `/upload/drive/v3/files/${this.suggestionsFileId}?uploadType=multipart`,
-        method: 'PATCH',
-        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-        body: body,
-      });
-      return { success: true };
+
+      return await this.writeSuggestions({ ...data, suggestions: data.suggestions, last_updated: Date.now() });
     } catch (e) {
       console.error('SuggestionsSync: updateSuggestion failed', e);
       return { success: false };
@@ -213,38 +132,19 @@ class SuggestionsSync {
     suggestionId: string,
     status: 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted'
   ): Promise<{ success: boolean }> {
-    if (!this.isInitialized || !this.suggestionsFileId || !this.accessToken) {
+    if (!this.isInitialized || !this.suggestionsFileId) {
       return { success: false };
     }
     try {
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${this.suggestionsFileId}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
-      );
-      if (!resp.ok) return { success: false };
-      const data = (await resp.json()) as SuggestionsFile;
+      const loaded = await this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME);
+      if (!loaded) return { success: false };
+      this.suggestionsFileId = loaded.fileId;
+      const data = loaded.data;
       const idx = (data.suggestions ?? []).findIndex((s) => s.id === suggestionId);
       if (idx === -1) return { success: false };
       data.suggestions[idx].status = status;
       data.suggestions[idx].status_updated_at = Date.now();
-      const fileContent = JSON.stringify({ ...data, last_updated: Date.now() });
-      const boundary = '-------314159265358979323846';
-      const metadata = { name: SUGGESTIONS_FILENAME, mimeType: 'application/json' };
-      const body =
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        JSON.stringify(metadata) + '\r\n' +
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        fileContent + '\r\n' +
-        '--' + boundary + '--';
-      await window.gapi.client.request({
-        path: `/upload/drive/v3/files/${this.suggestionsFileId}?uploadType=multipart`,
-        method: 'PATCH',
-        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-        body: body,
-      });
-      return { success: true };
+      return await this.writeSuggestions({ ...data, last_updated: Date.now() });
     } catch (e) {
       console.error('SuggestionsSync: updateSuggestionStatus failed', e);
       return { success: false };
@@ -252,7 +152,7 @@ class SuggestionsSync {
   }
 
   async addReply(reply: Omit<AgentSuggestionReply, 'id' | 'created_at'>): Promise<{ success: boolean; id?: string }> {
-    if (!this.isInitialized || !this.repliesFileId || !this.accessToken) {
+    if (!this.isInitialized || !this.repliesFileId) {
       return { success: false };
     }
 
@@ -263,34 +163,16 @@ class SuggestionsSync {
     };
 
     try {
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${this.repliesFileId}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
+      const loaded = await this.drive.readJsonFile<RepliesFile>(REPLIES_FILENAME);
+      if (!loaded) return { success: false };
+      this.repliesFileId = loaded.fileId;
+      const replies = [...(loaded.data.replies ?? []), newReply];
+      const saved = await this.drive.writeJsonFile(
+        REPLIES_FILENAME,
+        { ...loaded.data, replies, last_updated: Date.now() },
+        this.repliesFileId,
       );
-      if (!resp.ok) return { success: false };
-
-      const data = (await resp.json()) as RepliesFile;
-      const replies = [...(data.replies ?? []), newReply];
-      const updated = { ...data, replies, last_updated: Date.now() };
-      const fileContent = JSON.stringify(updated);
-
-      const boundary = '-------314159265358979323846';
-      const metadata = { name: REPLIES_FILENAME, mimeType: 'application/json' };
-      const body =
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        JSON.stringify(metadata) + '\r\n' +
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        fileContent + '\r\n' +
-        '--' + boundary + '--';
-
-      await window.gapi.client.request({
-        path: `/upload/drive/v3/files/${this.repliesFileId}?uploadType=multipart`,
-        method: 'PATCH',
-        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-        body: body,
-      });
+      if (!saved) return { success: false };
 
       this.knownReplyIds.add(newReply.id);
       return { success: true, id: newReply.id };
@@ -301,50 +183,14 @@ class SuggestionsSync {
   }
 
   async uploadVoiceReply(suggestionId: string, blob: Blob): Promise<{ success: boolean; fileId?: string }> {
-    if (!this.isInitialized || !this.folderId || !this.accessToken) {
+    if (!this.isInitialized) {
       return { success: false };
     }
 
     try {
       const safeName = `voice-reply-${suggestionId}-${Date.now()}.webm`;
-      const metadata = {
-        name: safeName,
-        parents: [this.folderId],
-        mimeType: 'audio/webm',
-      };
-
-      const boundary = '-------314159265358979323846';
-      const body =
-        '--' + boundary + '\r\n' +
-        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-        JSON.stringify(metadata) + '\r\n' +
-        '--' + boundary + '\r\n' +
-        'Content-Type: audio/webm\r\n\r\n';
-
-      const head = new TextEncoder().encode(body);
-      const tail = new TextEncoder().encode('\r\n--' + boundary + '--');
-      const combined = new Blob([head, blob, tail], { type: 'multipart/related' });
-
-      const resp = await fetch(
-        `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': `multipart/related; boundary=${boundary}`,
-          },
-          body: combined,
-        }
-      );
-
-      if (!resp.ok) {
-        const errText = await resp.text();
-        console.error('Voice upload failed:', errText);
-        return { success: false };
-      }
-
-      const result = await resp.json();
-      return { success: true, fileId: result.id };
+      const uploaded = await this.drive.uploadBlob(safeName, blob, 'audio/webm');
+      return uploaded?.fileId ? { success: true, fileId: uploaded.fileId } : { success: false };
     } catch (e) {
       console.error('SuggestionsSync: uploadVoiceReply failed', e);
       return { success: false };
@@ -355,6 +201,15 @@ class SuggestionsSync {
   get hasKnownReplies(): boolean { return this.knownReplyIds.size > 0; }
   markRepliesKnown(replyIds: string[]): void {
     for (const id of replyIds) this.knownReplyIds.add(id);
+  }
+
+  private async writeSuggestions(data: SuggestionsFile): Promise<{ success: boolean }> {
+    const saved = await this.drive.writeJsonFile(SUGGESTIONS_FILENAME, data, this.suggestionsFileId);
+    if (!saved) return { success: false };
+    if (saved.fileId) {
+      this.suggestionsFileId = saved.fileId;
+    }
+    return { success: true };
   }
 }
 

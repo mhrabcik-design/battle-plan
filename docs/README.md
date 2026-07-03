@@ -45,7 +45,7 @@ Klicove aktualni principy:
 | Oblast | Aktualni rozhodnuti |
 | --- | --- |
 | Aplikace | `battle-plan/`, React + TypeScript + Vite |
-| Verze | `4.3.0` |
+| Verze | `4.3.6` |
 | UI | desktop-first office rozhrani, responzivni mobilni PWA |
 | AI modely v kodu | `gemini-3-flash-preview` jako default; dale `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro` |
 | Audio | REST API, sdilena audio AI pipeline pro pripravu blobu; WorkLogs maji vlastni extractor |
@@ -72,7 +72,7 @@ Release disciplina:
 
 ## Aktualni modul Prace
 
-Zalozka `Prace` (`viewMode: worklogs`) zustava aktualni jadro evidence prace; verze 4.3.0 pridava runtime diagnostiku a sdilenou audio pipeline kolem existujiciho WorkLogs zakladu.
+Zalozka `Prace` (`viewMode: worklogs`) zustava aktualni jadro evidence prace; verze 4.3.6 obsahuje runtime diagnostiku a sdilenou audio pipeline kolem existujiciho WorkLogs zakladu.
 
 | Cast | Soubor |
 | --- | --- |
