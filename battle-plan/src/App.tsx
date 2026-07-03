@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText } from 'lucide-react';
+import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText, Cloud, CloudOff, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
@@ -63,7 +63,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState(DEFAULT_GEMINI_MODEL);
-  const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ isSignedIn: false, accessToken: null });
+  const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus>({ state: 'SIGNED_OUT', accessToken: null });
   const [weekOffset, setWeekOffset] = useState(0);
   const [lastSync, setLastSync] = useState<string | null>(localStorage.getItem('last_drive_sync'));
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -120,6 +120,29 @@ function App() {
   }, []);
 
   const isAiActive = !!apiKey && isOnline;
+const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+const googleAuthForLegacyPages = useMemo(
+    () => ({ ...googleAuth, isSignedIn: googleAuth.state === 'SIGNED_IN' }),
+    [googleAuth],
+);
+
+const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
+    if (googleAuth.state === 'OFFLINE_AUTH' || googleAuth.state === 'SIGNED_OUT') {
+        return 'failed';
+    }
+    const healthValues = Object.values(syncHealth);
+    if (healthValues.some(h => h.state === 'error')) {
+        return 'failed';
+    }
+    if (
+        googleAuth.state === 'REFRESH_PENDING' ||
+        isProcessing ||
+        healthValues.some(h => h.state === 'idle' || h.state === 'stale')
+    ) {
+        return 'pending';
+    }
+    return 'ok';
+}, [googleAuth.state, syncHealth, isProcessing]);
 
   useEffect(() => {
     const cleanup = async () => {
@@ -144,16 +167,17 @@ function App() {
         await googleService.init();
         let status = googleService.getAuthStatus();
 
-        if (!status.isSignedIn && localStorage.getItem('google_user_email')) {
+        if (status.state !== 'SIGNED_IN' && localStorage.getItem('google_user_email')) {
           await googleService.trySilentRefresh();
           status = googleService.getAuthStatus();
         }
 
         setGoogleAuth(status);
+        const isAuthed = status.state === 'SIGNED_IN';
         updateSyncHealth('google', {
-          state: status.isSignedIn ? 'ok' : 'idle',
-          detail: status.isSignedIn ? 'Přihlášeno ke Google službám' : 'Nepřihlášeno',
-          lastSuccess: status.isSignedIn ? new Date().toLocaleString('cs-CZ') : null,
+          state: isAuthed ? 'ok' : 'idle',
+          detail: isAuthed ? 'Přihlášeno ke Google službám' : 'Nepřihlášeno',
+          lastSuccess: isAuthed ? new Date().toLocaleString('cs-CZ') : null,
           lastError: null,
         });
       } catch (e) {
@@ -240,7 +264,7 @@ function App() {
 
   // Mapped Google Tasks
   const googleTasksMapped: UnifiedTask[] = useMemo(() => {
-    if (!googleAuth.isSignedIn || (viewMode !== 'tasks' && viewMode !== 'battle' && viewMode !== 'week')) return [];
+    if (!hasUsableAuth || (viewMode !== 'tasks' && viewMode !== 'battle' && viewMode !== 'week')) return [];
 
     return googleTasksRaw.map(gt => ({
       title: gt.title,
@@ -256,7 +280,7 @@ function App() {
       googleListId: activeTaskList,
       updatedAt: new Date(gt.updated).getTime()
     }));
-  }, [googleTasksRaw, googleAuth.isSignedIn, viewMode, activeTaskList]);
+  }, [googleTasksRaw, hasUsableAuth, viewMode, activeTaskList]);
 
   const tasks: UnifiedTask[] = useMemo(() => {
     const combined = [...localTasks, ...googleTasksMapped];
@@ -295,10 +319,10 @@ function App() {
   useAgentBridgePolling({ googleAuth, addLog });
 
   useEffect(() => {
-    if (googleAuth.isSignedIn) {
+    if (hasUsableAuth) {
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     }
-  }, [googleAuth.isSignedIn, viewMode, activeTaskList]);
+  }, [hasUsableAuth, viewMode, activeTaskList]);
 
   const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
@@ -313,7 +337,7 @@ function App() {
 
   // Auto-backup on change
   useEffect(() => {
-    if (!googleAuth.isSignedIn) return;
+    if (!hasUsableAuth) return;
 
     const timer = setTimeout(async () => {
       try {
@@ -345,10 +369,10 @@ function App() {
     }, 10000);
 
     return () => clearTimeout(timer);
-  }, [tasksHash, googleAuth.isSignedIn, addLog, updateSyncHealth]);
+  }, [tasksHash, hasUsableAuth, addLog, updateSyncHealth]);
 
   useEffect(() => {
-    if (!googleAuth.isSignedIn || workLogsDataHash === 0) return;
+    if (!hasUsableAuth || workLogsDataHash === 0) return;
 
     const timer = setTimeout(async () => {
       try {
@@ -378,7 +402,7 @@ function App() {
     }, 10000);
 
     return () => clearTimeout(timer);
-  }, [workLogsDataHash, googleAuth.isSignedIn, addLog, updateSyncHealth]);
+  }, [workLogsDataHash, hasUsableAuth, addLog, updateSyncHealth]);
 
   useEffect(() => {
     db.settings.get('gemini_api_key').then(setting => {
@@ -461,6 +485,7 @@ function App() {
         isProcessing={isProcessing}
         suggestionsBadge={suggestionsBadge}
         appVersion={buildInfo.version}
+        syncState={syncVisualState}
       />
 
       {/* MAIN CONTENT AREA */}
@@ -496,7 +521,7 @@ function App() {
               )}
 
               <div className="flex items-center gap-4">
-                {viewMode === 'tasks' && googleAuth.isSignedIn && (
+                {viewMode === 'tasks' && hasUsableAuth && (
                   <div className="flex items-center gap-2 bg-slate-900/50 border border-slate-800 rounded-lg p-1">
                     {googleTaskLists.slice(0, 3).map(list => (
                       <button
@@ -553,9 +578,23 @@ function App() {
                 </button>
                 <button
                   onClick={() => setShowSettings(true)}
-                  className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400"
+                  className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 flex items-center gap-1.5"
                 >
                   <Settings className="w-4 h-4" />
+                  {(() => {
+                    const MobileSyncIcon = syncVisualState === 'ok' ? Cloud : syncVisualState === 'pending' ? RefreshCw : CloudOff;
+                    const mobileTone = syncVisualState === 'ok'
+                      ? 'text-emerald-400/80'
+                      : syncVisualState === 'pending'
+                        ? 'text-amber-300/90'
+                        : 'text-red-400/90';
+                    return (
+                      <MobileSyncIcon
+                        aria-hidden="true"
+                        className={`w-3 h-3 ${mobileTone} ${syncVisualState === 'pending' ? 'animate-spin' : ''}`}
+                      />
+                    );
+                  })()}
                 </button>
                 <div className={`w-2 h-2 rounded-full ${isAiActive ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-800 border border-white/5'}`} />
               </div>
@@ -594,14 +633,14 @@ function App() {
 
           {viewMode === 'suggestions' && (
             <SuggestionsPage
-              googleAuth={googleAuth}
+              googleAuth={googleAuthForLegacyPages}
               onAddLog={(msg, type) => addLog(msg, type)}
             />
           )}
 
           {viewMode === 'worklogs' && (
             <WorkLogsPage
-              googleAuth={googleAuth}
+              googleAuth={googleAuthForLegacyPages}
               onAddLog={(msg, type) => addLog(msg, type)}
               onVoiceControllerChange={setWorkLogVoiceController}
             />

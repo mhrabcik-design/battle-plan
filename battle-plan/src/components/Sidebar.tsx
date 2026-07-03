@@ -1,6 +1,8 @@
 import { motion } from 'framer-motion';
-import { CheckCircle2, Settings, FileText } from 'lucide-react';
+import { CheckCircle2, Settings, FileText, Cloud, CloudOff, RefreshCw } from 'lucide-react';
 import type { ViewMode } from '../types';
+
+export type SyncVisualState = 'ok' | 'pending' | 'failed';
 
 interface SidebarProps {
     viewMode: ViewMode;
@@ -11,6 +13,7 @@ interface SidebarProps {
     isProcessing: boolean;
     suggestionsBadge: number;
     appVersion: string;
+    syncState?: SyncVisualState;
 }
 
 export function Sidebar({
@@ -21,8 +24,15 @@ export function Sidebar({
     setShowSettings,
     isProcessing,
     suggestionsBadge,
-    appVersion
+    appVersion,
+    syncState = 'ok',
 }: SidebarProps) {
+    const SyncIcon = syncState === 'ok' ? Cloud : syncState === 'pending' ? RefreshCw : CloudOff;
+    const syncTone = syncState === 'ok'
+        ? 'text-emerald-400/80'
+        : syncState === 'pending'
+            ? 'text-amber-300/90'
+            : 'text-red-400/90';
     return (
         <aside className="hidden md:flex flex-col w-64 border-r border-white/5 bg-[#05070a]/90 backdrop-blur-2xl shadow-2xl shrink-0 relative z-[60]">
             <div className="p-6 flex flex-col items-start gap-1 border-b border-white/5 bg-transparent">
@@ -82,6 +92,10 @@ export function Sidebar({
                         >
                             <Settings className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
                             Konfigurace
+                            <SyncIcon
+                                aria-hidden="true"
+                                className={`ml-auto w-3.5 h-3.5 ${syncTone} ${syncState === 'pending' ? 'animate-spin' : ''}`}
+                            />
                         </button>
 
                         <button
