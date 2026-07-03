@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText, Cloud, CloudOff, RefreshCw } from 'lucide-react';
+import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
@@ -15,7 +15,9 @@ import { googleService } from './services/googleService';
 import { taskDriveBackup } from './services/taskDriveBackup';
 import { mergeLocalToCloud } from './services/workLogsSync';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList, GoogleTaskRaw } from './types';
+import { hasUsableAuth as checkUsableAuth } from './types';
 import { Sidebar } from './components/Sidebar';
+import { syncIconFor } from './components/syncIcon';
 import { TaskCard } from './components/TaskCard';
 import { FocusEditor } from './components/FocusEditor';
 import { SettingsModal } from './components/SettingsModal';
@@ -120,7 +122,7 @@ function App() {
   }, []);
 
   const isAiActive = !!apiKey && isOnline;
-const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+const hasUsableAuth = checkUsableAuth(googleAuth);
 const googleAuthForLegacyPages = useMemo(
     () => ({ ...googleAuth, isSignedIn: googleAuth.state === 'SIGNED_IN' }),
     [googleAuth],
@@ -192,9 +194,9 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     initGoogle();
 
     const handleAuthChange = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { state?: 'SIGNED_IN' | 'REFRESH_PENDING' | 'OFFLINE_AUTH' | 'SIGNED_OUT' } | null;
+      const detail = (e as CustomEvent<GoogleAuthStatus | null>).detail;
       const isSignedIn = detail?.state === 'SIGNED_IN';
-      setGoogleAuth(detail as never);
+      setGoogleAuth(detail ?? { state: 'SIGNED_OUT', accessToken: null });
       updateSyncHealth('google', {
         state: isSignedIn ? 'ok' : 'idle',
         detail: isSignedIn ? 'Přihlášeno ke Google službám' : 'Odpojeno od Google služeb',
@@ -582,16 +584,11 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                 >
                   <Settings className="w-4 h-4" />
                   {(() => {
-                    const MobileSyncIcon = syncVisualState === 'ok' ? Cloud : syncVisualState === 'pending' ? RefreshCw : CloudOff;
-                    const mobileTone = syncVisualState === 'ok'
-                      ? 'text-emerald-400/80'
-                      : syncVisualState === 'pending'
-                        ? 'text-amber-300/90'
-                        : 'text-red-400/90';
+                    const { Icon: MobileSyncIcon, tone: mobileTone, spin: mobileSpin } = syncIconFor(syncVisualState);
                     return (
                       <MobileSyncIcon
                         aria-hidden="true"
-                        className={`w-3 h-3 ${mobileTone} ${syncVisualState === 'pending' ? 'animate-spin' : ''}`}
+                        className={`w-3 h-3 ${mobileTone} ${mobileSpin ? 'animate-spin' : ''}`}
                       />
                     );
                   })()}

@@ -15,6 +15,12 @@ export interface GoogleAuthStatus {
     accessToken: string | null;
 }
 
+export type SyncVisualState = 'ok' | 'pending' | 'failed';
+
+export function hasUsableAuth(auth: GoogleAuthStatus): boolean {
+    return auth.state === 'SIGNED_IN' || auth.state === 'REFRESH_PENDING';
+}
+
 export interface GoogleTaskList {
     id: string;
     title?: string;

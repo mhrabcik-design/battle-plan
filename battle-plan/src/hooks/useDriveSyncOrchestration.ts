@@ -5,6 +5,7 @@ import { mergeCloudToLocal, mergeLocalToCloud, type MergeResult, workLogsSync } 
 import { taskDriveBackup } from '../services/taskDriveBackup';
 import { getMissingWorkLogsFileStatus, hasLocalWorkLogsData } from '../utils/workLogsSyncStatus';
 import type { GoogleAuthStatus, GoogleTaskList } from '../types';
+import { hasUsableAuth } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
 
 const formatError = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -32,10 +33,10 @@ export function useDriveSyncOrchestration({
   addLog,
   updateSyncHealth,
 }: UseDriveSyncOrchestrationArgs) {
-  const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+  const hasUsableAuthValue = hasUsableAuth(googleAuth);
 
   useEffect(() => {
-    if (!hasUsableAuth) {
+    if (!hasUsableAuthValue) {
       queueMicrotask(() => {
         updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
         updateSyncHealth('worklogs', { state: 'idle', detail: 'Čeká na Google přihlášení' });
@@ -194,6 +195,6 @@ export function useDriveSyncOrchestration({
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
     };
-  }, [hasUsableAuth, setGoogleAuth, setGoogleTaskLists, setApiKey, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
+  }, [hasUsableAuthValue, setGoogleAuth, setGoogleTaskLists, setApiKey, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
 }
 

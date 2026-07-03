@@ -1,4 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { GoogleAuthState, GoogleAuthStatus } from '../types';
+export type { GoogleAuthState, GoogleAuthStatus };
+
 declare global {
     interface Window {
         gapi: {
@@ -57,18 +60,13 @@ const CLIENT_ID = (import.meta as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).
 // Re-authorization required after this change.
 const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks';
 
-export interface GoogleAuthStatus {
-    state: GoogleAuthState;
-    accessToken: string | null;
-}
-
-export type GoogleAuthState = 'SIGNED_IN' | 'REFRESH_PENDING' | 'OFFLINE_AUTH' | 'SIGNED_OUT';
-
 class GoogleService {
     private tokenClient: TokenClient | null = null;
     private accessToken: string | null = null;
     private expiresAt: number = 0;
     private userEmail: string | null = null;
+    private previousStatus: GoogleAuthStatus | null = null;
+    private refreshInFlight: Promise<boolean> | null = null;
 
     constructor() {
         this.accessToken = localStorage.getItem('google_access_token');
@@ -91,9 +89,7 @@ class GoogleService {
 
                     if (this.accessToken) {
                         window.gapi.client.setToken({ access_token: this.accessToken });
-                        window.dispatchEvent(new CustomEvent('google-auth-change', {
-                            detail: { state: this.getAuthState(), accessToken: this.accessToken }
-                        }));
+                        this.dispatchAuthChange();
                     }
                     resolve();
                 });
@@ -128,6 +124,17 @@ class GoogleService {
         });
     }
 
+    private async runRefresh(): Promise<boolean> {
+        if (this.refreshInFlight) {
+            return this.refreshInFlight;
+        }
+        const promise = this.trySilentRefresh().finally(() => {
+            this.refreshInFlight = null;
+        });
+        this.refreshInFlight = promise;
+        return promise;
+    }
+
     async trySilentRefresh() {
         if (!this.tokenClient || !this.userEmail) return false;
 
@@ -157,9 +164,7 @@ class GoogleService {
 
                     window.gapi.client.setToken({ access_token: response.access_token });
 
-                    window.dispatchEvent(new CustomEvent('google-auth-change', {
-                        detail: { state: this.getAuthState(), accessToken: this.accessToken }
-                    }));
+                    this.dispatchAuthChange();
 
                     done(true);
                 },
@@ -198,30 +203,25 @@ class GoogleService {
 
     getAuthStatus(): GoogleAuthStatus {
         return {
-            state: this.computeState(),
+            state: this.getAuthState(),
             accessToken: this.accessToken
         };
     }
 
-    getAuthState(): GoogleAuthState {
-        return this.computeState();
-    }
-
-    private async ensureFreshToken(): Promise<'ok' | 'auth-unavailable'> {
-        const state = this.computeState();
-        if (state === 'SIGNED_IN') return 'ok';
-        if (state === 'REFRESH_PENDING') {
-            const refreshed = await this.trySilentRefresh();
-            if (refreshed) {
-                if (this.computeState() === 'SIGNED_IN') return 'ok';
-                return 'auth-unavailable';
-            }
-            return 'auth-unavailable';
+    private dispatchAuthChange() {
+        const status = this.getAuthStatus();
+        if (
+            this.previousStatus &&
+            this.previousStatus.state === status.state &&
+            this.previousStatus.accessToken === status.accessToken
+        ) {
+            return;
         }
-        return 'auth-unavailable';
+        this.previousStatus = status;
+        window.dispatchEvent(new CustomEvent('google-auth-change', { detail: status }));
     }
 
-    private computeState(): GoogleAuthState {
+    getAuthState(): GoogleAuthState {
         if (!this.accessToken) {
             return 'SIGNED_OUT';
         }
@@ -230,6 +230,20 @@ class GoogleService {
             return 'REFRESH_PENDING';
         }
         return 'SIGNED_IN';
+    }
+
+    private async ensureFreshToken(): Promise<'ok' | 'auth-unavailable'> {
+        const state = this.getAuthState();
+        if (state === 'SIGNED_IN') return 'ok';
+        if (state === 'REFRESH_PENDING') {
+            const refreshed = await this.runRefresh();
+            if (refreshed) {
+                if (this.getAuthState() === 'SIGNED_IN') return 'ok';
+                return 'auth-unavailable';
+            }
+            return 'auth-unavailable';
+        }
+        return 'auth-unavailable';
     }
 
     signIn() {
@@ -273,9 +287,7 @@ class GoogleService {
             void this.fetchUserInfo();
         }
 
-        window.dispatchEvent(new CustomEvent('google-auth-change', {
-            detail: { state: 'SIGNED_IN', accessToken: this.accessToken }
-        }));
+        this.dispatchAuthChange();
     };
 
     signOut() {
@@ -297,9 +309,7 @@ class GoogleService {
         localStorage.removeItem('google_access_token');
         localStorage.removeItem('google_token_expires_at');
         localStorage.removeItem('google_user_email');
-        window.dispatchEvent(new CustomEvent('google-auth-change', {
-            detail: { state: 'SIGNED_OUT', accessToken: null }
-        }));
+        this.dispatchAuthChange();
     }
 
     async getTaskLists() {

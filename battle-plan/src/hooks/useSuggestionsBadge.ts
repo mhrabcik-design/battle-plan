@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { suggestionsSync } from '../services/suggestionsSync';
 import type { GoogleAuthStatus } from '../types';
+import { hasUsableAuth } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
 
 const formatError = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -12,10 +13,10 @@ interface UseSuggestionsBadgeArgs {
 }
 
 export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth }: UseSuggestionsBadgeArgs) {
-  const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+  const hasUsableAuthValue = hasUsableAuth(googleAuth);
 
   useEffect(() => {
-    if (!hasUsableAuth) {
+    if (!hasUsableAuthValue) {
       queueMicrotask(() => {
         setSuggestionsBadge(0);
         updateSyncHealth('suggestions', { state: 'idle', detail: 'Čeká na Google přihlášení' });
@@ -51,6 +52,6 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
     refreshBadge();
     const t = setInterval(refreshBadge, 60_000);
     return () => clearInterval(t);
-  }, [hasUsableAuth, setSuggestionsBadge, updateSyncHealth]);
+  }, [hasUsableAuthValue, setSuggestionsBadge, updateSyncHealth]);
 }
 
