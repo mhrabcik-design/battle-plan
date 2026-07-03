@@ -33,7 +33,7 @@ declare global {
         google: {
             accounts: {
                 oauth2: {
-                    initTokenClient: (config: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: () => void }) => TokenClient;
+                    initTokenClient: (config: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: () => void; prompt?: string; include_granted_scopes?: string }) => TokenClient;
                 };
             };
         };
@@ -103,28 +103,7 @@ class GoogleService {
                 this.tokenClient = window.google.accounts.oauth2.initTokenClient({
                     client_id: CLIENT_ID,
                     scope: SCOPES,
-                    callback: (response: TokenResponse) => {
-                        if (response.error !== undefined) {
-                            console.error('GIS Error:', response);
-                            return;
-                        }
-                        this.accessToken = response.access_token || null;
-                        const expiresIn = response.expires_in || 3600;
-                        this.expiresAt = Date.now() + (expiresIn * 1000);
-
-                        localStorage.setItem('google_access_token', response.access_token);
-                        localStorage.setItem('google_token_expires_at', this.expiresAt.toString());
-
-                        window.gapi.client.setToken({ access_token: response.access_token });
-
-                        if (!this.userEmail) {
-                            this.fetchUserInfo();
-                        }
-
-                        window.dispatchEvent(new CustomEvent('google-auth-change', {
-                            detail: { state: 'SIGNED_IN', accessToken: this.accessToken }
-                        }));
-                    },
+                    callback: this.handleTokenResponse,
                 });
             };
 
@@ -255,12 +234,50 @@ class GoogleService {
     }
 
     signIn() {
+        const userEmail = localStorage.getItem('google_user_email');
+        const isFirstSignIn = userEmail === null;
+
+        if (isFirstSignIn) {
+            const consentClient = window.google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                prompt: 'consent',
+                include_granted_scopes: 'true',
+                callback: this.handleTokenResponse,
+            });
+            consentClient.requestAccessToken({ prompt: '' });
+            return;
+        }
+
         if (this.tokenClient) {
             const options: { prompt?: string; login_hint?: string | null } = { prompt: '' };
             if (this.userEmail) options.login_hint = this.userEmail;
             this.tokenClient.requestAccessToken(options);
         }
     }
+
+    private handleTokenResponse = (response: TokenResponse) => {
+        if (response.error !== undefined) {
+            console.error('GIS Error:', response);
+            return;
+        }
+        this.accessToken = response.access_token || null;
+        const expiresIn = response.expires_in || 3600;
+        this.expiresAt = Date.now() + (expiresIn * 1000);
+
+        localStorage.setItem('google_access_token', response.access_token);
+        localStorage.setItem('google_token_expires_at', this.expiresAt.toString());
+
+        window.gapi.client.setToken({ access_token: response.access_token });
+
+        if (!this.userEmail) {
+            void this.fetchUserInfo();
+        }
+
+        window.dispatchEvent(new CustomEvent('google-auth-change', {
+            detail: { state: 'SIGNED_IN', accessToken: this.accessToken }
+        }));
+    };
 
     signOut() {
         if (this.accessToken) {
