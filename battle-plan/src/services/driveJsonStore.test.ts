@@ -1,12 +1,6 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import {
-    buildDriveFileMetadata,
-    buildMultipartJsonBody,
-    DriveJsonStore,
-    getUploadedDriveFileId,
-} from './driveJsonStore.ts';
+import { test } from 'node:test';
 
 interface MockLocalStorage {
     getItem: (key: string) => string | null;
@@ -17,8 +11,42 @@ interface MockLocalStorage {
 
 interface MockWindow {
     gapi?: unknown;
+    google?: unknown;
     localStorage: MockLocalStorage;
+    dispatchEvent?: (e: Event) => boolean;
+    addEventListener?: (...args: unknown[]) => void;
+    removeEventListener?: (...args: unknown[]) => void;
 }
+
+const defaultStorage = new Map<string, string>();
+const defaultLocalStorage: MockLocalStorage = {
+    getItem: (key) => defaultStorage.get(key) ?? null,
+    setItem: (key, value) => { defaultStorage.set(key, value); },
+    removeItem: (key) => { defaultStorage.delete(key); },
+    clear: () => { defaultStorage.clear(); },
+};
+
+const defaultWindow: MockWindow = {
+    localStorage: defaultLocalStorage,
+    dispatchEvent: () => true,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+};
+
+(globalThis as unknown as { window: MockWindow }).window = defaultWindow;
+(globalThis as unknown as { localStorage: MockLocalStorage }).localStorage = defaultLocalStorage;
+
+const { buildDriveFileMetadata, buildMultipartJsonBody, DriveJsonStore, getUploadedDriveFileId } = await import('./driveJsonStore.ts');
+const { AuthUnavailableError, googleService } = await import('./googleService.ts');
+
+type GoogleServiceInternalState = {
+    accessToken: string | null;
+    expiresAt: number;
+    userEmail: string | null;
+    trySilentRefresh: () => Promise<boolean>;
+    getAuthState: () => string;
+    getAuthStatus: () => { state: string; accessToken: string | null };
+};
 
 function installDriveGlobals(client: unknown, initialStorage: Record<string, string> = {}): MockWindow {
     const storage = new Map<string, string>(Object.entries(initialStorage));
@@ -30,12 +58,27 @@ function installDriveGlobals(client: unknown, initialStorage: Record<string, str
     };
     const mockWindow: MockWindow = {
         gapi: { client },
+        google: defaultWindow.google,
         localStorage,
+        dispatchEvent: defaultWindow.dispatchEvent,
+        addEventListener: defaultWindow.addEventListener,
+        removeEventListener: defaultWindow.removeEventListener,
     };
     const globals = globalThis as unknown as { window: MockWindow; localStorage: MockLocalStorage };
     globals.window = mockWindow;
     globals.localStorage = localStorage;
     return mockWindow;
+}
+
+function setGoogleServiceState(state: {
+    accessToken?: string | null;
+    expiresAt?: number;
+    userEmail?: string | null;
+}): void {
+    const svc = googleService as unknown as GoogleServiceInternalState;
+    if (state.accessToken !== undefined) svc.accessToken = state.accessToken;
+    if (state.expiresAt !== undefined) svc.expiresAt = state.expiresAt;
+    if (state.userEmail !== undefined) svc.userEmail = state.userEmail;
 }
 
 test('buildDriveFileMetadata puts a new file into the BattlePlan Drive folder', () => {
@@ -96,6 +139,12 @@ test('DriveJsonStore escapes Drive query values and rejects failed uploads', asy
         google_access_token: 'token-123',
     });
 
+    setGoogleServiceState({
+        accessToken: 'token-123',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
     const store = new DriveJsonStore();
     assert.equal(await store.init(), true);
 
@@ -126,8 +175,163 @@ test('DriveJsonStore accepts created folder ids from gapi result payloads', asyn
         google_access_token: 'token-123',
     });
 
+    setGoogleServiceState({
+        accessToken: 'token-123',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
     const store = new DriveJsonStore();
     assert.equal(await store.init({ createFolder: true }), true);
     assert.equal(store.currentFolderId, 'folder-created');
     assert.deepEqual(createdFolders, ['Anu-BattlePlan']);
+});
+
+test('U4: fresh token (state SIGNED_IN) — getAccessToken returns the live token without calling trySilentRefresh', async () => {
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
+            },
+        },
+        request: async () => ({ status: 200, result: { id: 'file-existing' } }),
+    }, { bp_folder_id: 'folder-existing' });
+
+    setGoogleServiceState({
+        accessToken: 'fresh-live-token',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const svc = googleService as unknown as GoogleServiceInternalState;
+    let refreshCalls = 0;
+    svc.trySilentRefresh = async () => { refreshCalls++; return true; };
+
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+    const writeResult = await store.writeJsonFile('data.json', { hello: 'world' });
+    assert.ok(writeResult, 'writeJsonFile should succeed when a fresh token is in googleService');
+
+    assert.equal(refreshCalls, 0, 'trySilentRefresh must not be invoked when state is SIGNED_IN');
+});
+
+test('U4: expired token (state REFRESH_PENDING), refresh succeeds — getAccessToken returns the new token', async () => {
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
+            },
+        },
+        request: async () => ({ status: 200, result: { id: 'file-existing' } }),
+    }, { bp_folder_id: 'folder-existing' });
+
+    setGoogleServiceState({
+        accessToken: 'expired-token',
+        expiresAt: Date.now() - 5 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const svc = googleService as unknown as GoogleServiceInternalState;
+    let refreshCalls = 0;
+    svc.trySilentRefresh = async function (this: GoogleServiceInternalState) {
+        refreshCalls++;
+        this.accessToken = 'refreshed-live-token';
+        this.expiresAt = Date.now() + 60 * 60 * 1000;
+        return true;
+    };
+
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+    const writeResult = await store.writeJsonFile('data.json', { hello: 'world' });
+    assert.ok(writeResult, 'writeJsonFile should succeed after successful silent refresh');
+
+    assert.equal(refreshCalls, 1, 'trySilentRefresh must be invoked exactly once when state is REFRESH_PENDING');
+});
+
+test('U4: expired token, refresh fails — init returns false (graceful failure)', async () => {
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
+            },
+        },
+    }, { bp_folder_id: 'folder-existing' });
+
+    setGoogleServiceState({
+        accessToken: 'expired-token',
+        expiresAt: Date.now() - 5 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const svc = googleService as unknown as GoogleServiceInternalState;
+    svc.trySilentRefresh = async () => false;
+
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), false, 'init returns false when refresh fails');
+});
+
+test('U4: readJsonFile — REFRESH_PENDING + refresh failure throws AuthUnavailableError', async () => {
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async (args: { q: string }) => {
+                    if (args.q.includes('Anu-BattlePlan')) {
+                        return { result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } };
+                    }
+                    return { result: { files: [{ id: 'file-existing', name: 'data.json' }] } };
+                },
+            },
+        },
+    }, { bp_folder_id: 'folder-existing' });
+
+    setGoogleServiceState({
+        accessToken: 'expired-token',
+        expiresAt: Date.now() - 5 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const svc = googleService as unknown as GoogleServiceInternalState;
+    svc.trySilentRefresh = async () => false;
+
+    const store = new DriveJsonStore();
+    (store as unknown as { isInitialized: boolean; folderId: string | null }).isInitialized = true;
+    (store as unknown as { isInitialized: boolean; folderId: string | null }).folderId = 'folder-existing';
+
+    await assert.rejects(
+        () => store.readJsonFile<{ hello: string }>('data.json'),
+        (err: unknown) => err instanceof AuthUnavailableError && (err as { code: string }).code === 'AUTH_UNAVAILABLE',
+    );
+});
+
+test('U4: state is SIGNED_OUT — init returns false without calling refresh', async () => {
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
+            },
+        },
+    }, { bp_folder_id: 'folder-existing' });
+
+    setGoogleServiceState({
+        accessToken: null,
+        expiresAt: 0,
+        userEmail: null,
+    });
+
+    const svc = googleService as unknown as GoogleServiceInternalState;
+    let refreshCalls = 0;
+    svc.trySilentRefresh = async () => { refreshCalls++; return true; };
+
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), false, 'init returns false when state is SIGNED_OUT');
+    assert.equal(refreshCalls, 0, 'trySilentRefresh must not be invoked when state is SIGNED_OUT');
+});
+
+test('U4: AuthUnavailableError is importable from googleService and has the right shape', () => {
+    const err = new AuthUnavailableError('Přihlášení vypršelo, obnovte prosím autorizaci.');
+    assert.ok(err instanceof Error, 'AuthUnavailableError extends Error');
+    assert.ok(err instanceof AuthUnavailableError, 'err is an instance of AuthUnavailableError');
+    assert.equal(err.code, 'AUTH_UNAVAILABLE');
+    assert.equal(err.name, 'AuthUnavailableError');
+    assert.ok(err.message.length > 0);
 });
