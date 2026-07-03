@@ -50,7 +50,7 @@ interface TokenResponse {
     expires_in?: number;
 }
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
+const CLIENT_ID = (import.meta as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).env?.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
 // Scopes: drive (full) instead of drive.file so BP app can read agent-suggestions.json
 // that was written by external agents (e.g. Anu bp_suggestions.py). The full drive
 // scope also includes drive.file semantics, so existing files remain accessible.
@@ -59,9 +59,11 @@ const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.goog
 const FOLDER_NAME = 'Anu-BattlePlan';
 
 export interface GoogleAuthStatus {
-    isSignedIn: boolean;
+    state: GoogleAuthState;
     accessToken: string | null;
 }
+
+export type GoogleAuthState = 'SIGNED_IN' | 'REFRESH_PENDING' | 'OFFLINE_AUTH' | 'SIGNED_OUT';
 
 class GoogleService {
     private tokenClient: TokenClient | null = null;
@@ -218,11 +220,25 @@ class GoogleService {
     }
 
     getAuthStatus(): GoogleAuthStatus {
-        const isExpired = Date.now() > (this.expiresAt - 60000);
         return {
-            isSignedIn: !!this.accessToken && !isExpired,
+            state: this.computeState(),
             accessToken: this.accessToken
         };
+    }
+
+    getAuthState(): GoogleAuthState {
+        return this.computeState();
+    }
+
+    private computeState(): GoogleAuthState {
+        if (!this.accessToken) {
+            return 'SIGNED_OUT';
+        }
+        const isExpired = Date.now() > (this.expiresAt - 60000);
+        if (isExpired) {
+            return 'REFRESH_PENDING';
+        }
+        return 'SIGNED_IN';
     }
 
     signIn() {
@@ -554,3 +570,5 @@ class GoogleService {
 }
 
 export const googleService = new GoogleService();
+
+export { GoogleService };

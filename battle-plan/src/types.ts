@@ -8,8 +8,10 @@ export type UnifiedTask = Task & {
     googleId?: string;
 };
 
+export type GoogleAuthState = 'SIGNED_IN' | 'REFRESH_PENDING' | 'OFFLINE_AUTH' | 'SIGNED_OUT';
+
 export interface GoogleAuthStatus {
-    isSignedIn: boolean;
+    state: GoogleAuthState;
     accessToken: string | null;
 }
 
