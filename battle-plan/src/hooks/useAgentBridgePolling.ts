@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { agentBridge } from '../services/agentBridge';
 import type { GoogleAuthStatus } from '../types';
+import { hasUsableAuth } from '../types';
 
 interface UseAgentBridgePollingArgs {
   googleAuth: GoogleAuthStatus;
@@ -8,10 +9,10 @@ interface UseAgentBridgePollingArgs {
 }
 
 export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePollingArgs) {
-  const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+  const hasUsableAuthValue = hasUsableAuth(googleAuth);
 
   useEffect(() => {
-    if (!hasUsableAuth) return;
+    if (!hasUsableAuthValue) return;
 
     let cancelled = false;
 
@@ -51,6 +52,6 @@ export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePoll
       clearTimeout(initialTimer);
       clearInterval(interval);
     };
-  }, [hasUsableAuth, addLog]);
+  }, [hasUsableAuthValue, addLog]);
 }
 

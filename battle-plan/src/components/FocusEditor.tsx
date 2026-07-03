@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass, Sun } from 'lucide-react';
 import type { UnifiedTask, GoogleAuthStatus } from '../types';
+import { hasUsableAuth } from '../types';
 import React, { useState, useEffect } from 'react';
 import type { Task } from '../db';
 import { formatDuration, parseDuration } from '../utils/calendarUtils';
@@ -299,7 +300,7 @@ export function FocusEditor({
                     </button>
 
                     <div className="flex items-center gap-4">
-                        {editingTask.type === 'meeting' && !editingTask.isGoogleTask && (googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING') && (
+                        {editingTask.type === 'meeting' && !editingTask.isGoogleTask && hasUsableAuth(googleAuth) && (
                             <button
                                 onClick={() => handleSyncToGoogle(editingTask)}
                                 className={`px-8 py-3.5 rounded-xl text-sm font-black uppercase flex items-center gap-2 transition-all ${editingTask.googleEventId ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-emerald-400 border border-emerald-500/30'}`}

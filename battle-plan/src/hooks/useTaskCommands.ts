@@ -3,6 +3,7 @@ import { db, type Task } from '../db';
 import { AuthUnavailableError, googleService } from '../services/googleService';
 import { applySemanticResult } from '../services/semanticEngine';
 import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types';
+import { hasUsableAuth } from '../types';
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
@@ -54,8 +55,7 @@ export function useTaskCommands({
   }, []);
 
   const handleToggleTask = useCallback(async (task: UnifiedTask) => {
-    const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
-    if (task.isGoogleTask && task.googleId && hasUsableAuth) {
+    if (task.isGoogleTask && task.googleId && hasUsableAuth(googleAuth)) {
       const newStatus = task.status === 'completed' ? 'needsAction' : 'completed';
       await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
       refreshGoogleTasks();
@@ -66,7 +66,7 @@ export function useTaskCommands({
         updatedAt: Date.now()
       });
 
-      if (task.googleEventId && hasUsableAuth) {
+      if (task.googleEventId && hasUsableAuth(googleAuth)) {
         try {
           const updatedTask = { ...task, status: newStatus };
           await googleService.addToCalendar(updatedTask);
@@ -75,27 +75,25 @@ export function useTaskCommands({
         }
       }
     }
-  }, [googleAuth.state, refreshGoogleTasks]);
+  }, [googleAuth, refreshGoogleTasks]);
 
   const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
     if (!confirm('Opravdu smazat tento záznam?')) return;
-    const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
 
-    if (task.isGoogleTask && task.googleId && hasUsableAuth) {
+    if (task.isGoogleTask && task.googleId && hasUsableAuth(googleAuth)) {
       await googleService.deleteGoogleTask(task.googleId, task.googleListId);
       refreshGoogleTasks();
     } else if (task.id) {
-      if (task.googleEventId && hasUsableAuth) {
+      if (task.googleEventId && hasUsableAuth(googleAuth)) {
         try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
       }
       await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
     }
-  }, [googleAuth.state, refreshGoogleTasks]);
+  }, [googleAuth, refreshGoogleTasks]);
 
   const handleSaveEdit = useCallback(async () => {
     if (editingTask) {
-      const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
-      if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth) {
+      if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth(googleAuth)) {
         await googleService.updateGoogleTask(editingTask.googleId, {
           title: editingTask.title,
           notes: editingTask.description
@@ -107,7 +105,7 @@ export function useTaskCommands({
         delete (taskData as Partial<UnifiedTask>).googleId;
         delete (taskData as Partial<UnifiedTask>).googleListId;
         await db.tasks.update(editingTask.id, { ...taskData, updatedAt: Date.now() });
-        if (editingTask.type === 'meeting' && hasUsableAuth) {
+        if (editingTask.type === 'meeting' && hasUsableAuth(googleAuth)) {
           try {
             const eventId = await googleService.addToCalendar(editingTask);
             if (eventId && eventId !== editingTask.googleEventId) {
@@ -120,11 +118,10 @@ export function useTaskCommands({
       }
       setEditingTask(null);
     }
-  }, [editingTask, googleAuth.state, refreshGoogleTasks, setEditingTask]);
+  }, [editingTask, googleAuth, refreshGoogleTasks, setEditingTask]);
 
   const handleSyncToGoogle = useCallback(async (task: UnifiedTask) => {
-    const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
-    if (!task.id || !hasUsableAuth) {
+    if (!task.id || !hasUsableAuth(googleAuth)) {
       return;
     }
     setIsProcessing(true);
@@ -142,7 +139,7 @@ export function useTaskCommands({
     } finally {
       setIsProcessing(false);
     }
-  }, [googleAuth.state, setIsProcessing]);
+  }, [googleAuth, setIsProcessing]);
 
   const handleExport = useCallback((task: UnifiedTask) => {
     const subTasksText = (task.subTasks || []).map(st => `${st.completed ? '✅' : '☐'} ${st.title}`).join('\n');
