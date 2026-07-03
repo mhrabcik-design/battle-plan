@@ -452,3 +452,149 @@ test('race fix: trySilentRefresh with no GIS callback and stale accessToken reso
     const result = await svc.trySilentRefresh();
     assert.equal(result, false, 'trySilentRefresh must resolve to false when the GIS callback never fires, even if accessToken is set');
 });
+
+test('U3: first sign-in — no prior userEmail — signIn() creates a new initTokenClient with prompt:consent + include_granted_scopes and calls requestAccessToken on it', () => {
+    clearStore();
+    // explicitly: no google_user_email in localStorage => first sign-in
+    localStorage.setItem('google_access_token', 'stale-previous');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    // no google_user_email set
+
+    let initCallCount = 0;
+    let capturedConfig: unknown = null;
+    let newClientRequestCount = 0;
+    const newClientRequestOptions: unknown[] = [];
+
+    installGisMock({
+        initTokenClient: (config: unknown) => {
+            initCallCount++;
+            capturedConfig = config;
+            return {
+                requestAccessToken: (options: unknown) => {
+                    newClientRequestCount++;
+                    newClientRequestOptions.push(options);
+                },
+            };
+        },
+    });
+
+    const svc = freshService();
+    // Provide a pre-existing singleton tokenClient; signIn() must NOT use it because this is a first sign-in
+    const singletonRequestCount = 0;
+    const singletonRequestOptions: unknown[] = [];
+    (svc as unknown as { tokenClient: unknown }).tokenClient = {
+        requestAccessToken: (options: unknown) => {
+            // singleton client - signIn() must not call this
+            singletonRequestOptions.push(options);
+        },
+    };
+    void singletonRequestCount;
+
+    svc.signIn();
+
+    assert.equal(initCallCount, 1, 'signIn() must create exactly one new TokenClient on first sign-in');
+    const cfg = capturedConfig as { prompt?: string; include_granted_scopes?: string; scope?: string; client_id?: string; callback?: unknown };
+    assert.ok(cfg && typeof cfg === 'object', 'initTokenClient must receive a config object');
+    assert.equal(cfg.prompt, 'consent', 'first-sign-in TokenClient config must include prompt=consent');
+    assert.equal(cfg.include_granted_scopes, 'true', 'first-sign-in TokenClient config must include include_granted_scopes=true');
+    assert.ok(typeof cfg.callback === 'function', 'first-sign-in TokenClient config must include a callback');
+    assert.ok(typeof cfg.scope === 'string' && cfg.scope.length > 0, 'first-sign-in TokenClient config must include scope');
+    assert.ok(typeof cfg.client_id === 'string', 'first-sign-in TokenClient config must include client_id');
+
+    assert.equal(newClientRequestCount, 1, 'requestAccessToken must be invoked exactly once on the new client');
+    const reqOpts = newClientRequestOptions[0] as { prompt?: string; login_hint?: string | null } | undefined;
+    assert.ok(reqOpts && typeof reqOpts === 'object', 'requestAccessToken must receive an options object');
+    assert.equal(reqOpts.prompt, '', 'first-sign-in must call requestAccessToken with prompt="" (empty) to trigger consent screen');
+
+    // Singleton client must NOT be used on first sign-in
+    assert.deepEqual(singletonRequestOptions, [], 'singleton tokenClient must NOT be invoked on first sign-in');
+});
+
+test('U3: subsequent sign-in — userEmail in localStorage — signIn() reuses existing singleton tokenClient and does NOT call initTokenClient', () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'existing-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() + 60 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    let initCallCount = 0;
+    let singletonRequestCount = 0;
+    const singletonRequestOptions: unknown[] = [];
+
+    // Even if gis were still available, signIn() must NOT call initTokenClient when userEmail is present.
+    installGisMock({
+        initTokenClient: () => {
+            initCallCount++;
+            return {
+                requestAccessToken: () => {},
+            };
+        },
+    });
+
+    const svc = freshService();
+    const singleton = {
+        requestAccessToken: (options: unknown) => {
+            singletonRequestCount++;
+            singletonRequestOptions.push(options);
+        },
+    };
+    (svc as unknown as { tokenClient: unknown }).tokenClient = singleton;
+
+    svc.signIn();
+
+    assert.equal(initCallCount, 0, 'signIn() must NOT call initTokenClient when userEmail is already present');
+    assert.equal(singletonRequestCount, 1, 'signIn() must invoke the existing singleton tokenClient.requestAccessToken exactly once');
+    const reqOpts = singletonRequestOptions[0] as { prompt?: string; login_hint?: string | null } | undefined;
+    assert.ok(reqOpts && typeof reqOpts === 'object', 'singleton requestAccessToken must receive an options object');
+    assert.equal(reqOpts.prompt, '', 'subsequent sign-in must use prompt="" on requestAccessToken');
+    assert.equal(reqOpts.login_hint, 'user@example.com', 'subsequent sign-in must include login_hint=user@example.com');
+});
+
+test('U3: integration — successful first-sign-in token response populates google_access_token, google_token_expires_at, and google_user_email in localStorage', async () => {
+    clearStore();
+    // No userEmail => first sign-in
+    // Pre-existing stale access token to confirm it gets overwritten.
+    localStorage.setItem('google_access_token', 'stale-previous');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    // no google_user_email set
+
+    let firstSignInConfig: unknown = null;
+    installGapiMock({});
+    installGisMock({
+        initTokenClient: (config: unknown) => {
+            firstSignInConfig = config;
+            return {
+                requestAccessToken: (options: unknown) => {
+                    // Simulate the GIS library invoking the callback the moment requestAccessToken is called.
+                    void options;
+                    const cfg = firstSignInConfig as { callback?: (response: { access_token: string; expires_in: number }) => void };
+                    cfg.callback?.({
+                        access_token: 'first-signin-fresh-token',
+                        expires_in: 3600,
+                    });
+                },
+            };
+        },
+    });
+
+    const svc = freshService();
+    // Stub out fetchUserInfo (called from the token callback when userEmail is absent)
+    (svc as unknown as { fetchUserInfo: () => Promise<void> }).fetchUserInfo = async function (this: InstanceType<typeof GoogleService>) {
+        (this as unknown as { userEmail: string }).userEmail = 'first-signin-user@example.com';
+        localStorage.setItem('google_user_email', 'first-signin-user@example.com');
+    };
+
+    // Assert the config is wired up for the first-sign-in flow
+    svc.signIn();
+    const cfg = firstSignInConfig as { prompt?: string; include_granted_scopes?: string } | undefined;
+    assert.ok(cfg && typeof cfg === 'object', 'first sign-in must invoke initTokenClient with a config');
+    assert.equal(cfg.prompt, 'consent', 'first sign-in config must set prompt=consent');
+    assert.equal(cfg.include_granted_scopes, 'true', 'first sign-in config must set include_granted_scopes=true');
+
+    // Yield so the callback's setTimeout-less promise chain settles (none in this flow; just for symmetry)
+    await Promise.resolve();
+
+    assert.equal(localStorage.getItem('google_access_token'), 'first-signin-fresh-token', 'callback must persist new access_token');
+    assert.ok(typeof localStorage.getItem('google_token_expires_at') === 'string' && localStorage.getItem('google_token_expires_at') !== null, 'callback must persist google_token_expires_at');
+    assert.equal(Number(localStorage.getItem('google_token_expires_at')) > Date.now(), true, 'expires_at must be in the future');
+    assert.equal(localStorage.getItem('google_user_email'), 'first-signin-user@example.com', 'user_email must be persisted on first sign-in');
+});
