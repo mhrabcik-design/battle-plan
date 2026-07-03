@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { db, type Task } from '../db';
-import { googleService } from '../services/googleService';
+import { AuthUnavailableError, googleService } from '../services/googleService';
 import { applySemanticResult } from '../services/semanticEngine';
 import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types';
 
@@ -54,7 +54,8 @@ export function useTaskCommands({
   }, []);
 
   const handleToggleTask = useCallback(async (task: UnifiedTask) => {
-    if (task.isGoogleTask && task.googleId && googleAuth.isSignedIn) {
+    const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+    if (task.isGoogleTask && task.googleId && hasUsableAuth) {
       const newStatus = task.status === 'completed' ? 'needsAction' : 'completed';
       await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
       refreshGoogleTasks();
@@ -65,7 +66,7 @@ export function useTaskCommands({
         updatedAt: Date.now()
       });
 
-      if (task.googleEventId && googleAuth.isSignedIn) {
+      if (task.googleEventId && hasUsableAuth) {
         try {
           const updatedTask = { ...task, status: newStatus };
           await googleService.addToCalendar(updatedTask);
@@ -74,25 +75,27 @@ export function useTaskCommands({
         }
       }
     }
-  }, [googleAuth.isSignedIn, refreshGoogleTasks]);
+  }, [googleAuth.state, refreshGoogleTasks]);
 
   const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
     if (!confirm('Opravdu smazat tento záznam?')) return;
+    const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
 
-    if (task.isGoogleTask && task.googleId && googleAuth.isSignedIn) {
+    if (task.isGoogleTask && task.googleId && hasUsableAuth) {
       await googleService.deleteGoogleTask(task.googleId, task.googleListId);
       refreshGoogleTasks();
     } else if (task.id) {
-      if (task.googleEventId && googleAuth.isSignedIn) {
+      if (task.googleEventId && hasUsableAuth) {
         try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
       }
       await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
     }
-  }, [googleAuth.isSignedIn, refreshGoogleTasks]);
+  }, [googleAuth.state, refreshGoogleTasks]);
 
   const handleSaveEdit = useCallback(async () => {
     if (editingTask) {
-      if (editingTask.isGoogleTask && editingTask.googleId && googleAuth.isSignedIn) {
+      const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+      if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth) {
         await googleService.updateGoogleTask(editingTask.googleId, {
           title: editingTask.title,
           notes: editingTask.description
@@ -104,7 +107,7 @@ export function useTaskCommands({
         delete (taskData as Partial<UnifiedTask>).googleId;
         delete (taskData as Partial<UnifiedTask>).googleListId;
         await db.tasks.update(editingTask.id, { ...taskData, updatedAt: Date.now() });
-        if (editingTask.type === 'meeting' && googleAuth.isSignedIn) {
+        if (editingTask.type === 'meeting' && hasUsableAuth) {
           try {
             const eventId = await googleService.addToCalendar(editingTask);
             if (eventId && eventId !== editingTask.googleEventId) {
@@ -117,11 +120,11 @@ export function useTaskCommands({
       }
       setEditingTask(null);
     }
-  }, [editingTask, googleAuth.isSignedIn, refreshGoogleTasks, setEditingTask]);
+  }, [editingTask, googleAuth.state, refreshGoogleTasks, setEditingTask]);
 
   const handleSyncToGoogle = useCallback(async (task: UnifiedTask) => {
-    if (!task.id || !googleAuth.isSignedIn) {
-      alert("Pro synchronizaci musíte být přihlášeni ke Googlu.");
+    const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+    if (!task.id || !hasUsableAuth) {
       return;
     }
     setIsProcessing(true);
@@ -131,12 +134,15 @@ export function useTaskCommands({
         await db.tasks.update(task.id, { googleEventId: eventId, updatedAt: Date.now() });
       }
     } catch (err: unknown) {
+      if (err instanceof AuthUnavailableError) {
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       alert(msg || "Chyba při synchronizaci s Googlem");
     } finally {
       setIsProcessing(false);
     }
-  }, [googleAuth.isSignedIn, setIsProcessing]);
+  }, [googleAuth.state, setIsProcessing]);
 
   const handleExport = useCallback((task: UnifiedTask) => {
     const subTasksText = (task.subTasks || []).map(st => `${st.completed ? '✅' : '☐'} ${st.title}`).join('\n');
