@@ -31,3 +31,8 @@ Sync diagnostics should expose status, last success, and high-level errors witho
 The browser-side voice-processing layer shared by task voice and WorkLog voice flows for recording, audio normalization, Gemini request preparation, retry/error handling, and missing-key messaging.
 
 The shared pipeline does not merge domain logic: task semantic editing and WorkLog batch extraction keep separate prompts, result types, and validation rules.
+
+### Voice Proposal Lifecycle
+The full lifecycle from browser microphone recording through AI extraction, proposal review, save, cancel, navigation away, and recorder unmount.
+
+Terminal actions in this lifecycle must clean up both visible proposal UI and source recorder state such as audio blobs, processing guards, timers, audio contexts, media recorder handlers, and media tracks.
