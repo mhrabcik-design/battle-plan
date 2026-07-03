@@ -1,3 +1,10 @@
+type AuthModule = typeof import('./googleService.ts');
+let authModulePromise: Promise<AuthModule> | null = null;
+function loadAuthModule(): Promise<AuthModule> {
+    if (!authModulePromise) authModulePromise = import('./googleService.ts');
+    return authModulePromise;
+}
+
 const DEFAULT_FOLDER_NAME = 'Anu-BattlePlan';
 const DEFAULT_FOLDER_CACHE_KEY = 'bp_folder_id';
 const JSON_MIME_TYPE = 'application/json';
@@ -115,9 +122,15 @@ export class DriveJsonStore {
             console.warn('DriveJsonStore: GAPI Drive client not available');
             return false;
         }
-        if (!this.getAccessToken()) {
-            console.warn('DriveJsonStore: Not signed in');
-            return false;
+        const { AuthUnavailableError } = await loadAuthModule();
+        try {
+            await this.getAccessToken();
+        } catch (e) {
+            if (e instanceof AuthUnavailableError) {
+                console.warn('DriveJsonStore: Not signed in');
+                return false;
+            }
+            throw e;
         }
 
         const cached = localStorage.getItem(this.folderCacheKey);
@@ -169,8 +182,7 @@ export class DriveJsonStore {
 
     async readJsonFile<T>(name: string): Promise<DriveJsonRead<T> | null> {
         if (!this.isInitialized || !this.folderId) return null;
-        const accessToken = this.getAccessToken();
-        if (!accessToken) return null;
+        const accessToken = await this.getAccessToken();
         const fileId = await this.findFileId(name);
         if (!fileId) return null;
 
@@ -203,8 +215,7 @@ export class DriveJsonStore {
 
     async uploadBlob(name: string, blob: Blob, mimeType: string): Promise<DriveJsonWrite | null> {
         if (!this.isInitialized || !this.folderId) return null;
-        const accessToken = this.getAccessToken();
-        if (!accessToken) return null;
+        const accessToken = await this.getAccessToken();
         const metadata = buildDriveFileMetadata(name, mimeType, this.folderId, null);
         const body = buildMultipartBlobBody(metadata, blob, mimeType);
         const resp = await fetch(
@@ -235,8 +246,22 @@ export class DriveJsonStore {
         return ((window as WindowWithGapi).gapi?.client) ?? null;
     }
 
-    private getAccessToken(): string | null {
-        return localStorage.getItem('google_access_token');
+    private async getAccessToken(): Promise<string> {
+        const { AuthUnavailableError, googleService } = await loadAuthModule();
+        const state = googleService.getAuthState();
+        if (state === 'REFRESH_PENDING') {
+            const refreshed = await googleService.trySilentRefresh();
+            if (!refreshed) {
+                throw new AuthUnavailableError('Přihlášení vypršelo, obnovte prosím autorizaci.');
+            }
+        } else if (state === 'OFFLINE_AUTH' || state === 'SIGNED_OUT') {
+            throw new AuthUnavailableError('Pro přístup na Drive je nutné přihlášení.');
+        }
+        const accessToken = googleService.getAuthStatus().accessToken;
+        if (!accessToken) {
+            throw new AuthUnavailableError('Přístupový token není dostupný.');
+        }
+        return accessToken;
     }
 
     private async createFolder(client: GapiClient): Promise<string> {

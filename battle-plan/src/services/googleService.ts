@@ -478,6 +478,15 @@ class GoogleService {
 
 }
 
+export class AuthUnavailableError extends Error {
+    readonly code = 'AUTH_UNAVAILABLE' as const;
+
+    constructor(message: string) {
+        super(message);
+        this.name = 'AuthUnavailableError';
+    }
+}
+
 export const googleService = new GoogleService();
 
 export { GoogleService };
