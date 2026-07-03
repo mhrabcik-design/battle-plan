@@ -13,5 +13,19 @@ export interface GoogleAuthStatus {
     accessToken: string | null;
 }
 
+export interface GoogleTaskList {
+    id: string;
+    title?: string;
+}
+
+export interface GoogleTaskRaw {
+    id: string;
+    title: string;
+    notes?: string;
+    status?: string;
+    due?: string;
+    updated: string;
+}
+
 /** Pohled v záložce Pracovní činnosti. */
 export type WorkLogsView = 'calendar' | 'table';

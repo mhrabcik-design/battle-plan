@@ -1,3 +1,5 @@
+import { buildDriveFileMetadata } from './driveJsonStore.ts';
+
 export const WORKLOGS_FILENAME = 'work_logs_data.json';
 
 export interface WorkLogsFileMetadata {
@@ -7,9 +9,5 @@ export interface WorkLogsFileMetadata {
 }
 
 export function buildWorkLogsFileMetadata(folderId: string, fileId: string | null): WorkLogsFileMetadata {
-    const metadata: WorkLogsFileMetadata = { name: WORKLOGS_FILENAME, mimeType: 'application/json' };
-    if (!fileId) {
-        metadata.parents = [folderId];
-    }
-    return metadata;
+    return buildDriveFileMetadata(WORKLOGS_FILENAME, 'application/json', folderId, fileId) as WorkLogsFileMetadata;
 }

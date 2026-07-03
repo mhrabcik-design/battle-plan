@@ -1,22 +1,18 @@
 import { db, type WorkLog, type Project } from '../db';
-import { WORKLOGS_FILENAME, buildWorkLogsFileMetadata } from './workLogsDriveMetadata';
+import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
 import { getWorkLogSyncKey } from '../utils/workLogSyncIdentity';
+import { DriveJsonStore } from './driveJsonStore';
 
 /**
  * WorkLogsSync — Drive I/O pro `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
  *
- * Pattern kopíruje `suggestionsSync.ts`:
- * - init() najde složku (cache v localStorage)
- * - loadAll() / saveAll() přes raw fetch s Bearer tokenem
- * - multipart PATCH upload pro update existujícího souboru
+ * Drive I/O mechaniku sdílí přes `DriveJsonStore`; payload a merge logika
+ * zůstává tady.
  * - vše best-effort, chyby jen loguje (nevyhazují výjimky)
  *
  * F6 = merge logika: `mergeCloudToLocal()` porovná cloud vs IndexedDB
  * (updatedAt winner-wins), `mergeLocalToCloud()` odešle kompletní payload.
  */
-
-const FOLDER_NAME = 'Anu-BattlePlan';
-const FOLDER_CACHE_KEY = 'bp_folder_id';
 
 interface WorkLogsFile {
     version?: number;
@@ -25,92 +21,29 @@ interface WorkLogsFile {
     projects: Project[];
 }
 
-interface DriveUploadResponse {
-    body?: string;
-    result?: { id?: string };
-}
-
-function getUploadedDriveFileId(response: DriveUploadResponse): string | null {
-    if (response.result?.id) return response.result.id;
-    if (!response.body) return null;
-    try {
-        const parsed = JSON.parse(response.body) as { id?: string };
-        return parsed.id ?? null;
-    } catch {
-        return null;
-    }
-}
-
 class WorkLogsSync {
-    private folderId: string | null = null;
     private fileId: string | null = null;
-    private accessToken: string | null = null;
     private isInitialized = false;
+    private readonly drive = new DriveJsonStore();
 
     async init(): Promise<void> {
         if (this.isInitialized) return;
-        if (!window.gapi?.client?.drive) {
-            console.warn('WorkLogsSync: GAPI not available');
-            return;
-        }
-        this.accessToken = localStorage.getItem('google_access_token');
-        if (!this.accessToken) {
-            console.warn('WorkLogsSync: Not signed in');
-            return;
-        }
-
-        const cached = localStorage.getItem(FOLDER_CACHE_KEY);
-        if (cached) {
-            this.folderId = cached;
-        } else {
-            try {
-                const r = await window.gapi.client.drive.files.list({
-                    q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-                    spaces: 'drive',
-                    fields: 'files(id)',
-                    pageSize: 1,
-                });
-                if (r.result.files?.[0]) {
-                    this.folderId = r.result.files[0].id;
-                    localStorage.setItem(FOLDER_CACHE_KEY, this.folderId);
-                } else {
-                    console.warn(`WorkLogsSync: Folder /${FOLDER_NAME}/ not found`);
-                    return;
-                }
-            } catch (e) {
-                console.error('WorkLogsSync: Failed to find folder', e);
-                return;
-            }
-        }
-        this.isInitialized = true;
+        this.isInitialized = await this.drive.init();
     }
 
     /**
      * Načte work_logs_data.json z Drive. Pokud neexistuje, vrátí prázdné pole.
      */
     async loadAll(): Promise<{ workLogs: WorkLog[]; projects: Project[]; timestamp: number }> {
-        if (!this.isInitialized || !this.folderId || !this.accessToken) {
+        if (!this.isInitialized) {
             return { workLogs: [], projects: [], timestamp: 0 };
         }
 
         try {
-            const listR = await window.gapi.client.drive.files.list({
-                q: `name='${WORKLOGS_FILENAME}' and '${this.folderId}' in parents and trashed=false`,
-                spaces: 'drive',
-                fields: 'files(id)',
-                pageSize: 1,
-            });
-            const fileMeta = listR.result.files?.[0];
-            if (!fileMeta) return { workLogs: [], projects: [], timestamp: 0 };
-            this.fileId = fileMeta.id;
-
-            const resp = await fetch(
-                `https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`,
-                { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
-            );
-            if (!resp.ok) return { workLogs: [], projects: [], timestamp: 0 };
-
-            const data = (await resp.json()) as WorkLogsFile;
+            const loaded = await this.drive.readJsonFile<WorkLogsFile>(WORKLOGS_FILENAME);
+            if (!loaded) return { workLogs: [], projects: [], timestamp: 0 };
+            this.fileId = loaded.fileId;
+            const data = loaded.data;
             return {
                 workLogs: data.workLogs ?? [],
                 projects: data.projects ?? [],
@@ -127,50 +60,25 @@ class WorkLogsSync {
      * Pokud soubor neexistuje, vytvoří ho.
      */
     async saveAll(payload: { workLogs: WorkLog[]; projects: Project[] }): Promise<number | null> {
-        if (!this.isInitialized || !this.folderId || !this.accessToken) {
+        if (!this.isInitialized) {
             return null;
         }
 
-        const fileContent = JSON.stringify({
+        const timestamp = Date.now();
+        const fileContent = {
             version: 1,
-            last_updated: Date.now(),
+            last_updated: timestamp,
             workLogs: payload.workLogs,
             projects: payload.projects,
-        });
-
-        const boundary = '-------314159265358979323846';
-        const metadata = buildWorkLogsFileMetadata(this.folderId, this.fileId);
-        const body =
-            '--' + boundary + '\r\n' +
-            'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-            JSON.stringify(metadata) + '\r\n' +
-            '--' + boundary + '\r\n' +
-            'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-            fileContent + '\r\n' +
-            '--' + boundary + '--';
+        };
 
         try {
-            if (this.fileId) {
-                // Update existujícího souboru
-                await window.gapi.client.request({
-                    path: `/upload/drive/v3/files/${this.fileId}?uploadType=multipart`,
-                    method: 'PATCH',
-                    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-                    body: body,
-                });
-            } else {
-                const response = await window.gapi.client.request({
-                    path: `/upload/drive/v3/files?uploadType=multipart`,
-                    method: 'POST',
-                    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-                    body: body,
-                }) as DriveUploadResponse;
-                const createdFileId = getUploadedDriveFileId(response);
-                if (createdFileId) {
-                    this.fileId = createdFileId;
-                }
+            const saved = await this.drive.writeJsonFile(WORKLOGS_FILENAME, fileContent, this.fileId);
+            if (!saved) return null;
+            if (saved.fileId) {
+                this.fileId = saved.fileId;
             }
-            return Date.now();
+            return timestamp;
         } catch (e) {
             console.error('WorkLogsSync: saveAll failed', e);
             return null;
