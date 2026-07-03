@@ -12,8 +12,10 @@ interface UseSuggestionsBadgeArgs {
 }
 
 export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth }: UseSuggestionsBadgeArgs) {
+  const hasUsableAuth = googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING';
+
   useEffect(() => {
-    if (!googleAuth.isSignedIn) {
+    if (!hasUsableAuth) {
       queueMicrotask(() => {
         setSuggestionsBadge(0);
         updateSyncHealth('suggestions', { state: 'idle', detail: 'Čeká na Google přihlášení' });
@@ -49,6 +51,6 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
     refreshBadge();
     const t = setInterval(refreshBadge, 60_000);
     return () => clearInterval(t);
-  }, [googleAuth.isSignedIn, setSuggestionsBadge, updateSyncHealth]);
+  }, [hasUsableAuth, setSuggestionsBadge, updateSyncHealth]);
 }
 

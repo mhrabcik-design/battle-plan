@@ -95,7 +95,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     <div className="pt-4 border-t border-white/5 space-y-3">
                         <label className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1">Cloud Sync</label>
-                        {googleAuth.isSignedIn ? (
+                        {googleAuth.state === 'SIGNED_IN' || googleAuth.state === 'REFRESH_PENDING' ? (
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
                                     <span className="text-xs text-emerald-400 font-bold uppercase tracking-widest">Google Připojen</span>
