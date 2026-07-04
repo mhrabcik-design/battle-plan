@@ -229,6 +229,14 @@ class GoogleService {
 
     private markAuthUnavailable(): void {
         this.lastRefreshFailedAt = Date.now();
+        this.accessToken = null;
+        try {
+            if (window.gapi?.client) {
+                window.gapi.client.setToken(null);
+            }
+        } catch (e) {
+            console.error('Failed to clear gapi client token on auth unavailability', e);
+        }
         this.dispatchAuthChange();
     }
 
