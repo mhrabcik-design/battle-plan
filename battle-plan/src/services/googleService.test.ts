@@ -455,7 +455,6 @@ test('race fix: trySilentRefresh with no GIS callback and stale accessToken reso
 
 test('runRefresh: concurrent ensureFreshToken invocations only call initTokenClient once (in-flight dedup)', async () => {
     clearStore();
-    // Force REFRESH_PENDING: valid userEmail, but token expired past the 60s buffer.
     localStorage.setItem('google_access_token', 'stale');
     localStorage.setItem('google_token_expires_at', String(Date.now() - 1000));
     localStorage.setItem('google_user_email', 'user@example.com');
@@ -463,9 +462,6 @@ test('runRefresh: concurrent ensureFreshToken invocations only call initTokenCli
     const svc = freshService();
     (svc as unknown as { tokenClient: unknown }).tokenClient = {};
 
-    // Stub trySilentRefresh to record its call count and to wait for a manual
-    // release signal. We need full control because the real trySilentRefresh uses
-    // a 5s setTimeout that would slow the test down.
     let trySilentRefreshCalls = 0;
     let release: () => void = () => {};
     const refreshPromise = new Promise<boolean>((resolve) => {
@@ -476,19 +472,13 @@ test('runRefresh: concurrent ensureFreshToken invocations only call initTokenCli
         return refreshPromise;
     };
 
-    // Fire two concurrent ensureFreshToken calls via getTaskLists/getTasks.
-    // Both will see REFRESH_PENDING and call runRefresh. Only one trySilentRefresh
-    // call should result from the dedup.
     const taskListsPromise = svc.getTaskLists();
     const tasksPromise = svc.getTasks('@default');
 
-    // Give the microtask queue a chance to settle so both awaiters have reached
-    // ensureFreshToken and runRefresh before we release.
-    await new Promise((resolve) => setImmediate(resolve));
+    await Promise.resolve();
 
     assert.equal(trySilentRefreshCalls, 1, 'concurrent ensureFreshToken calls must share a single in-flight refresh, not each invoke trySilentRefresh');
 
-    // Now release the shared promise so both ensureFreshToken calls complete.
     release();
     const [taskLists, tasks] = await Promise.all([taskListsPromise, tasksPromise]);
     assert.ok(Array.isArray(taskLists), 'getTaskLists should still return [] (empty array sentinel) without throwing');

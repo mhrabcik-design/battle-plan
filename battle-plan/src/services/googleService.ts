@@ -227,6 +227,11 @@ class GoogleService {
         window.dispatchEvent(new CustomEvent('google-auth-change', { detail: status }));
     }
 
+    private markAuthUnavailable(): void {
+        this.lastRefreshFailedAt = Date.now();
+        this.dispatchAuthChange();
+    }
+
     getAuthState(): GoogleAuthState {
         if (!this.accessToken) {
             if (this.userEmail !== null && this.lastRefreshFailedAt !== null) {
@@ -352,7 +357,6 @@ class GoogleService {
     async createGoogleTask(title: string, notes: string = '', taskListId: string = '@default', dueDate?: string) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
         try {
-
             const task: any = { title, notes };
             if (dueDate) {
                 const d = new Date(dueDate);
@@ -370,7 +374,6 @@ class GoogleService {
             return null;
         }
     }
-
 
     async updateGoogleTask(taskId: string, updates: any, taskListId: string = '@default') {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
@@ -398,7 +401,6 @@ class GoogleService {
             console.error('Error deleting Google Task', err);
         }
     }
-
 
     async addToCalendar(task: any) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
@@ -470,8 +472,7 @@ class GoogleService {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
-                this.lastRefreshFailedAt = Date.now();
-                this.dispatchAuthChange();
+                this.markAuthUnavailable();
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || JSON.stringify(err);
@@ -491,8 +492,7 @@ class GoogleService {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
-                this.lastRefreshFailedAt = Date.now();
-                this.dispatchAuthChange();
+                this.markAuthUnavailable();
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || "Neznámá chyba Googlu";
