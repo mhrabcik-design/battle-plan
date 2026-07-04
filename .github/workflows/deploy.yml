@@ -3,10 +3,11 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -20,6 +21,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -32,6 +40,33 @@ jobs:
         working-directory: battle-plan
         run: npm ci
 
+      - name: Bump version (tag-triggered)
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: battle-plan
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Tag push detected, setting version to $TAG_VERSION"
+          npm version "$TAG_VERSION" --no-git-tag-version --commit-hooks=false
+          git add package.json
+          git commit -m "chore(release): bump version to $TAG_VERSION"
+          git push origin HEAD:main
+
+      - name: Bump version (auto-patch)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        working-directory: battle-plan
+        run: |
+          LAST_COMMIT_MSG=$(git log -1 --pretty=%B)
+          if [[ "$LAST_COMMIT_MSG" == "chore(release): bump version to "* ]]; then
+            echo "Last commit is already a version bump, skipping"
+          else
+            npm version patch --no-git-tag-version --commit-hooks=false
+            NEW_VERSION=$(node -p "require('./package.json').version")
+            echo "Bumping patch version to $NEW_VERSION"
+            git add package.json
+            git commit -m "chore(release): bump version to $NEW_VERSION"
+            git push origin HEAD:main
+          fi
+
       - name: Lint
         working-directory: battle-plan
         run: npm run lint
@@ -39,6 +74,8 @@ jobs:
       - name: Build
         working-directory: battle-plan
         run: npm run build
+        env:
+          BP_BUILD_COMMIT: ${{ github.sha }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
