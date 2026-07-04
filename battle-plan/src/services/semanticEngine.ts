@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { db, type Task } from '../db';
 import { googleService } from './googleService';
+import type { GoogleAuthStatus } from '../types';
 
 export const getSystemPrompt = (dayName: string, today: string, now: string, contextInfo: string) => `
 Jsi "Bitevní Plán", elitní AI asistent pro management času a strategické myšlení. 
@@ -156,7 +157,7 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
 }
 
  
-export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: any) => {
+export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: GoogleAuthStatus) => {
     try {
         if (updateId) {
             const existing = await db.tasks.get(updateId);

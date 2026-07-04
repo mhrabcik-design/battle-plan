@@ -141,10 +141,15 @@ class GoogleService {
 
         return new Promise<boolean>((resolve) => {
             let settled = false;
+            let timer: ReturnType<typeof setTimeout> | null = null;
 
             const done = (result: boolean) => {
                 if (settled) return;
                 settled = true;
+                if (timer !== null) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
                 if (result) {
                     this.lastRefreshFailedAt = null;
                 } else {
@@ -187,7 +192,7 @@ class GoogleService {
                 done(false);
             }
 
-            setTimeout(() => done(false), 5000);
+            timer = setTimeout(() => done(false), 5000);
         });
     }
 
