@@ -169,7 +169,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         await googleService.init();
         let status = googleService.getAuthStatus();
 
-        if (status.state !== 'SIGNED_IN' && localStorage.getItem('google_user_email')) {
+        if (status.state === 'REFRESH_PENDING') {
           await googleService.trySilentRefresh();
           status = googleService.getAuthStatus();
         }

@@ -233,6 +233,13 @@ class GoogleService {
     }
 
     private markAuthUnavailable(): void {
+        // INTENTIONAL ASYMMETRY: null the in-memory accessToken + gapi client so
+        // the rest of the app sees OFFLINE_AUTH immediately, but KEEP the
+        // localStorage['google_access_token'] entry. The next signIn() can
+        // attempt a refresh against the same stored token, which is the
+        // behavior that prevents the "401 nukes credentials" regression: a
+        // transient 401 must not erase the user's stored grant. The user
+        // can still clear it explicitly via Settings > Odpojit.
         this.lastRefreshFailedAt = Date.now();
         this.accessToken = null;
         try {
