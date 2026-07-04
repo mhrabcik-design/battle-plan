@@ -598,3 +598,126 @@ test('U3: integration — successful first-sign-in token response populates goog
     assert.equal(Number(localStorage.getItem('google_token_expires_at')) > Date.now(), true, 'expires_at must be in the future');
     assert.equal(localStorage.getItem('google_user_email'), 'first-signin-user@example.com', 'user_email must be persisted on first sign-in');
 });
+
+test('OFFLINE_AUTH: never signed in (no accessToken, no userEmail) → state is SIGNED_OUT, not OFFLINE_AUTH', () => {
+    clearStore();
+    // Pre-condition: empty localStorage
+    assert.equal(localStorage.getItem('google_user_email'), null);
+    assert.equal(localStorage.getItem('google_access_token'), null);
+
+    const svc = freshService();
+    const status = svc.getAuthStatus();
+
+    assert.equal(status.state, 'SIGNED_OUT');
+    assert.notEqual(status.state, 'OFFLINE_AUTH');
+    assert.equal(status.accessToken, null);
+});
+
+test('OFFLINE_AUTH: previously signed in, silent refresh just failed, no fresh token → state is OFFLINE_AUTH', () => {
+    clearStore();
+    // Pre-condition: user was signed in before (userEmail in localStorage), refresh failed so
+    // lastRefreshFailedAt is set, and accessToken is now cleared (refresh path nulls it on failure).
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    const svc = freshService();
+    // After construction the in-memory accessToken reflects what was in localStorage at boot.
+    // Simulate the post-failed-refresh state: clear in-memory token and mark refresh failed.
+    (svc as unknown as { accessToken: string | null }).accessToken = null;
+    (svc as unknown as { lastRefreshFailedAt: number }).lastRefreshFailedAt = Date.now();
+
+    const status = svc.getAuthStatus();
+
+    assert.equal(status.state, 'OFFLINE_AUTH');
+    assert.equal(status.accessToken, null);
+});
+
+test('OFFLINE_AUTH: silent refresh just succeeded → state is SIGNED_IN (or REFRESH_PENDING if within 60s of expiry) and lastRefreshFailedAt is null', () => {
+    clearStore();
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    const svc = freshService();
+    // Set up as if refresh just succeeded: fresh token in the future, lastRefreshFailedAt null.
+    (svc as unknown as { accessToken: string | null }).accessToken = 'fresh-token';
+    (svc as unknown as { expiresAt: number }).expiresAt = Date.now() + 60 * 60 * 1000;
+    (svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt = null;
+
+    const status = svc.getAuthStatus();
+
+    assert.equal(status.state, 'SIGNED_IN');
+    assert.equal((svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt, null);
+});
+
+test('OFFLINE_AUTH: silent refresh succeeded but token is within 60s of expiry → state is REFRESH_PENDING, lastRefreshFailedAt remains null', () => {
+    clearStore();
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    const svc = freshService();
+    (svc as unknown as { accessToken: string | null }).accessToken = 'fresh-but-soon-expiring';
+    (svc as unknown as { expiresAt: number }).expiresAt = Date.now() + 30 * 1000; // 30s from now, inside the 60s window
+    (svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt = null;
+
+    const status = svc.getAuthStatus();
+
+    assert.equal(status.state, 'REFRESH_PENDING');
+    assert.equal((svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt, null);
+});
+
+test('OFFLINE_AUTH: signOut clears lastRefreshFailedAt and resets state to SIGNED_OUT — subsequent successful sign-in back to SIGNED_IN', () => {
+    clearStore();
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    const svc = freshService();
+    // Pretend the user is in OFFLINE_AUTH: stale refresh failure, no access token.
+    (svc as unknown as { accessToken: string | null }).accessToken = null;
+    (svc as unknown as { lastRefreshFailedAt: number }).lastRefreshFailedAt = Date.now();
+
+    // Pre-signOut state: OFFLINE_AUTH
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+
+    svc.signOut();
+
+    // After explicit signOut: userEmail cleared, lastRefreshFailedAt reset.
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_OUT');
+    assert.equal((svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt, null);
+
+    // Now simulate a successful re-sign-in (post-signOut state, fresh token arrives via handleTokenResponse).
+    (svc as unknown as { accessToken: string | null }).accessToken = 'reauth-fresh-token';
+    (svc as unknown as { expiresAt: number }).expiresAt = Date.now() + 60 * 60 * 1000;
+
+    const status = svc.getAuthStatus();
+    assert.equal(status.state, 'SIGNED_IN');
+    assert.equal(status.accessToken, 'reauth-fresh-token');
+});
+
+test('OFFLINE_AUTH: successful signIn() after a failed refresh clears lastRefreshFailedAt', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'old-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    installGapiMock({});
+
+    const svc = freshService();
+    // Singleton tokenClient pre-installed; on requestAccessToken we invoke the same wire (handleTokenResponse) that the GIS library would.
+    (svc as unknown as {
+        tokenClient: { requestAccessToken: (opts: { prompt?: string; login_hint?: string | null }) => void };
+    }).tokenClient = {
+        requestAccessToken: () => {
+            const handler = (svc as unknown as { handleTokenResponse?: (r: { access_token: string; expires_in: number }) => void }).handleTokenResponse;
+            handler?.({ access_token: 'post-reauth-fresh-token', expires_in: 3600 });
+        },
+    };
+
+    // Pretend we were in OFFLINE_AUTH with a failed-refresh marker.
+    (svc as unknown as { accessToken: string | null }).accessToken = null;
+    (svc as unknown as { lastRefreshFailedAt: number }).lastRefreshFailedAt = Date.now();
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+
+    svc.signIn();
+    // Allow microtasks to settle (signIn is synchronous but callbacks invoke state setters).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal((svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt, null);
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
+    assert.equal(svc.getAuthStatus().accessToken, 'post-reauth-fresh-token');
+});
