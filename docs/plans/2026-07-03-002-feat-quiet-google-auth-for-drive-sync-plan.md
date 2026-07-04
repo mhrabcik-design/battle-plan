@@ -1,7 +1,7 @@
 ---
 title: Quiet Google Auth for Drive Sync
 type: feat
-status: active
+status: completed
 date: 2026-07-03
 origin: docs/brainstorms/2026-07-03-quiet-google-auth-for-drive-sync.md
 ---
