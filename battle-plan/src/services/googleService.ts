@@ -279,6 +279,7 @@ class GoogleService {
     }
 
     private handleTokenResponse = (response: TokenResponse) => {
+        this.lastRefreshFailedAt = null;
         if (response.error !== undefined) {
             console.error('GIS Error:', response);
             return;
@@ -295,8 +296,6 @@ class GoogleService {
         if (!this.userEmail) {
             void this.fetchUserInfo();
         }
-
-        this.lastRefreshFailedAt = null;
 
         this.dispatchAuthChange();
     };
@@ -471,6 +470,8 @@ class GoogleService {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
+                this.lastRefreshFailedAt = Date.now();
+                this.dispatchAuthChange();
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || JSON.stringify(err);
@@ -490,6 +491,8 @@ class GoogleService {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
             if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
+                this.lastRefreshFailedAt = Date.now();
+                this.dispatchAuthChange();
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || "Neznámá chyba Googlu";
