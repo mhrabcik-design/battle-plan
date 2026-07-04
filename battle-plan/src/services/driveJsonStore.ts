@@ -229,7 +229,10 @@ export class DriveJsonStore {
                 body,
             },
         );
-        if (!resp.ok) return null;
+        if (!resp.ok) {
+            console.error(`DriveJsonStore: blob upload failed: ${resp.status} ${resp.statusText}`);
+            return null;
+        }
         const result = await resp.json() as { id?: string };
         return { fileId: result.id ?? null };
     }
