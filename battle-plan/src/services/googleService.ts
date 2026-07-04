@@ -67,6 +67,7 @@ class GoogleService {
     private userEmail: string | null = null;
     private previousStatus: GoogleAuthStatus | null = null;
     private refreshInFlight: Promise<boolean> | null = null;
+    private lastRefreshFailedAt: number | null = null;
 
     constructor() {
         this.accessToken = localStorage.getItem('google_access_token');
@@ -144,6 +145,11 @@ class GoogleService {
             const done = (result: boolean) => {
                 if (settled) return;
                 settled = true;
+                if (result) {
+                    this.lastRefreshFailedAt = null;
+                } else {
+                    this.lastRefreshFailedAt = Date.now();
+                }
                 resolve(result);
             };
 
@@ -223,6 +229,9 @@ class GoogleService {
 
     getAuthState(): GoogleAuthState {
         if (!this.accessToken) {
+            if (this.userEmail !== null && this.lastRefreshFailedAt !== null) {
+                return 'OFFLINE_AUTH';
+            }
             return 'SIGNED_OUT';
         }
         const isExpired = Date.now() > (this.expiresAt - 60000);
@@ -287,6 +296,8 @@ class GoogleService {
             void this.fetchUserInfo();
         }
 
+        this.lastRefreshFailedAt = null;
+
         this.dispatchAuthChange();
     };
 
@@ -306,6 +317,7 @@ class GoogleService {
         this.accessToken = null;
         this.expiresAt = 0;
         this.userEmail = null;
+        this.lastRefreshFailedAt = null;
         localStorage.removeItem('google_access_token');
         localStorage.removeItem('google_token_expires_at');
         localStorage.removeItem('google_user_email');
