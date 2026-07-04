@@ -359,6 +359,10 @@ test('lazy refresh: 401 from Calendar API after successful silent refresh — ad
     assert.equal(lsSpy.calls.length, 0);
     assert.equal(localStorage.getItem('google_access_token'), 'fresh-token');
 
+    const statusAfter401 = svc.getAuthStatus();
+    assert.equal(statusAfter401.state, 'OFFLINE_AUTH', 'after 401 the auth state must be OFFLINE_AUTH so the UI can show the offline-auth banner');
+    assert.equal(statusAfter401.accessToken, null, 'after 401 the in-memory accessToken must be null');
+
     lsSpy.restore();
 });
 
@@ -398,6 +402,11 @@ test('lazy refresh: 401 from Calendar API — deleteFromCalendar returns sentine
     assert.equal(result, undefined);
     assert.equal(signOutCalls, 0);
     assert.equal(lsSpy.calls.length, 0);
+    assert.equal(localStorage.getItem('google_access_token'), 'fresh-token');
+
+    const statusAfter401 = svc.getAuthStatus();
+    assert.equal(statusAfter401.state, 'OFFLINE_AUTH', 'after 401 the auth state must be OFFLINE_AUTH so the UI can show the offline-auth banner');
+    assert.equal(statusAfter401.accessToken, null, 'after 401 the in-memory accessToken must be null');
 
     lsSpy.restore();
 });
@@ -423,13 +432,19 @@ test('lazy refresh integration: 401 from calendar — google-auth-change event n
 
     await svc.addToCalendar({ title: 't', date: '2026-07-04' });
 
+    let offLineAuthEventSeen = false;
     for (const evt of capturedEvents) {
         if (evt.name === 'google-auth-change') {
-            const detail = evt.detail as { isSignedIn?: boolean; state?: string };
+            const detail = evt.detail as { isSignedIn?: boolean; state?: string; accessToken?: string | null };
             assert.equal(detail.isSignedIn, undefined, 'event detail must not include isSignedIn');
             assert.ok(typeof detail.state === 'string', 'event detail must include state');
+            if (detail.state === 'OFFLINE_AUTH') {
+                offLineAuthEventSeen = true;
+                assert.equal(detail.accessToken, null, 'OFFLINE_AUTH event detail must carry accessToken:null');
+            }
         }
     }
+    assert.equal(offLineAuthEventSeen, true, 'google-auth-change event with state OFFLINE_AUTH must be dispatched after a 401');
 });
 
 test('race fix: trySilentRefresh with no GIS callback and stale accessToken resolves false (not true)', async () => {
