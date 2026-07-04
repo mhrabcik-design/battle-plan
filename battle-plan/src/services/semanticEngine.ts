@@ -207,7 +207,7 @@ export const applySemanticResult = async (result: any, updateId: number | null, 
                 createdAt: Date.now()
             });
 
-            if (finalType === 'meeting' && googleAuth.isSignedIn) {
+            if (finalType === 'meeting' && googleAuth.state === 'SIGNED_IN') {
                 const addedTask = await db.tasks.get(newTaskId);
                 if (addedTask) {
                     try {

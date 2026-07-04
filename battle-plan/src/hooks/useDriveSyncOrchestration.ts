@@ -49,7 +49,7 @@ export function useDriveSyncOrchestration({
     const checkSync = async () => {
       try {
         const status = googleService.getAuthStatus();
-        if (status.state !== 'SIGNED_IN' && localStorage.getItem('google_access_token')) {
+        if (status.state === 'REFRESH_PENDING' && localStorage.getItem('google_access_token')) {
           const success = await googleService.trySilentRefresh();
           if (success) {
             setGoogleAuth(googleService.getAuthStatus());

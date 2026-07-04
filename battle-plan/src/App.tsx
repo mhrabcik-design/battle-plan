@@ -175,7 +175,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         }
 
         setGoogleAuth(status);
-        const isAuthed = status.state === 'SIGNED_IN';
+        const isAuthed = status.state === 'SIGNED_IN' || status.state === 'REFRESH_PENDING';
         updateSyncHealth('google', {
           state: isAuthed ? 'ok' : 'idle',
           detail: isAuthed ? 'Přihlášeno ke Google službám' : 'Nepřihlášeno',
@@ -195,12 +195,13 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
 
     const handleAuthChange = (e: Event) => {
       const detail = (e as CustomEvent<GoogleAuthStatus | null>).detail;
-      const isSignedIn = detail?.state === 'SIGNED_IN';
-      setGoogleAuth(detail ?? { state: 'SIGNED_OUT', accessToken: null });
+      const authState = detail ?? { state: 'SIGNED_OUT', accessToken: null };
+      const isUsable = authState.state === 'SIGNED_IN' || authState.state === 'REFRESH_PENDING';
+      setGoogleAuth(authState);
       updateSyncHealth('google', {
-        state: isSignedIn ? 'ok' : 'idle',
-        detail: isSignedIn ? 'Přihlášeno ke Google službám' : 'Odpojeno od Google služeb',
-        lastSuccess: isSignedIn ? new Date().toLocaleString('cs-CZ') : null,
+        state: isUsable ? 'ok' : 'idle',
+        detail: isUsable ? 'Přihlášeno ke Google službám' : 'Odpojeno od Google služeb',
+        lastSuccess: isUsable ? new Date().toLocaleString('cs-CZ') : null,
         lastError: null,
       });
     };
