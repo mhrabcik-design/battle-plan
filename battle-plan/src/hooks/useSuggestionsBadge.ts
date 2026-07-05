@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { suggestionsSync } from '../services/suggestionsSync';
+import { googleService } from '../services/googleService';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
@@ -33,8 +34,12 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           return;
         }
         const suggestionsResult = await suggestionsSync.fetchSuggestionsDetailed();
+        const authAfterFetch = googleService.getAuthStatus();
+        if (authAfterFetch.state === 'OFFLINE_AUTH' || authAfterFetch.state === 'SIGNED_OUT') {
+            console.log('[sync-debug]', Date.now(), 'aborting suggestions refresh — auth unavailable', { state: authAfterFetch.state });
+            return;
+        }
         if (suggestionsResult.kind === 'store-unavailable') {
-          updateSyncHealth('suggestions', driveUnavailableHealth(suggestionsResult.status));
           return;
         }
         if (suggestionsResult.kind === 'error') {

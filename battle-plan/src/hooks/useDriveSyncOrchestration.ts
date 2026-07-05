@@ -71,6 +71,10 @@ export function useDriveSyncOrchestration({
           state: authAfterLoad.state,
           token: authAfterLoad.accessToken ? String(authAfterLoad.accessToken).slice(0, 8) + '…' : null,
         });
+        if (authAfterLoad.state === 'OFFLINE_AUTH' || authAfterLoad.state === 'SIGNED_OUT') {
+            console.log('[sync-debug]', Date.now(), 'aborting checkSync — auth unavailable after loadDetailed', { state: authAfterLoad.state });
+            return;
+        }
         if (taskBackup.kind === 'store-unavailable' || taskBackup.kind === 'error' || taskBackup.kind === 'missing-file') {
           updateSyncHealth('tasks', taskBackupHealth(taskBackup));
         } else {
@@ -127,7 +131,11 @@ export function useDriveSyncOrchestration({
             lastError: null,
           });
         }
-
+        const authAfterTasks = googleService.getAuthStatus();
+        if (authAfterTasks.state === 'OFFLINE_AUTH' || authAfterTasks.state === 'SIGNED_OUT') {
+            console.log('[sync-debug]', Date.now(), 'aborting checkSync before workLogsSync.init — auth unavailable', { state: authAfterTasks.state });
+            return;
+        }
         await workLogsSync.init();
         if (workLogsSync.initialized) {
           const workLogsResult = await workLogsSync.loadAllDetailed();
