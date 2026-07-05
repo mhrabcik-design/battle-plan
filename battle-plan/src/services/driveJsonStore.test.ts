@@ -335,3 +335,95 @@ test('U4: AuthUnavailableError is importable from googleService and has the righ
     assert.equal(err.name, 'AuthUnavailableError');
     assert.ok(err.message.length > 0);
 });
+
+test('DriveJsonStore reports drive-client-unavailable when gapi drive client is missing', async () => {
+    installDriveGlobals({ request: async () => ({ status: 200 }) }, {
+        google_access_token: 'token-123',
+    });
+
+    setGoogleServiceState({
+        accessToken: 'token-123',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const store = new DriveJsonStore();
+    const status = await store.initWithStatus();
+
+    assert.equal(status.code, 'drive-client-unavailable');
+    assert.equal(await store.init(), false);
+    assert.equal(store.lastStatus.code, 'drive-client-unavailable');
+});
+
+test('DriveJsonStore reports folder-missing without createFolder and folder-created with createFolder', async () => {
+    const createdFolders: string[] = [];
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async () => ({ result: { files: [] } }),
+            },
+        },
+        request: async (args: { body: string }) => {
+            const payload = JSON.parse(args.body) as { name?: string };
+            if (payload.name) createdFolders.push(payload.name);
+            return { status: 200, result: { id: 'folder-created' } };
+        },
+    }, {
+        google_access_token: 'token-123',
+    });
+
+    setGoogleServiceState({
+        accessToken: 'token-123',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const missingStore = new DriveJsonStore();
+    const missingStatus = await missingStore.initWithStatus();
+    assert.equal(missingStatus.code, 'folder-missing');
+    assert.equal(missingStore.initialized, false);
+
+    const createdStore = new DriveJsonStore();
+    const createdStatus = await createdStore.initWithStatus({ createFolder: true });
+    assert.equal(createdStatus.code, 'folder-created');
+    assert.equal(createdStore.initialized, true);
+    assert.deepEqual(createdFolders, ['Anu-BattlePlan']);
+});
+
+test('DriveJsonStore readJsonFileWithStatus distinguishes missing files and failed media reads', async () => {
+    const mediaResponses = [
+        { ok: false, status: 500, statusText: 'Nope' },
+        { ok: true, status: 200, statusText: 'OK', json: async () => ({ hello: 'world' }) },
+    ];
+    let mediaResponseIndex = 0;
+    (globalThis as unknown as { fetch: unknown }).fetch = async () => mediaResponses[mediaResponseIndex++];
+
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async (args: { q: string }) => {
+                    if (args.q.includes('missing.json')) return { result: { files: [] } };
+                    return { result: { files: [{ id: 'file-existing', name: 'data.json' }] } };
+                },
+            },
+        },
+        request: async () => ({ status: 200, result: { id: 'file-existing' } }),
+    }, { bp_folder_id: 'folder-existing' });
+
+    setGoogleServiceState({
+        accessToken: 'fresh-live-token',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+
+    assert.deepEqual(await store.readJsonFileWithStatus('missing.json'), { kind: 'missing-file' });
+
+    const failed = await store.readJsonFileWithStatus<{ hello: string }>('data.json');
+    assert.deepEqual(failed, { kind: 'error', message: '500 Nope' });
+
+    const loaded = await store.readJsonFileWithStatus<{ hello: string }>('data.json');
+    assert.deepEqual(loaded, { kind: 'loaded', fileId: 'file-existing', data: { hello: 'world' } });
+});

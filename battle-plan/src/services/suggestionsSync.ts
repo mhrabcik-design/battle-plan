@@ -1,4 +1,4 @@
-import { DriveJsonStore } from './driveJsonStore';
+import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 
 export interface AgentSuggestion {
   id: string;
@@ -45,6 +45,12 @@ interface RepliesFile {
   replies: AgentSuggestionReply[];
 }
 
+export type SuggestionsFetchResult =
+  | { kind: 'loaded'; suggestions: AgentSuggestion[] }
+  | { kind: 'missing-file'; suggestions: AgentSuggestion[] }
+  | { kind: 'store-unavailable'; status: DriveStoreStatus; suggestions: AgentSuggestion[] }
+  | { kind: 'error'; message: string; suggestions: AgentSuggestion[] };
+
 const SUGGESTIONS_FILENAME = 'agent-suggestions.json';
 const REPLIES_FILENAME = 'agent-suggestion-replies.json';
 
@@ -57,20 +63,29 @@ class SuggestionsSync {
 
   async init(): Promise<void> {
     if (this.isInitialized) return;
-    this.isInitialized = await this.drive.init();
+    this.isInitialized = await this.drive.init({ createFolder: true });
   }
 
   async fetchSuggestions(): Promise<AgentSuggestion[]> {
-    if (!this.isInitialized) return [];
+    const result = await this.fetchSuggestionsDetailed();
+    return result.suggestions;
+  }
+
+  async fetchSuggestionsDetailed(): Promise<SuggestionsFetchResult> {
+    if (!this.isInitialized) {
+      return { kind: 'store-unavailable', status: this.drive.lastStatus, suggestions: [] };
+    }
 
     try {
-      const loaded = await this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME);
-      if (!loaded) return [];
-      this.suggestionsFileId = loaded.fileId;
-      return loaded.data.suggestions ?? [];
+      const result = await this.drive.readJsonFileWithStatus<SuggestionsFile>(SUGGESTIONS_FILENAME);
+      if (result.kind === 'missing-file') return { kind: 'missing-file', suggestions: [] };
+      if (result.kind === 'store-unavailable') return { ...result, suggestions: [] };
+      if (result.kind === 'error') return { ...result, suggestions: [] };
+      this.suggestionsFileId = result.fileId;
+      return { kind: 'loaded', suggestions: result.data.suggestions ?? [] };
     } catch (e) {
       console.error('SuggestionsSync: fetchSuggestions failed', e);
-      return [];
+      return { kind: 'error', message: e instanceof Error ? e.message : String(e), suggestions: [] };
     }
   }
 
@@ -198,6 +213,7 @@ class SuggestionsSync {
   }
 
   get initialized(): boolean { return this.isInitialized; }
+  get status(): DriveStoreStatus { return this.drive.lastStatus; }
   get hasKnownReplies(): boolean { return this.knownReplyIds.size > 0; }
   markRepliesKnown(replyIds: string[]): void {
     for (const id of replyIds) this.knownReplyIds.add(id);
