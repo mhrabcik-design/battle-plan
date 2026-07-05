@@ -40,6 +40,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
             return;
         }
         if (suggestionsResult.kind === 'store-unavailable') {
+          updateSyncHealth('suggestions', driveUnavailableHealth(suggestionsResult.status));
           return;
         }
         if (suggestionsResult.kind === 'error') {
@@ -48,6 +49,13 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
             detail: 'Načtení návrhů selhalo',
             lastError: suggestionsResult.message,
           });
+          if (/403|PERMISSION_DENIED|Insufficient Authentication Scopes/.test(suggestionsResult.message)) {
+            console.log('[sync-debug]', Date.now(), 'suggestions: detected 403 PERMISSION_DENIED — alerting user');
+            addLog(
+              'Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber \"Battle Plan\", a přihlaš se znovu.',
+              'error'
+            );
+          }
           return;
         }
         const sugs = suggestionsResult.suggestions;
