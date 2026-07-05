@@ -41,6 +41,12 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
         }
         if (suggestionsResult.kind === 'store-unavailable') {
           updateSyncHealth('suggestions', driveUnavailableHealth(suggestionsResult.status));
+          if (suggestionsResult.status.code === 'auth-unavailable') {
+            addLog(
+              "Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber 'Battle Plan', a přihlaš se znovu.",
+              'error'
+            );
+          }
           return;
         }
         if (suggestionsResult.kind === 'error') {
@@ -68,11 +74,20 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           lastError: null,
         });
       } catch (e) {
+        const errorMessage = formatError(e);
+        const lastErrorString = typeof errorMessage === 'string' ? errorMessage : String(errorMessage);
         updateSyncHealth('suggestions', {
           state: 'error',
           detail: 'Načtení návrhů selhalo',
-          lastError: formatError(e),
+          lastError: lastErrorString,
         });
+        console.log('[sync-debug]', Date.now(), 'suggestions refresh threw', { lastErrorString, e });
+        if (/403|PERMISSION_DENIED|Insufficient Authentication Scopes/.test(lastErrorString)) {
+          addLog(
+            "Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber 'Battle Plan', a přihlaš se znovu.",
+            'error'
+          );
+        }
       }
     };
 
