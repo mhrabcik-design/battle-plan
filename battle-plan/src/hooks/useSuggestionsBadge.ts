@@ -52,7 +52,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           if (/403|PERMISSION_DENIED|Insufficient Authentication Scopes/.test(suggestionsResult.message)) {
             console.log('[sync-debug]', Date.now(), 'suggestions: detected 403 PERMISSION_DENIED — alerting user');
             addLog(
-              'Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber \"Battle Plan\", a přihlaš se znovu.',
+              "Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber 'Battle Plan', a přihlaš se znovu.",
               'error'
             );
           }

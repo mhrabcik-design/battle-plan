@@ -79,7 +79,7 @@ export function useDriveSyncOrchestration({
           updateSyncHealth('tasks', taskBackupHealth(taskBackup));
           if (taskBackup.kind === 'error' && /403|PERMISSION_DENIED|Insufficient Authentication Scopes/.test(taskBackup.message)) {
             addLog(
-              'Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber \"Battle Plan\", a přihlaš se znovu.',
+              "Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber 'Battle Plan', a přihlaš se znovu.",
               'error'
             );
           }
