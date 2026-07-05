@@ -574,7 +574,7 @@ test('signIn always uses a fresh consentClient (regardless of stored userEmail) 
 
     let initCallCount = 0;
     let consentRequestCount = 0;
-    let consentRequestOptions: unknown[] = [];
+    const consentRequestOptions: { prompt?: string }[] = [];
     let capturedConsentConfig: unknown = null;
 
     installGisMock({
