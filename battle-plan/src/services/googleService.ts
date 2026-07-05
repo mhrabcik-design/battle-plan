@@ -277,6 +277,12 @@ class GoogleService {
     }
 
     private markAuthUnavailable(): void {
+        const stack = (new Error('markAuthUnavailable called from').stack ?? '').split('\n').slice(1, 6).join('\n');
+        console.log('[sync-debug]', Date.now(), 'markAuthUnavailable', {
+          prevState: this.getAuthState(),
+          prevToken: this.accessToken ? String(this.accessToken).slice(0, 8) + '…' : null,
+          stack,
+        });
         // INTENTIONAL ASYMMETRY: null the in-memory accessToken + gapi client so
         // the rest of the app sees OFFLINE_AUTH immediately, but KEEP the
         // localStorage['google_access_token'] entry. The next signIn() can

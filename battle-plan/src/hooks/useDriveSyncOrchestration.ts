@@ -37,6 +37,11 @@ export function useDriveSyncOrchestration({
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
 
   useEffect(() => {
+    console.log('[sync-debug]', Date.now(), 'orchestration useEffect', {
+      hasUsableAuthValue,
+      googleAuthState: googleAuth.state,
+      googleAuthToken: googleAuth.accessToken ? String(googleAuth.accessToken).slice(0, 8) + '…' : null,
+    });
     if (!hasUsableAuthValue) {
       queueMicrotask(() => {
         updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
@@ -44,8 +49,6 @@ export function useDriveSyncOrchestration({
       });
       return;
     }
-
-    googleService.getTaskLists().then(setGoogleTaskLists);
 
     const checkSync = async () => {
       try {
@@ -56,12 +59,20 @@ export function useDriveSyncOrchestration({
             setGoogleAuth(googleService.getAuthStatus());
           }
         }
-
+        const authBeforeLoad = googleService.getAuthStatus();
+        console.log('[sync-debug]', Date.now(), 'before taskDriveBackup.loadDetailed', {
+          state: authBeforeLoad.state,
+          token: authBeforeLoad.accessToken ? String(authBeforeLoad.accessToken).slice(0, 8) + '…' : null,
+        });
         const taskBackup = await taskDriveBackup.loadDetailed();
+        const authAfterLoad = googleService.getAuthStatus();
+        console.log('[sync-debug]', Date.now(), 'after taskDriveBackup.loadDetailed', {
+          kind: taskBackup.kind,
+          state: authAfterLoad.state,
+          token: authAfterLoad.accessToken ? String(authAfterLoad.accessToken).slice(0, 8) + '…' : null,
+        });
         if (taskBackup.kind === 'store-unavailable' || taskBackup.kind === 'error' || taskBackup.kind === 'missing-file') {
           updateSyncHealth('tasks', taskBackupHealth(taskBackup));
-        } else if (!taskBackup.payload.data) {
-          updateSyncHealth('tasks', taskBackupHealth({ kind: 'missing-file' }));
         } else {
           const payload = taskBackup.payload;
           const payloadData = payload.data ?? {};

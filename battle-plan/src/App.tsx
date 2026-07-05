@@ -196,6 +196,12 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
       const detail = (e as CustomEvent<GoogleAuthStatus | null>).detail;
       const authState = detail ?? { state: 'SIGNED_OUT', accessToken: null };
       const isUsable = authState.state === 'SIGNED_IN' || authState.state === 'REFRESH_PENDING';
+      console.log('[sync-debug]', Date.now(), 'handleAuthChange', {
+        state: authState.state,
+        token: authState.accessToken ? String(authState.accessToken).slice(0, 8) + '…' : null,
+        isUsable,
+        prevGoogleAuth: googleAuth.state,
+      });
       setGoogleAuth(authState);
       updateSyncHealth('google', {
         state: isUsable ? 'ok' : 'idle',
