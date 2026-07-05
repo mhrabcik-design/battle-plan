@@ -12,9 +12,9 @@ interface UseSuggestionsBadgeArgs {
   googleAuth: GoogleAuthStatus;
   setSuggestionsBadge: (count: number) => void;
   updateSyncHealth: (key: string, patch: Partial<SyncHealth>) => void;
+  addLog: (message: string, type?: 'info' | 'error') => void;
 }
-
-export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth }: UseSuggestionsBadgeArgs) {
+export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog }: UseSuggestionsBadgeArgs) {
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
 
   useEffect(() => {
@@ -79,6 +79,6 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
     refreshBadge();
     const t = setInterval(refreshBadge, 60_000);
     return () => clearInterval(t);
-  }, [hasUsableAuthValue, setSuggestionsBadge, updateSyncHealth]);
+  }, [hasUsableAuthValue, setSuggestionsBadge, updateSyncHealth, addLog]);
 }
 

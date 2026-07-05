@@ -323,7 +323,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     updateSyncHealth,
   });
 
-  useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth });
+  useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog });
   useAgentBridgePolling({ googleAuth, addLog });
 
   useEffect(() => {
