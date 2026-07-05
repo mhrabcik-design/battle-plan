@@ -52,6 +52,25 @@ export interface DriveJsonWrite {
     fileId: string | null;
 }
 
+export type DriveStoreStatusCode =
+    | 'ready'
+    | 'folder-created'
+    | 'drive-client-unavailable'
+    | 'auth-unavailable'
+    | 'folder-missing'
+    | 'init-error';
+
+export interface DriveStoreStatus {
+    code: DriveStoreStatusCode;
+    message: string;
+}
+
+export type DriveJsonReadResult<T> =
+    | { kind: 'loaded'; fileId: string; data: T }
+    | { kind: 'missing-file' }
+    | { kind: 'store-unavailable'; status: DriveStoreStatus }
+    | { kind: 'error'; message: string };
+
 export function buildDriveFileMetadata(name: string, mimeType: string, folderId: string, fileId: string | null): DriveFileMetadata {
     const metadata: DriveFileMetadata = { name, mimeType };
     if (!fileId) {
@@ -107,6 +126,7 @@ export function buildMultipartBlobBody(metadata: DriveFileMetadata, blob: Blob, 
 export class DriveJsonStore {
     private folderId: string | null = null;
     private isInitialized = false;
+    private lastStatusValue: DriveStoreStatus = { code: 'folder-missing', message: 'Drive store není inicializovaný' };
     private readonly folderName: string;
     private readonly folderCacheKey: string;
 
@@ -116,19 +136,31 @@ export class DriveJsonStore {
     }
 
     async init(options: { createFolder?: boolean } = {}): Promise<boolean> {
-        if (this.isInitialized) return true;
+        const status = await this.initWithStatus(options);
+        return status.code === 'ready' || status.code === 'folder-created';
+    }
+
+    async initWithStatus(options: { createFolder?: boolean } = {}): Promise<DriveStoreStatus> {
+        if (this.isInitialized) {
+            this.lastStatusValue = { code: 'ready', message: 'Drive store je inicializovaný' };
+            return this.lastStatusValue;
+        }
+
         const client = this.getClient();
         if (!client?.drive) {
             console.warn('DriveJsonStore: GAPI Drive client not available');
-            return false;
+            this.lastStatusValue = { code: 'drive-client-unavailable', message: 'Google Drive klient není dostupný' };
+            return this.lastStatusValue;
         }
+
         const { AuthUnavailableError } = await loadAuthModule();
         try {
             await this.getAccessToken();
         } catch (e) {
             if (e instanceof AuthUnavailableError) {
                 console.warn('DriveJsonStore: Not signed in');
-                return false;
+                this.lastStatusValue = { code: 'auth-unavailable', message: e.message };
+                return this.lastStatusValue;
             }
             throw e;
         }
@@ -137,7 +169,8 @@ export class DriveJsonStore {
         if (cached) {
             this.folderId = cached;
             this.isInitialized = true;
-            return true;
+            this.lastStatusValue = { code: 'ready', message: 'Drive složka načtena z cache' };
+            return this.lastStatusValue;
         }
 
         try {
@@ -151,19 +184,23 @@ export class DriveJsonStore {
                 this.folderId = r.result.files[0].id;
                 localStorage.setItem(this.folderCacheKey, this.folderId);
                 this.isInitialized = true;
-                return true;
+                this.lastStatusValue = { code: 'ready', message: 'Drive složka nalezena' };
+                return this.lastStatusValue;
             }
             if (options.createFolder) {
                 this.folderId = await this.createFolder(client);
                 localStorage.setItem(this.folderCacheKey, this.folderId);
                 this.isInitialized = true;
-                return true;
+                this.lastStatusValue = { code: 'folder-created', message: 'Drive složka vytvořena' };
+                return this.lastStatusValue;
             }
             console.warn(`DriveJsonStore: Folder /${this.folderName}/ not found`);
-            return false;
+            this.lastStatusValue = { code: 'folder-missing', message: `Drive složka /${this.folderName}/ nebyla nalezena` };
+            return this.lastStatusValue;
         } catch (e) {
             console.error('DriveJsonStore: Failed to initialize folder', e);
-            return false;
+            this.lastStatusValue = { code: 'init-error', message: e instanceof Error ? e.message : String(e) };
+            return this.lastStatusValue;
         }
     }
 
@@ -181,17 +218,27 @@ export class DriveJsonStore {
     }
 
     async readJsonFile<T>(name: string): Promise<DriveJsonRead<T> | null> {
-        if (!this.isInitialized || !this.folderId) return null;
+        const result = await this.readJsonFileWithStatus<T>(name);
+        if (result.kind !== 'loaded') return null;
+        return { fileId: result.fileId, data: result.data };
+    }
+
+    async readJsonFileWithStatus<T>(name: string): Promise<DriveJsonReadResult<T>> {
+        if (!this.isInitialized || !this.folderId) {
+            return { kind: 'store-unavailable', status: this.lastStatusValue };
+        }
         const accessToken = await this.getAccessToken();
         const fileId = await this.findFileId(name);
-        if (!fileId) return null;
+        if (!fileId) return { kind: 'missing-file' };
 
         const resp = await fetch(
             `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
             { headers: { 'Authorization': `Bearer ${accessToken}` } },
         );
-        if (!resp.ok) return null;
-        return { fileId, data: await resp.json() as T };
+        if (!resp.ok) {
+            return { kind: 'error', message: `${resp.status} ${resp.statusText}`.trim() };
+        }
+        return { kind: 'loaded', fileId, data: await resp.json() as T };
     }
 
     async writeJsonFile(name: string, payload: unknown, fileId: string | null = null): Promise<DriveJsonWrite | null> {
@@ -243,6 +290,10 @@ export class DriveJsonStore {
 
     get currentFolderId(): string | null {
         return this.folderId;
+    }
+
+    get lastStatus(): DriveStoreStatus {
+        return this.lastStatusValue;
     }
 
     private getClient(): GapiClient | null {

@@ -3,6 +3,7 @@ import { suggestionsSync } from '../services/suggestionsSync';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
+import { driveUnavailableHealth, emptySuggestionsHealth } from '../utils/driveSyncDiagnostics';
 
 const formatError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -28,15 +29,28 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
       try {
         await suggestionsSync.init();
         if (!suggestionsSync.initialized) {
-          updateSyncHealth('suggestions', { state: 'stale', detail: 'Suggestions sync není inicializovaný' });
+          updateSyncHealth('suggestions', driveUnavailableHealth(suggestionsSync.status));
           return;
         }
-        const sugs = await suggestionsSync.fetchSuggestions();
+        const suggestionsResult = await suggestionsSync.fetchSuggestionsDetailed();
+        if (suggestionsResult.kind === 'store-unavailable') {
+          updateSyncHealth('suggestions', driveUnavailableHealth(suggestionsResult.status));
+          return;
+        }
+        if (suggestionsResult.kind === 'error') {
+          updateSyncHealth('suggestions', {
+            state: 'error',
+            detail: 'Načtení návrhů selhalo',
+            lastError: suggestionsResult.message,
+          });
+          return;
+        }
+        const sugs = suggestionsResult.suggestions;
         const open = sugs.filter((s) => s.status === 'open').length;
         setSuggestionsBadge(open);
         updateSyncHealth('suggestions', {
           state: 'ok',
-          detail: `${open} otevřených návrhů`,
+          detail: suggestionsResult.kind === 'missing-file' ? emptySuggestionsHealth().detail : `${open} otevřených návrhů`,
           lastSuccess: new Date().toLocaleString('cs-CZ'),
           lastError: null,
         });

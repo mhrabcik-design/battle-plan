@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:worklogs": "node --experimental-strip-types src/services/workLogExtractor.test.ts && node --experimental-strip-types src/services/driveJsonStore.test.ts && node --experimental-strip-types src/services/googleService.test.ts && node --experimental-strip-types src/services/workLogsSync.test.ts && node --experimental-strip-types src/utils/workLogsSyncStatus.test.ts && node --experimental-strip-types src/utils/workLogSyncIdentity.test.ts",
+    "test:worklogs": "node --experimental-strip-types src/services/workLogExtractor.test.ts && node --experimental-strip-types src/services/driveJsonStore.test.ts && node --experimental-strip-types src/services/googleService.test.ts && node --experimental-strip-types src/services/workLogsSync.test.ts && node --experimental-strip-types src/utils/workLogsSyncStatus.test.ts && node --experimental-strip-types src/utils/driveSyncDiagnostics.test.ts && node --experimental-strip-types src/utils/workLogSyncIdentity.test.ts",
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"

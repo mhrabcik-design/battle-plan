@@ -7,6 +7,7 @@ import { getMissingWorkLogsFileStatus, hasLocalWorkLogsData } from '../utils/wor
 import type { GoogleAuthStatus, GoogleTaskList } from '../types';
 import { hasUsableAuth } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
+import { driveUnavailableHealth, taskBackupHealth } from '../utils/driveSyncDiagnostics';
 
 const formatError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -56,11 +57,17 @@ export function useDriveSyncOrchestration({
           }
         }
 
-        const payload = await taskDriveBackup.load();
-        if (payload && payload.data) {
+        const taskBackup = await taskDriveBackup.loadDetailed();
+        if (taskBackup.kind === 'store-unavailable' || taskBackup.kind === 'error' || taskBackup.kind === 'missing-file') {
+          updateSyncHealth('tasks', taskBackupHealth(taskBackup));
+        } else if (!taskBackup.payload.data) {
+          updateSyncHealth('tasks', taskBackupHealth({ kind: 'missing-file' }));
+        } else {
+          const payload = taskBackup.payload;
+          const payloadData = payload.data ?? {};
           const cloudTimestamp = payload.timestamp || 0;
 
-          const { tasks: driveTasks, settings: driveSettings } = payload.data;
+          const { tasks: driveTasks, settings: driveSettings } = payloadData;
 
           if (driveSettings) {
             for (const s of driveSettings) {
@@ -108,17 +115,21 @@ export function useDriveSyncOrchestration({
             lastSuccess: now,
             lastError: null,
           });
-        } else {
-          updateSyncHealth('tasks', {
-            state: 'stale',
-            detail: 'Drive data nejsou dostupná nebo jsou prázdná',
-          });
         }
 
         await workLogsSync.init();
         if (workLogsSync.initialized) {
-          const wl = await workLogsSync.loadAll();
-          if (wl.timestamp > 0) {
+          const workLogsResult = await workLogsSync.loadAllDetailed();
+          const wl = workLogsResult.data;
+          if (workLogsResult.kind === 'store-unavailable') {
+            updateSyncHealth('worklogs', driveUnavailableHealth(workLogsResult.status));
+          } else if (workLogsResult.kind === 'error') {
+            updateSyncHealth('worklogs', {
+              state: 'error',
+              detail: 'Načtení WorkLogs z Drive selhalo',
+              lastError: workLogsResult.message,
+            });
+          } else if (wl.timestamp > 0) {
             const mergeResult: MergeResult = await mergeCloudToLocal(wl.workLogs, wl.projects);
             if (mergeResult.workLogsAdded > 0 || mergeResult.workLogsUpdated > 0 ||
                 mergeResult.projectsAdded > 0 || mergeResult.projectsUpdated > 0) {
@@ -129,7 +140,7 @@ export function useDriveSyncOrchestration({
             }
             updateSyncHealth('worklogs', {
               state: 'ok',
-              detail: wl.timestamp > 0 ? 'WorkLogs načteny z Drive' : 'WorkLogs soubor zatím neexistuje',
+              detail: 'WorkLogs načteny z Drive',
               lastSuccess: new Date().toLocaleString('cs-CZ'),
               lastError: null,
             });
@@ -164,10 +175,7 @@ export function useDriveSyncOrchestration({
             }
           }
         } else {
-          updateSyncHealth('worklogs', {
-            state: 'stale',
-            detail: 'WorkLogs sync není inicializovaný',
-          });
+          updateSyncHealth('worklogs', driveUnavailableHealth(workLogsSync.status));
         }
       } catch (e) {
         console.error("Auto-sync check failed", e);

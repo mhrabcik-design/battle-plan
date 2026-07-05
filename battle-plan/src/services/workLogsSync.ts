@@ -1,7 +1,7 @@
 import { db, type WorkLog, type Project } from '../db';
 import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
 import { getWorkLogSyncKey } from '../utils/workLogSyncIdentity';
-import { DriveJsonStore } from './driveJsonStore';
+import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 
 /**
  * WorkLogsSync — Drive I/O pro `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
@@ -21,6 +21,20 @@ interface WorkLogsFile {
     projects: Project[];
 }
 
+export interface WorkLogsLoadData {
+    workLogs: WorkLog[];
+    projects: Project[];
+    timestamp: number;
+}
+
+export type WorkLogsLoadResult =
+    | { kind: 'loaded'; data: WorkLogsLoadData }
+    | { kind: 'missing-file'; data: WorkLogsLoadData }
+    | { kind: 'store-unavailable'; status: DriveStoreStatus; data: WorkLogsLoadData }
+    | { kind: 'error'; message: string; data: WorkLogsLoadData };
+
+const emptyWorkLogsLoadData = (): WorkLogsLoadData => ({ workLogs: [], projects: [], timestamp: 0 });
+
 class WorkLogsSync {
     private fileId: string | null = null;
     private isInitialized = false;
@@ -28,30 +42,40 @@ class WorkLogsSync {
 
     async init(): Promise<void> {
         if (this.isInitialized) return;
-        this.isInitialized = await this.drive.init();
+        this.isInitialized = await this.drive.init({ createFolder: true });
     }
 
     /**
      * Načte work_logs_data.json z Drive. Pokud neexistuje, vrátí prázdné pole.
      */
-    async loadAll(): Promise<{ workLogs: WorkLog[]; projects: Project[]; timestamp: number }> {
+    async loadAll(): Promise<WorkLogsLoadData> {
+        const result = await this.loadAllDetailed();
+        return result.data;
+    }
+
+    async loadAllDetailed(): Promise<WorkLogsLoadResult> {
         if (!this.isInitialized) {
-            return { workLogs: [], projects: [], timestamp: 0 };
+            return { kind: 'store-unavailable', status: this.drive.lastStatus, data: emptyWorkLogsLoadData() };
         }
 
         try {
-            const loaded = await this.drive.readJsonFile<WorkLogsFile>(WORKLOGS_FILENAME);
-            if (!loaded) return { workLogs: [], projects: [], timestamp: 0 };
-            this.fileId = loaded.fileId;
-            const data = loaded.data;
+            const result = await this.drive.readJsonFileWithStatus<WorkLogsFile>(WORKLOGS_FILENAME);
+            if (result.kind === 'missing-file') return { kind: 'missing-file', data: emptyWorkLogsLoadData() };
+            if (result.kind === 'store-unavailable') return { ...result, data: emptyWorkLogsLoadData() };
+            if (result.kind === 'error') return { ...result, data: emptyWorkLogsLoadData() };
+            this.fileId = result.fileId;
+            const data = result.data;
             return {
-                workLogs: data.workLogs ?? [],
-                projects: data.projects ?? [],
-                timestamp: data.last_updated ?? 0,
+                kind: 'loaded',
+                data: {
+                    workLogs: data.workLogs ?? [],
+                    projects: data.projects ?? [],
+                    timestamp: data.last_updated ?? 0,
+                },
             };
         } catch (e) {
             console.error('WorkLogsSync: loadAll failed', e);
-            return { workLogs: [], projects: [], timestamp: 0 };
+            return { kind: 'error', message: e instanceof Error ? e.message : String(e), data: emptyWorkLogsLoadData() };
         }
     }
 
@@ -87,6 +111,10 @@ class WorkLogsSync {
 
     get initialized(): boolean {
         return this.isInitialized;
+    }
+
+    get status(): DriveStoreStatus {
+        return this.drive.lastStatus;
     }
 }
 
