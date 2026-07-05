@@ -588,7 +588,12 @@ test('signIn always uses a fresh consentClient (regardless of stored userEmail) 
             return {
                 requestAccessToken: (options: unknown) => {
                     consentRequestCount++;
-                    consentRequestOptions.push(options);
+                    // options is the user-supplied requestAccessToken options
+                    // object. We only read .prompt from it later in the
+                    // assertion; cast through unknown so the array push is
+                    // safe even if GIS ever passes a non-object.
+                    const opts = (options && typeof options === 'object' ? options : {}) as { prompt?: string };
+                    consentRequestOptions.push(opts);
                 },
             };
         },
