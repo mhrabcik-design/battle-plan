@@ -768,3 +768,326 @@ test('OFFLINE_AUTH: successful signIn() after a failed refresh clears lastRefres
     assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
     assert.equal(svc.getAuthStatus().accessToken, 'post-reauth-fresh-token');
 });
+
+// ---- U7: tests for the U1+U2+U4+U5 fixes from the auth-state-residual plan ----
+
+test('U1: getAuthState transitions to OFFLINE_AUTH after a failed trySilentRefresh via ensureFreshToken', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'stale-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+    installGapiMock({});
+
+    const svc = freshService();
+    (svc as unknown as { trySilentRefresh: () => Promise<boolean> }).trySilentRefresh = async () => false;
+
+    // Pre-condition: state is REFRESH_PENDING
+    assert.equal(svc.getAuthStatus().state, 'REFRESH_PENDING');
+
+    const result = await svc.getTaskLists();
+    assert.deepEqual(result, []);
+
+    // U1 fix: a failed silent refresh now transitions the state machine
+    // to OFFLINE_AUTH, not REFRESH_PENDING, so the user can re-grant from Settings.
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', 'ensureFreshToken failure must transition state to OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().accessToken, null);
+});
+
+test('U2.1: trySilentRefresh initTokenClient throw resolves false (no unhandled rejection)', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'stale-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    installGapiMock({});
+    installGisMock({
+        initTokenClient: () => {
+            throw new Error('GIS blocked by ad blocker');
+        },
+    });
+
+    // Use a 60ms timeout via the constructor option so the test is fast.
+    const fastSvc = new GoogleService({ refreshTimeoutMs: 60 });
+    (fastSvc as unknown as { accessToken: string | null }).accessToken = 'stale-token';
+    (fastSvc as unknown as { expiresAt: number }).expiresAt = Date.now() - 5 * 60 * 1000;
+    (fastSvc as unknown as { userEmail: string | null }).userEmail = 'user@example.com';
+    (fastSvc as unknown as { tokenClient: unknown }).tokenClient = { requestAccessToken: () => {} };
+
+    const result = await fastSvc.trySilentRefresh();
+    assert.equal(result, false, 'initTokenClient throw must produce false, not a rejection');
+    assert.equal((fastSvc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt !== null, true);
+});
+
+test('U2.2: trySilentRefresh gapi.client.setToken throw resolves false and state becomes OFFLINE_AUTH', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'stale-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    installGapiMock({});
+    let callbackRef: ((response: { access_token?: string; expires_in?: number; error?: string }) => void) | null = null;
+    installGisMock({
+        initTokenClient: (config: unknown) => {
+            const cfg = config as { callback: (response: { access_token?: string; expires_in?: number; error?: string }) => void };
+            callbackRef = cfg.callback;
+            return { requestAccessToken: () => { void callbackRef?.({ access_token: 'new-token', expires_in: 3600 }); } };
+        },
+    });
+    // Override gapi.client.setToken to throw AFTER a successful response.
+    (globalThis as unknown as { window: { gapi: { client: { setToken: (token: unknown) => void } } } }).window.gapi.client.setToken = () => {
+        throw new Error('gapi setToken failed');
+    };
+
+    const svc = new GoogleService({ refreshTimeoutMs: 60 });
+    (svc as unknown as { accessToken: string | null }).accessToken = 'stale-token';
+    (svc as unknown as { expiresAt: number }).expiresAt = Date.now() - 5 * 60 * 1000;
+    (svc as unknown as { userEmail: string | null }).userEmail = 'user@example.com';
+    (svc as unknown as { tokenClient: unknown }).tokenClient = { requestAccessToken: () => {} };
+
+    const result = await svc.trySilentRefresh();
+    assert.equal(result, false, 'gapi setToken throw must produce false');
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', 'setToken throw must flip state to OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().accessToken, null);
+});
+
+test('U2.3: trySilentRefresh with empty access_token resolves false (no localStorage write)', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'stale-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    installGapiMock({});
+    let callbackRef: ((response: { access_token?: string; expires_in?: number; error?: string }) => void) | null = null;
+    installGisMock({
+        initTokenClient: (config: unknown) => {
+            const cfg = config as { callback: (response: { access_token?: string; expires_in?: number; error?: string }) => void };
+            callbackRef = cfg.callback;
+            return { requestAccessToken: () => { void callbackRef?.({ access_token: '', expires_in: 3600 }); } };
+        },
+    });
+
+    const svc = new GoogleService({ refreshTimeoutMs: 60 });
+    (svc as unknown as { accessToken: string | null }).accessToken = 'stale-token';
+    (svc as unknown as { expiresAt: number }).expiresAt = Date.now() - 5 * 60 * 1000;
+    (svc as unknown as { userEmail: string | null }).userEmail = 'user@example.com';
+    (svc as unknown as { tokenClient: unknown }).tokenClient = { requestAccessToken: () => {} };
+
+    const result = await svc.trySilentRefresh();
+    assert.equal(result, false, 'empty access_token must produce false');
+    // The empty access_token must NOT have been persisted.
+    assert.notEqual(localStorage.getItem('google_access_token'), '', 'empty access_token must not be persisted');
+    assert.equal(localStorage.getItem('google_access_token'), 'stale-token', 'prior token must remain intact');
+});
+
+test('U2.4: handleTokenResponse (consent path) gapi.client.setToken throw does not corrupt state', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'will-be-overwritten');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    installGapiMock({});
+    installGisMock({});
+    (globalThis as unknown as { window: { gapi: { client: { setToken: (token: unknown) => void } } } }).window.gapi.client.setToken = () => {
+        throw new Error('consent setToken failed');
+    };
+
+    const svc = freshService();
+    // Drive the consent callback directly with a fresh token.
+    const handler = (svc as unknown as { handleTokenResponse: (r: { access_token: string; expires_in: number }) => void }).handleTokenResponse;
+    handler({ access_token: 'fresh-from-consent', expires_in: 3600 });
+
+    // State must be OFFLINE_AUTH (setToken failure flipped it), not SIGNED_IN.
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', 'setToken throw on consent must flip state to OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().accessToken, null);
+});
+
+test('U4: GoogleService constructor option refreshTimeoutMs is honored', () => {
+    clearStore();
+    const svc50 = new GoogleService({ refreshTimeoutMs: 50 });
+    const svcDefault = new GoogleService();
+    assert.equal((svc50 as unknown as { refreshTimeoutMs: number }).refreshTimeoutMs, 50, 'explicit refreshTimeoutMs must be stored');
+    assert.equal((svcDefault as unknown as { refreshTimeoutMs: number }).refreshTimeoutMs, 8000, 'default refreshTimeoutMs must be 8000');
+});
+
+test('U4: trySilentRefresh uses the configured refreshTimeoutMs when GIS does not invoke the callback', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'stale-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    installGapiMock({});
+    installGisMock({
+        // initTokenClient that never invokes the callback, simulating a hung GIS prompt.
+        initTokenClient: () => ({ requestAccessToken: () => {} }),
+    });
+
+    const svc = new GoogleService({ refreshTimeoutMs: 80 });
+    (svc as unknown as { accessToken: string | null }).accessToken = 'stale-token';
+    (svc as unknown as { expiresAt: number }).expiresAt = Date.now() - 5 * 60 * 1000;
+    (svc as unknown as { userEmail: string | null }).userEmail = 'user@example.com';
+    (svc as unknown as { tokenClient: unknown }).tokenClient = { requestAccessToken: () => {} };
+
+    const start = Date.now();
+    const result = await svc.trySilentRefresh();
+    const elapsed = Date.now() - start;
+    assert.equal(result, false, 'hung GIS must resolve false via the fallback timer');
+    assert.ok(elapsed < 500, `expected to settle within refreshTimeoutMs (80) + slack; got ${elapsed}ms`);
+});
+
+test('U5: signIn is single-flight on double-click (first-sign-in path)', () => {
+    clearStore();
+    // First-sign-in path requires userEmail to be ABSENT in localStorage.
+    // Do not set google_user_email here.
+
+    let initCalls = 0;
+    let requestCalls = 0;
+    installGapiMock({});
+    installGisMock({
+        initTokenClient: () => {
+            initCalls++;
+            return {
+                requestAccessToken: () => {
+                    requestCalls++;
+                },
+            };
+        },
+    });
+
+    const svc = freshService();
+    // Fire two signIn calls in the same microtask. The second must be a no-op.
+    void svc.signIn();
+    void svc.signIn();
+    // Yield so both microtasks settle; but since signIn stores a promise, both
+    // synchronous calls see the same in-flight slot.
+    assert.equal(initCalls, 1, 'double signIn must only invoke initTokenClient once');
+    assert.equal(requestCalls, 1, 'double signIn must only invoke requestAccessToken once');
+});
+
+// R9: 403 / PERMISSION_DENIED (scope-change / insufficient authentication scopes)
+// must transition the auth state machine to OFFLINE_AUTH, mirroring 401. This
+// guards existing users whose stored token was issued under a different scope
+// set: the first API call after a scope change surfaces the offline-auth UI
+// and the next signIn() routes through the consent flow.
+function installGapiMockThrowing403(api: {
+    tasklistsList?: () => Promise<unknown>;
+    tasksList?: () => Promise<unknown>;
+    tasksInsert?: () => Promise<unknown>;
+    tasksPatch?: () => Promise<unknown>;
+    tasksDelete?: () => Promise<unknown>;
+    calendarEventsInsert?: () => Promise<unknown>;
+    calendarEventsDelete?: () => Promise<unknown>;
+    errBody?: { status?: number; result?: { error?: { status?: string; code?: number; message?: string } } };
+}) {
+    const buildErr = (): unknown => {
+        const err: { status?: number; result?: { error?: { status?: string; code?: number; message?: string } } } = {};
+        if (api.errBody?.status !== undefined) err.status = api.errBody.status;
+        if (api.errBody?.result) err.result = api.errBody.result;
+        return err;
+    };
+    installGapiMock({
+        tasklistsList: api.tasklistsList ?? (async () => { throw buildErr(); }),
+        tasksList: api.tasksList ?? (async () => { throw buildErr(); }),
+        tasksInsert: api.tasksInsert ?? (async () => { throw buildErr(); }),
+        tasksPatch: api.tasksPatch ?? (async () => { throw buildErr(); }),
+        tasksDelete: api.tasksDelete ?? (async () => { throw buildErr(); }),
+        calendarEventsInsert: api.calendarEventsInsert ?? (async () => { throw buildErr(); }),
+        calendarEventsDelete: api.calendarEventsDelete ?? (async () => { throw buildErr(); }),
+    });
+}
+
+// setUserEmailInStore must be called BEFORE freshService() so the constructor
+// reads userEmail from localStorage on init. Without this, getAuthState cannot
+// reach the OFFLINE_AUTH branch after markAuthUnavailable clears accessToken.
+function seedSignedInStorage(): void {
+    localStorage.setItem('google_access_token', 'fresh-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() + 60 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+}
+function stubSilentRefresh(svc: { trySilentRefresh: () => Promise<boolean> }): void {
+    svc.trySilentRefresh = async () => true;
+}
+
+test('R9: getTaskLists 403 with status:403 transitions state to OFFLINE_AUTH and returns []', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMockThrowing403({ errBody: { status: 403 } });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+
+    const result = await svc.getTaskLists();
+
+    assert.deepEqual(result, [], 'getTaskLists must return [] on 403');
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', '403 must transition state to OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().accessToken, null, 'OFFLINE_AUTH must clear in-memory accessToken');
+});
+
+test('R9: getTasks result.error.status=PERMISSION_DENIED transitions state to OFFLINE_AUTH', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMockThrowing403({
+        errBody: { result: { error: { status: 'PERMISSION_DENIED', message: 'Insufficient Authentication Scopes' } } },
+    });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+
+    const result = await svc.getTasks('@default');
+
+    assert.deepEqual(result, [], 'getTasks must return [] on PERMISSION_DENIED');
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+});
+
+test('R9: createGoogleTask result.error.code=403 transitions state to OFFLINE_AUTH and returns null', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMockThrowing403({
+        errBody: { result: { error: { code: 403, message: 'Forbidden' } } },
+    });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+
+    const result = await svc.createGoogleTask('Test');
+
+    assert.equal(result, null, 'createGoogleTask must return null on 403');
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+});
+
+test('R9: updateGoogleTask 403 transitions state to OFFLINE_AUTH and returns null', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMockThrowing403({ errBody: { status: 403 } });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+
+    const result = await svc.updateGoogleTask('task-1', { title: 'x' });
+
+    assert.equal(result, null, 'updateGoogleTask must return null on 403');
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+});
+
+test('R9: deleteGoogleTask PERMISSION_DENIED transitions state to OFFLINE_AUTH (void return)', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMockThrowing403({
+        errBody: { result: { error: { status: 'PERMISSION_DENIED', message: 'scope' } } },
+    });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+
+    await svc.deleteGoogleTask('task-1');
+
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+});
+
+test('R9: addToCalendar 403 transitions state to OFFLINE_AUTH (no thrown error)', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMockThrowing403({ errBody: { status: 403 } });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+
+    // addToCalendar must NOT throw on 403; the user-facing failure is the
+    // OFFLINE_AUTH state transition plus the sync icon flip, not an Error.
+    await svc.addToCalendar({ title: 't', date: '2026-07-04' });
+
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+});

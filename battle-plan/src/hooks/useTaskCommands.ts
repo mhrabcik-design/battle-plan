@@ -22,6 +22,15 @@ export function useTaskCommands({
   setGoogleTasksRaw,
   setIsProcessing,
 }: UseTaskCommandsArgs) {
+  // U3: surface auth-unavailable failures to the user. The hook-level
+  // googleAuth may be stale (React setState is async; markAuthUnavailable
+  // dispatches synchronously via google-auth-change but the consumer state
+  // is captured at render time). Read live state from the singleton.
+  const isAuthUnavailableNow = (): boolean => {
+      const state = googleService.getAuthState();
+      return state === 'OFFLINE_AUTH' || state === 'SIGNED_OUT';
+  };
+  const AUTH_UNAVAILABLE_MSG = 'Relace vypršela, obnovte prosím autorizaci v Nastavení';
   const refreshGoogleTasks = useCallback(() => {
     googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
   }, [activeTaskList, setGoogleTasksRaw]);
@@ -57,7 +66,10 @@ export function useTaskCommands({
   const handleToggleTask = useCallback(async (task: UnifiedTask) => {
     if (task.isGoogleTask && task.googleId && hasUsableAuth(googleAuth)) {
       const newStatus = task.status === 'completed' ? 'needsAction' : 'completed';
-      await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
+      const result = await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
+      if (result === null && isAuthUnavailableNow()) {
+        alert(AUTH_UNAVAILABLE_MSG);
+      }
       refreshGoogleTasks();
     } else if (task.id) {
       const newStatus = task.status === 'completed' ? 'pending' : 'completed';
@@ -82,10 +94,16 @@ export function useTaskCommands({
 
     if (task.isGoogleTask && task.googleId && hasUsableAuth(googleAuth)) {
       await googleService.deleteGoogleTask(task.googleId, task.googleListId);
+      if (isAuthUnavailableNow()) {
+        alert(AUTH_UNAVAILABLE_MSG);
+      }
       refreshGoogleTasks();
     } else if (task.id) {
       if (task.googleEventId && hasUsableAuth(googleAuth)) {
         try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
+        if (isAuthUnavailableNow()) {
+          alert(AUTH_UNAVAILABLE_MSG);
+        }
       }
       await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
     }
@@ -94,10 +112,13 @@ export function useTaskCommands({
   const handleSaveEdit = useCallback(async () => {
     if (editingTask) {
       if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth(googleAuth)) {
-        await googleService.updateGoogleTask(editingTask.googleId, {
+        const result = await googleService.updateGoogleTask(editingTask.googleId, {
           title: editingTask.title,
           notes: editingTask.description
         }, editingTask.googleListId);
+        if (result === null && isAuthUnavailableNow()) {
+          alert(AUTH_UNAVAILABLE_MSG);
+        }
         refreshGoogleTasks();
       } else if (editingTask.id) {
         const taskData = { ...editingTask };
@@ -110,6 +131,9 @@ export function useTaskCommands({
             const eventId = await googleService.addToCalendar(editingTask);
             if (eventId && eventId !== editingTask.googleEventId) {
               await db.tasks.update(editingTask.id, { googleEventId: eventId, updatedAt: Date.now() });
+            }
+            if (!eventId && isAuthUnavailableNow()) {
+              alert(AUTH_UNAVAILABLE_MSG);
             }
           } catch (e) {
             console.error("Save Google sync failed", e);

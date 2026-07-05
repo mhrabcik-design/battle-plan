@@ -59,6 +59,19 @@ const CLIENT_ID = (import.meta as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).
 // scope also includes drive.file semantics, so existing files remain accessible.
 // Re-authorization required after this change.
 const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks';
+// R9: 403 with PERMISSION_DENIED means the stored token was issued under a
+// different (usually older) scope set; treat it like 401 for state-machine
+// purposes so the user is guided to re-grant via the consent flow on their
+// next call attempt. The existing 401 / UNAUTHENTICATED detection is kept
+// in the same helper so all callers share one definition.
+function isAuthBreakingError(e: unknown): boolean {
+    const err = e as { status?: number; result?: { error?: { status?: string; code?: number; message?: string } }; code?: number; message?: string };
+    if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') return true;
+    if (err?.status === 403) return true;
+    if (err?.result?.error?.status === 'PERMISSION_DENIED') return true;
+    if (err?.result?.error?.code === 403) return true;
+    return false;
+}
 
 class GoogleService {
     private tokenClient: TokenClient | null = null;
@@ -68,8 +81,11 @@ class GoogleService {
     private previousStatus: GoogleAuthStatus | null = null;
     private refreshInFlight: Promise<boolean> | null = null;
     private lastRefreshFailedAt: number | null = null;
+    private signInInFlight: Promise<void> | null = null;
+    private readonly refreshTimeoutMs: number;
 
-    constructor() {
+    constructor(options: { refreshTimeoutMs?: number } = {}) {
+        this.refreshTimeoutMs = options.refreshTimeoutMs ?? 8000;
         this.accessToken = localStorage.getItem('google_access_token');
         this.expiresAt = Number(localStorage.getItem('google_token_expires_at')) || 0;
         this.userEmail = localStorage.getItem('google_user_email');
@@ -125,7 +141,8 @@ class GoogleService {
         });
     }
 
-    private async runRefresh(): Promise<boolean> {
+    /** U6: public single-flight accessor for the init-time silent refresh. */
+    async runRefresh(): Promise<boolean> {
         if (this.refreshInFlight) {
             return this.refreshInFlight;
         }
@@ -158,7 +175,13 @@ class GoogleService {
                 resolve(result);
             };
 
-            const singleUseClient = window.google.accounts.oauth2.initTokenClient({
+            // Pre-schedule the fallback timer so a throw from initTokenClient still
+            // produces a settled promise (U2 fix).
+            timer = setTimeout(() => done(false), this.refreshTimeoutMs);
+
+            let singleUseClient: TokenClient;
+            try {
+                singleUseClient = window.google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
                 scope: SCOPES,
                 callback: (response: TokenResponse) => {
@@ -166,14 +189,30 @@ class GoogleService {
                         done(false);
                         return;
                     }
-                    this.accessToken = response.access_token || null;
+                    if (!response.access_token) {
+                        // Empty access_token (malformed response) must not be
+                        // persisted (U2 fix).
+                        done(false);
+                        return;
+                    }
+                    this.accessToken = response.access_token;
                     const expiresIn = response.expires_in || 3600;
                     this.expiresAt = Date.now() + (expiresIn * 1000);
 
                     localStorage.setItem('google_access_token', response.access_token);
                     localStorage.setItem('google_token_expires_at', this.expiresAt.toString());
 
-                    window.gapi.client.setToken({ access_token: response.access_token });
+                    try {
+                        window.gapi.client.setToken({ access_token: response.access_token });
+                    } catch (setTokenErr) {
+                        // U2 fix: setToken throw leaves localStorage updated
+                        // but gapi.client without a bearer. Flip to OFFLINE_AUTH
+                        // so the user can re-grant from Settings.
+                        console.error('gapi.client.setToken failed on silent refresh', setTokenErr);
+                        this.markAuthUnavailable();
+                        done(false);
+                        return;
+                    }
 
                     this.dispatchAuthChange();
 
@@ -181,6 +220,11 @@ class GoogleService {
                 },
                 error_callback: () => done(false),
             });
+            } catch (initErr) {
+                console.error('initTokenClient failed', initErr);
+                done(false);
+                return;
+            }
 
             try {
                 singleUseClient.requestAccessToken({
@@ -192,7 +236,7 @@ class GoogleService {
                 done(false);
             }
 
-            timer = setTimeout(() => done(false), 5000);
+
         });
     }
 
@@ -270,37 +314,56 @@ class GoogleService {
         const state = this.getAuthState();
         if (state === 'SIGNED_IN') return 'ok';
         if (state === 'REFRESH_PENDING') {
-            const refreshed = await this.runRefresh();
-            if (refreshed) {
-                if (this.getAuthState() === 'SIGNED_IN') return 'ok';
-                return 'auth-unavailable';
+            let refreshed = false;
+            try {
+                refreshed = await this.runRefresh();
+            } catch {
+                // U2: runRefresh/trySilentRefresh should never reject, but if a
+                // future change makes it possible we must still transition the
+                // state machine rather than leak a rejection to the caller.
+                refreshed = false;
             }
+            if (refreshed && this.getAuthState() === 'SIGNED_IN') return 'ok';
+            // U1 fix: a failed or post-refresh-non-SIGNED_IN state must
+            // transition to OFFLINE_AUTH so the user can re-grant from Settings.
+            // Otherwise the singleton stays in REFRESH_PENDING forever and the
+            // sync icon never flips to failed.
+            this.markAuthUnavailable();
             return 'auth-unavailable';
         }
         return 'auth-unavailable';
     }
 
-    signIn() {
-        const userEmail = localStorage.getItem('google_user_email');
-        const isFirstSignIn = userEmail === null;
+    signIn(): Promise<void> {
+        // U5: single-flight. A double-click on 'Sign in' does not produce two
+        // GIS prompts; the second call awaits the in-flight promise.
+        if (this.signInInFlight) return this.signInInFlight;
+        const promise = (async () => {
+            const userEmail = localStorage.getItem('google_user_email');
+            const isFirstSignIn = userEmail === null;
 
-        if (isFirstSignIn) {
-            const consentClient = window.google.accounts.oauth2.initTokenClient({
-                client_id: CLIENT_ID,
-                scope: SCOPES,
-                prompt: 'consent',
-                include_granted_scopes: 'true',
-                callback: this.handleTokenResponse,
-            });
-            consentClient.requestAccessToken({ prompt: '' });
-            return;
-        }
+            if (isFirstSignIn) {
+                const consentClient = window.google.accounts.oauth2.initTokenClient({
+                    client_id: CLIENT_ID,
+                    scope: SCOPES,
+                    prompt: 'consent',
+                    include_granted_scopes: 'true',
+                    callback: this.handleTokenResponse,
+                });
+                consentClient.requestAccessToken({ prompt: '' });
+                return;
+            }
 
-        if (this.tokenClient) {
-            const options: { prompt?: string; login_hint?: string | null } = { prompt: '' };
-            if (this.userEmail) options.login_hint = this.userEmail;
-            this.tokenClient.requestAccessToken(options);
-        }
+            if (this.tokenClient) {
+                const options: { prompt?: string; login_hint?: string | null } = { prompt: '' };
+                if (this.userEmail) options.login_hint = this.userEmail;
+                this.tokenClient.requestAccessToken(options);
+            }
+        })().finally(() => {
+            this.signInInFlight = null;
+        });
+        this.signInInFlight = promise;
+        return promise;
     }
 
     private handleTokenResponse = (response: TokenResponse) => {
@@ -309,14 +372,28 @@ class GoogleService {
             console.error('GIS Error:', response);
             return;
         }
-        this.accessToken = response.access_token || null;
+        if (!response.access_token) {
+            // Empty access_token (malformed response) must not be persisted
+            // (U2 fix).
+            return;
+        }
+        this.accessToken = response.access_token;
         const expiresIn = response.expires_in || 3600;
         this.expiresAt = Date.now() + (expiresIn * 1000);
 
         localStorage.setItem('google_access_token', response.access_token);
         localStorage.setItem('google_token_expires_at', this.expiresAt.toString());
 
-        window.gapi.client.setToken({ access_token: response.access_token });
+        try {
+            window.gapi.client.setToken({ access_token: response.access_token });
+        } catch (setTokenErr) {
+            // U2 fix: setToken throw leaves localStorage updated but
+            // gapi.client without a bearer. Flip to OFFLINE_AUTH so the
+            // user can re-grant from Settings.
+            console.error('gapi.client.setToken failed on consent', setTokenErr);
+            this.markAuthUnavailable();
+            return;
+        }
 
         if (!this.userEmail) {
             void this.fetchUserInfo();
@@ -353,8 +430,12 @@ class GoogleService {
         try {
             const response = await window.gapi.client.tasks.tasklists.list();
             return response.result.items || [];
-        } catch (err) {
-            console.error('Error fetching task lists', err);
+        } catch (e: unknown) {
+            if (isAuthBreakingError(e)) {
+                this.markAuthUnavailable();
+                return [];
+            }
+            console.error('Error fetching task lists', e);
             return [];
         }
     }
@@ -368,8 +449,12 @@ class GoogleService {
                 showHidden: true
             });
             return response.result.items || [];
-        } catch (err) {
-            console.error('Error fetching tasks', err);
+        } catch (e: unknown) {
+            if (isAuthBreakingError(e)) {
+                this.markAuthUnavailable();
+                return [];
+            }
+            console.error('Error fetching tasks', e);
             return [];
         }
     }
@@ -389,8 +474,12 @@ class GoogleService {
                 resource: task
             });
             return response.result;
-        } catch (err) {
-            console.error('Error creating Google Task', err);
+        } catch (e: unknown) {
+            if (isAuthBreakingError(e)) {
+                this.markAuthUnavailable();
+                return null;
+            }
+            console.error('Error creating Google Task', e);
             return null;
         }
     }
@@ -404,8 +493,12 @@ class GoogleService {
                 resource: updates
             });
             return response.result;
-        } catch (err) {
-            console.error('Error updating Google Task', err);
+        } catch (e: unknown) {
+            if (isAuthBreakingError(e)) {
+                this.markAuthUnavailable();
+                return null;
+            }
+            console.error('Error updating Google Task', e);
             return null;
         }
     }
@@ -417,8 +510,12 @@ class GoogleService {
                 tasklist: taskListId,
                 task: taskId
             });
-        } catch (err) {
-            console.error('Error deleting Google Task', err);
+        } catch (e: unknown) {
+            if (isAuthBreakingError(e)) {
+                this.markAuthUnavailable();
+                return;
+            }
+            console.error('Error deleting Google Task', e);
         }
     }
 
@@ -491,7 +588,7 @@ class GoogleService {
         } catch (e: unknown) {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
-            if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
+            if (isAuthBreakingError(e)) {
                 this.markAuthUnavailable();
                 return;
             }
@@ -511,7 +608,7 @@ class GoogleService {
         } catch (e: unknown) {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
-            if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') {
+            if (isAuthBreakingError(e)) {
                 this.markAuthUnavailable();
                 return;
             }

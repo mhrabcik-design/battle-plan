@@ -2,6 +2,7 @@
 import { db, type Task } from '../db';
 import { googleService } from './googleService';
 import type { GoogleAuthStatus } from '../types';
+import { hasUsableAuth } from '../types';
 
 export const getSystemPrompt = (dayName: string, today: string, now: string, contextInfo: string) => `
 Jsi "Bitevní Plán", elitní AI asistent pro management času a strategické myšlení. 
@@ -208,7 +209,7 @@ export const applySemanticResult = async (result: any, updateId: number | null, 
                 createdAt: Date.now()
             });
 
-            if (finalType === 'meeting' && googleAuth.state === 'SIGNED_IN') {
+            if (finalType === 'meeting' && hasUsableAuth(googleAuth)) {
                 const addedTask = await db.tasks.get(newTaskId);
                 if (addedTask) {
                     try {

@@ -8,9 +8,11 @@ import { WorkLogTable } from '../components/worklogs/WorkLogTable';
 import { WorkLogCalendar } from '../components/worklogs/WorkLogCalendar';
 import { WorkLogVoiceBar, type WorkLogVoiceController } from '../components/worklogs/WorkLogVoiceBar';
 import { filterWorkLogsForPrace } from '../utils/workLogFilter';
+import type { GoogleAuthStatus } from '../types';
 
 interface WorkLogsPageProps {
-    googleAuth: { isSignedIn: boolean; accessToken: string | null };
+    // U8: consume the new four-state GoogleAuthStatus shape.
+    googleAuth: GoogleAuthStatus;
     onAddLog?: (message: string, type?: 'info' | 'error') => void;
     onVoiceControllerChange?: (controller: WorkLogVoiceController | null) => void;
 }

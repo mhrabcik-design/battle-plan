@@ -123,11 +123,6 @@ function App() {
 
   const isAiActive = !!apiKey && isOnline;
 const hasUsableAuth = checkUsableAuth(googleAuth);
-const googleAuthForLegacyPages = useMemo(
-    () => ({ ...googleAuth, isSignedIn: googleAuth.state === 'SIGNED_IN' }),
-    [googleAuth],
-);
-
 const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     if (googleAuth.state === 'OFFLINE_AUTH' || googleAuth.state === 'SIGNED_OUT') {
         return 'failed';
@@ -169,8 +164,12 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         await googleService.init();
         let status = googleService.getAuthStatus();
 
+        // U6: route the init-time silent refresh through the same single-
+        // flight wrapper as runRefresh. A concurrent ensureFreshToken from
+        // the public methods shares the same in-flight promise instead of
+        // firing a second GIS prompt.
         if (status.state === 'REFRESH_PENDING') {
-          await googleService.trySilentRefresh();
+          await googleService.runRefresh();
           status = googleService.getAuthStatus();
         }
 
@@ -631,14 +630,14 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
 
           {viewMode === 'suggestions' && (
             <SuggestionsPage
-              googleAuth={googleAuthForLegacyPages}
+              googleAuth={googleAuth}
               onAddLog={(msg, type) => addLog(msg, type)}
             />
           )}
 
           {viewMode === 'worklogs' && (
             <WorkLogsPage
-              googleAuth={googleAuthForLegacyPages}
+              googleAuth={googleAuth}
               onAddLog={(msg, type) => addLog(msg, type)}
               onVoiceControllerChange={setWorkLogVoiceController}
             />

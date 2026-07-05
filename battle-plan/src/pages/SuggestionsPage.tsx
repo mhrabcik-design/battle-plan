@@ -8,6 +8,8 @@ import {
 } from '../services/suggestionsSync';
 import { db } from '../db';
 import { SuggestionCard } from '../components/SuggestionCard';
+import type { GoogleAuthStatus } from '../types';
+import { hasUsableAuth } from '../types';
 
 type FilterMode = 'all' | 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted';
 
@@ -21,7 +23,9 @@ const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
 ];
 
 interface SuggestionsPageProps {
-  googleAuth: { isSignedIn: boolean; accessToken: string | null };
+  // U8: consume the new four-state GoogleAuthStatus shape; the legacy
+  // googleAuthForLegacyPages shim in App.tsx is no longer needed.
+  googleAuth: GoogleAuthStatus;
   onAddLog: (message: string, type?: 'info' | 'error') => void;
 }
 
@@ -34,7 +38,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const [expandedTextFor, setExpandedTextFor] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
-    if (!googleAuth.isSignedIn) return;
+    if (!hasUsableAuth(googleAuth)) return;
     setIsLoading(true);
     try {
       await suggestionsSync.init();
@@ -56,7 +60,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     } finally {
       setIsLoading(false);
     }
-  }, [googleAuth.isSignedIn, onAddLog]);
+  }, [googleAuth, onAddLog]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -341,7 +345,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     }
   };
 
-  if (!googleAuth.isSignedIn) {
+  if (!hasUsableAuth(googleAuth)) {
     return (
       <div className="p-12 text-center">
         <Inbox className="w-12 h-12 text-slate-700 mx-auto mb-4" />
