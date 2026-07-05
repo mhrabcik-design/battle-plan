@@ -85,7 +85,7 @@ function App() {
   const addLog = useCallback((message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
     setDebugLogs(prev => [{ t: time, m: message, type }, ...prev].slice(0, 50));
-    console.log(`[${type.toUpperCase()}] ${message}`);
+    console.log(`[sync-debug] ${Date.now()} [addLog] [${type.toUpperCase()}] ${message}`);
   }, []);
 
   useEffect(() => {
