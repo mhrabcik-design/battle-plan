@@ -557,43 +557,56 @@ test('U3: first sign-in — no prior userEmail — signIn() creates a new initTo
     assert.deepEqual(singletonRequestOptions, [], 'singleton tokenClient must NOT be invoked on first sign-in');
 });
 
-test('U3: subsequent sign-in — userEmail in localStorage — signIn() reuses existing singleton tokenClient and does NOT call initTokenClient', () => {
+test('signIn always uses a fresh consentClient (regardless of stored userEmail) so the user can re-grant a new scope set', () => {
     clearStore();
+    // A userEmail is already in localStorage from a prior session. Even so,
+    // signIn must create a fresh consentClient with prompt=consent and
+    // include_granted_scopes=true so the user is re-prompted to grant any
+    // scopes the app now requests. This is the fix for the 4.3.12 symptom
+    // where the user clicks "Sign in", the consent prompt appears, they
+    // grant access, and the UI snaps back to "Google Přihlášení" within
+    // a second because the silent tokenClient.requestAccessToken path
+    // returned a token with the old scope set and the next API call
+    // 403'd, flipping the state back to OFFLINE_AUTH.
     localStorage.setItem('google_access_token', 'existing-token');
     localStorage.setItem('google_token_expires_at', String(Date.now() + 60 * 60 * 1000));
     localStorage.setItem('google_user_email', 'user@example.com');
 
     let initCallCount = 0;
-    let singletonRequestCount = 0;
-    const singletonRequestOptions: unknown[] = [];
+    let consentRequestCount = 0;
+    let consentRequestOptions: unknown[] = [];
+    let capturedConsentConfig: unknown = null;
 
-    // Even if gis were still available, signIn() must NOT call initTokenClient when userEmail is present.
     installGisMock({
-        initTokenClient: () => {
+        initTokenClient: (config: unknown) => {
             initCallCount++;
+            // Capture the first initTokenClient call (the consentClient
+            // for the user-visible sign-in flow).
+            if (initCallCount === 1) {
+                capturedConsentConfig = config;
+            }
             return {
-                requestAccessToken: () => {},
+                requestAccessToken: (options: unknown) => {
+                    consentRequestCount++;
+                    consentRequestOptions.push(options);
+                },
             };
         },
     });
 
     const svc = freshService();
-    const singleton = {
-        requestAccessToken: (options: unknown) => {
-            singletonRequestCount++;
-            singletonRequestOptions.push(options);
-        },
-    };
-    (svc as unknown as { tokenClient: unknown }).tokenClient = singleton;
-
     svc.signIn();
 
-    assert.equal(initCallCount, 0, 'signIn() must NOT call initTokenClient when userEmail is already present');
-    assert.equal(singletonRequestCount, 1, 'signIn() must invoke the existing singleton tokenClient.requestAccessToken exactly once');
-    const reqOpts = singletonRequestOptions[0] as { prompt?: string; login_hint?: string | null } | undefined;
-    assert.ok(reqOpts && typeof reqOpts === 'object', 'singleton requestAccessToken must receive an options object');
-    assert.equal(reqOpts.prompt, '', 'subsequent sign-in must use prompt="" on requestAccessToken');
-    assert.equal(reqOpts.login_hint, 'user@example.com', 'subsequent sign-in must include login_hint=user@example.com');
+    assert.ok(initCallCount >= 1, 'signIn() must call initTokenClient at least once to create a fresh consentClient');
+    assert.equal(consentRequestCount, 1, 'signIn() must call requestAccessToken on the fresh consentClient exactly once');
+    assert.ok(capturedConsentConfig && typeof capturedConsentConfig === 'object', 'consentClient initTokenClient must receive a config object');
+    const cfg = capturedConsentConfig as { prompt?: string; include_granted_scopes?: string; scope?: string };
+    assert.equal(cfg.prompt, 'consent', 'consentClient must request prompt=consent so the user is re-prompted for new scopes');
+    assert.equal(cfg.include_granted_scopes, 'true', 'consentClient must request include_granted_scopes=true so previously granted scopes are merged');
+    assert.ok(typeof cfg.scope === 'string' && cfg.scope.length > 0, 'consentClient must include the full SCOPES string');
+    const reqOpts = consentRequestOptions[0] as { prompt?: string } | undefined;
+    assert.ok(reqOpts && typeof reqOpts === 'object', 'consentClient requestAccessToken must receive an options object');
+    assert.equal(reqOpts.prompt, '', 'consentClient requestAccessToken must be called with prompt="" to trigger the consent UI');
 });
 
 test('U3: integration — successful first-sign-in token response populates google_access_token, google_token_expires_at, and google_user_email in localStorage', async () => {
@@ -736,7 +749,7 @@ test('OFFLINE_AUTH: signOut clears lastRefreshFailedAt and resets state to SIGNE
     assert.equal(status.accessToken, 'reauth-fresh-token');
 });
 
-test('OFFLINE_AUTH: successful signIn() after a failed refresh clears lastRefreshFailedAt', async () => {
+test('OFFLINE_AUTH: successful signIn() after a failed refresh clears lastRefreshFailedAt and flips to SIGNED_IN', async () => {
     clearStore();
     localStorage.setItem('google_access_token', 'old-token');
     localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
@@ -744,16 +757,26 @@ test('OFFLINE_AUTH: successful signIn() after a failed refresh clears lastRefres
 
     installGapiMock({});
 
-    const svc = freshService();
-    // Singleton tokenClient pre-installed; on requestAccessToken we invoke the same wire (handleTokenResponse) that the GIS library would.
-    (svc as unknown as {
-        tokenClient: { requestAccessToken: (opts: { prompt?: string; login_hint?: string | null }) => void };
-    }).tokenClient = {
-        requestAccessToken: () => {
-            const handler = (svc as unknown as { handleTokenResponse?: (r: { access_token: string; expires_in: number }) => void }).handleTokenResponse;
-            handler?.({ access_token: 'post-reauth-fresh-token', expires_in: 3600 });
+    // signIn() now always creates a fresh consentClient via initTokenClient
+    // (the always-consent fix). We wire that consentClient's
+    // requestAccessToken to invoke the same wire (handleTokenResponse)
+    // that the real GIS library would, with a fresh post-reauth token.
+    let capturedHandler: ((r: { access_token: string; expires_in: number }) => void) | null = null;
+    installGisMock({
+        initTokenClient: (config: unknown) => {
+            const cfg = config as { callback?: (r: { access_token: string; expires_in: number }) => void } | undefined;
+            capturedHandler = cfg?.callback ?? null;
+            return {
+                requestAccessToken: () => {
+                    if (capturedHandler) {
+                        capturedHandler({ access_token: 'post-reauth-fresh-token', expires_in: 3600 });
+                    }
+                },
+            };
         },
-    };
+    });
+
+    const svc = freshService();
 
     // Pretend we were in OFFLINE_AUTH with a failed-refresh marker.
     (svc as unknown as { accessToken: string | null }).accessToken = null;
@@ -761,8 +784,10 @@ test('OFFLINE_AUTH: successful signIn() after a failed refresh clears lastRefres
     assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
 
     svc.signIn();
-    // Allow microtasks to settle (signIn is synchronous but callbacks invoke state setters).
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Allow microtasks to settle (signIn is synchronous; the consentClient
+    // mock invokes handleTokenResponse synchronously inside requestAccessToken,
+    // which writes localStorage and dispatches the change event).
+    await Promise.resolve();
 
     assert.equal((svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt, null);
     assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');

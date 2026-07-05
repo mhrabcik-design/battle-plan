@@ -36,7 +36,7 @@ declare global {
         google: {
             accounts: {
                 oauth2: {
-                    initTokenClient: (config: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: () => void; prompt?: string; include_granted_scopes?: string }) => TokenClient;
+                    initTokenClient: (config: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: (err: unknown) => void; prompt?: string; include_granted_scopes?: string }) => TokenClient;
                 };
             };
         };
@@ -117,6 +117,10 @@ class GoogleService {
                     client_id: CLIENT_ID,
                     scope: SCOPES,
                     callback: this.handleTokenResponse,
+                    error_callback: (err: unknown) => {
+                        console.log('[sync-debug]', Date.now(), 'init tokenClient GIS error_callback', err);
+                        this.markAuthUnavailable();
+                    },
                 });
             };
 
@@ -343,35 +347,44 @@ class GoogleService {
     signIn(): Promise<void> {
         // U5: single-flight. A double-click on 'Sign in' does not produce two
         // GIS prompts; the second call awaits the in-flight promise.
+        console.log('[sync-debug]', Date.now(), 'signIn called', {
+          signInInFlightAlreadySet: !!this.signInInFlight,
+          userEmail: this.userEmail,
+          hasTokenClient: !!this.tokenClient,
+        });
         if (this.signInInFlight) return this.signInInFlight;
         const promise = (async () => {
-            const userEmail = localStorage.getItem('google_user_email');
-            const isFirstSignIn = userEmail === null;
-
-            if (isFirstSignIn) {
-                const consentClient = window.google.accounts.oauth2.initTokenClient({
-                    client_id: CLIENT_ID,
-                    scope: SCOPES,
-                    prompt: 'consent',
-                    include_granted_scopes: 'true',
-                    callback: this.handleTokenResponse,
-                });
-                consentClient.requestAccessToken({ prompt: '' });
-                return;
-            }
-
-            if (this.tokenClient) {
-                const options: { prompt?: string; login_hint?: string | null } = { prompt: '' };
-                if (this.userEmail) options.login_hint = this.userEmail;
-                this.tokenClient.requestAccessToken(options);
-            }
+            // Always go through the consent flow with prompt='consent' and
+            // include_granted_scopes='true'. This ensures the user is re-
+            // prompted to grant any scopes the app now requests that were
+            // not in their previous grant — e.g. when the app's SCOPES
+            // constant changed from drive.file to full drive. Without this,
+            // a stored userEmail from a prior session routes signIn into
+            // the silent tokenClient.requestAccessToken() path, which
+            // returns a token with the OLD scopes and immediately 403s on
+            // the next API call, which markAuthUnavailable flips back to
+            // IDLE — so the user clicks "Sign in", sees a consent prompt,
+            // grants access, and the UI snaps back to "Google Přihlášení"
+            // within a second.
+            const consentClient = window.google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                prompt: 'consent',
+                include_granted_scopes: 'true',
+                callback: this.handleTokenResponse,
+                error_callback: (err: unknown) => {
+                    console.log('[sync-debug]', Date.now(), 'signIn GIS error_callback', err);
+                    this.markAuthUnavailable();
+                },
+            });
+            console.log('[sync-debug]', Date.now(), 'signIn: about to call requestAccessToken on consentClient');
+            consentClient.requestAccessToken({ prompt: '' });
         })().finally(() => {
             this.signInInFlight = null;
         });
         this.signInInFlight = promise;
         return promise;
     }
-
     private handleTokenResponse = (response: TokenResponse) => {
         this.lastRefreshFailedAt = null;
         if (response.error !== undefined) {
