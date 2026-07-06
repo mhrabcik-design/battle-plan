@@ -59,11 +59,21 @@ export function useDriveSyncOrchestration({
             setGoogleAuth(googleService.getAuthStatus());
           }
         }
+        // Fetch the user's Google Tasks lists so the picker in App.tsx can
+        // render them on the Tasks view. getTaskLists honors the per-feature
+        // googleTasksScopeAvailable flag and returns [] when the user lacks
+        // the Tasks scope; the 4.3.24 403 swallow means a missing-scope user
+        // pays one cheap call. Errors are isolated so a slow / failed list
+        // fetch does not block the rest of the sync.
+        try {
+          const lists = await googleService.getTaskLists();
+          setGoogleTaskLists(lists);
+        } catch (e) {
+          console.error('Google Tasks list fetch failed', e);
+          setGoogleTaskLists([]);
+        }
         const authBeforeLoad = googleService.getAuthStatus();
-        console.log('[sync-debug]', Date.now(), 'before taskDriveBackup.loadDetailed', {
-          state: authBeforeLoad.state,
-          token: authBeforeLoad.accessToken ? String(authBeforeLoad.accessToken).slice(0, 8) + '…' : null,
-        });
+        console.log('[sync-debug]', Date.now(), 'before taskDriveBackup.loadDetailed', { state: authBeforeLoad.state, token: authBeforeLoad.accessToken ? String(authBeforeLoad.accessToken).slice(0, 8) + '…' : null });
         const taskBackup = await taskDriveBackup.loadDetailed();
         const authAfterLoad = googleService.getAuthStatus();
         console.log('[sync-debug]', Date.now(), 'after taskDriveBackup.loadDetailed', {
