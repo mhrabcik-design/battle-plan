@@ -1,4 +1,4 @@
-import { db, type Project, type Setting, type WorkLog } from '../db';
+import { db, type Project, type Setting, type WorkLog } from '../db.ts';
 
 export interface AppContext {
     activeProjects: { id: number; name: string; color: Project['color'] }[];
