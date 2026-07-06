@@ -54,14 +54,26 @@ export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePoll
       }
     };
 
+    // 5s cadence is the production cadence. Faster than the previous 30s
+    // so Anu writes surface in seconds, not half a minute. Paired with the
+    // visibilitychange / focus listeners below, the latency is bounded by
+    // the time between Anu writing and the next user-facing event.
     const initialTimer = setTimeout(checkAgentWrites, 3000);
-    const interval = setInterval(checkAgentWrites, 30_000);
+    const interval = setInterval(checkAgentWrites, 5_000);
+
+    // Flush pending writes when the tab returns to the foreground so the user
+    // sees agent activity without waiting for the next polling tick. The
+    // precedent is useDriveSyncOrchestration.ts:239-247.
+    const handleVisibility = (): void => { void checkAgentWrites(); };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
 
     return () => {
       cancelled = true;
       clearTimeout(initialTimer);
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
     };
   }, [hasUsableAuthValue, addLog]);
 }
-
