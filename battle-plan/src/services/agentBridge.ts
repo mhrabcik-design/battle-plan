@@ -1,4 +1,7 @@
-import type { Project, Task, WorkLog } from '../db';
+import { googleService } from './googleService';
+import { normalizeEntity } from './semanticEngine';
+import type { AgentInboxRow, Project, Task, WorkLog } from '../db';
+import { db } from '../db';
 import { DriveJsonStore } from './driveJsonStore';
 
 export type AgentWriteAction =
@@ -69,38 +72,109 @@ class AgentBridge {
     }
   }
 
-  async applyWrite(write: AgentWrite): Promise<{ success: boolean; newId?: number }> {
-    const { db } = await import('../db');
-
+  async applyWrite(write: AgentWrite): Promise<{ success: boolean; newId?: number; last_error?: string }> {
     try {
-      if (write.action === 'create_task') {
-        const newId = await db.tasks.add({
-          ...write.task_data,
-          status: write.task_data.status || 'pending',
-          updatedAt: Date.now(),
-          createdAt: Date.now(),
-        } as Task);
-        return { success: true, newId: newId as number };
+      // Dispatch the four task-shaped actions through normalizeEntity so the
+      // agent path produces the same invariants as the voice path.
+      if (
+        write.action === 'create_task' ||
+        write.action === 'update_task' ||
+        write.action === 'delete_task' ||
+        write.action === 'complete_task'
+      ) {
+        return await this.applyTaskAction(write);
       }
-
-      if (write.action === 'update_task' && write.task_data.id) {
-        await db.tasks.update(write.task_data.id, {
-          ...write.task_data,
-          updatedAt: Date.now(),
-        });
-        return { success: true };
-      }
-
-      if (write.action === 'delete_task' && write.task_data.id) {
-        await db.tasks.update(write.task_data.id, { isDeleted: true, updatedAt: Date.now() });
-        return { success: true };
-      }
-
-      return { success: false };
+      // Non-task actions land here; U4 adds the worklog/project/settings
+      // branches with the per-entity normalization from R3a-R3c.
+      return { success: false, last_error: `unsupported action: ${write.action}` };
     } catch (e) {
       console.error('AgentBridge: applyWrite failed', e);
-      return { success: false };
+      return { success: false, last_error: e instanceof Error ? e.message : String(e) };
     }
+  }
+
+  private async applyTaskAction(
+    write: AgentWrite
+  ): Promise<{ success: boolean; newId?: number; last_error?: string }> {
+    if (
+      write.action !== 'create_task' && write.action !== 'update_task' &&
+      write.action !== 'delete_task' && write.action !== 'complete_task'
+    ) {
+      return { success: false, last_error: 'not a task action' };
+    }
+    const data = (write.task_data ?? {}) as Partial<Task> & { id?: number };
+
+    if (write.action === 'create_task') {
+      const norm = normalizeEntity(data, 'create', undefined);
+      const newId = await db.tasks.add({
+        ...norm.value,
+        status: norm.value.status ?? 'pending',
+        source: 'agent',
+        agent_write_id: write.id,
+        updatedAt: Date.now(),
+        createdAt: Date.now(),
+      } as Task);
+
+      // Calendar parity: meeting types with usable Google auth get a Calendar event.
+      if (norm.value.type === 'meeting') {
+        const eventId = await googleService.addToCalendar({ ...norm.value, id: newId } as Task);
+        if (eventId) {
+          await db.tasks.update(newId, { googleEventId: eventId });
+        }
+      }
+
+      return { success: true, newId: newId as number, last_error: norm.last_error };
+    }
+
+    if (write.action === 'update_task') {
+      if (!data.id) return { success: false, last_error: 'task_data.id missing' };
+      const existing = await db.tasks.get(data.id);
+      if (!existing) return { success: false, last_error: 'task not found' };
+      const norm = normalizeEntity(data, 'update', existing);
+      await db.tasks.update(data.id, {
+        ...norm.value,
+        source: existing.source ?? 'agent',
+        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+        updatedAt: Date.now(),
+      });
+      return { success: true, last_error: norm.last_error };
+    }
+
+    if (write.action === 'complete_task') {
+      if (!data.id) return { success: false, last_error: 'task_data.id missing' };
+      const existing = await db.tasks.get(data.id);
+      if (!existing) return { success: false, last_error: 'task not found' };
+      const norm = normalizeEntity(data, 'complete', existing);
+      await db.tasks.update(data.id, {
+        ...norm.value,
+        source: existing.source ?? 'agent',
+        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+        updatedAt: Date.now(),
+      });
+      // Google Tasks parity: complete the linked Google Task when googleId is set.
+      const linked = existing as Task & { googleId?: string; googleListId?: string };
+      if (linked.googleId) {
+        await googleService.updateGoogleTask(linked.googleId, { status: 'completed' }, linked.googleListId);
+      }
+      return { success: true, last_error: norm.last_error };
+    }
+
+    // delete_task
+    if (!data.id) return { success: false, last_error: 'task_data.id missing' };
+    const existing = await db.tasks.get(data.id);
+    if (!existing) return { success: false, last_error: 'task not found' };
+    await db.tasks.update(data.id, {
+      isDeleted: true,
+      source: existing.source ?? 'agent',
+      agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+      updatedAt: Date.now(),
+    });
+    // Calendar parity: clean up the linked Calendar event for meetings.
+    const linked = existing as Task & { googleEventId?: string };
+    if (linked.googleEventId) {
+      await googleService.deleteFromCalendar(linked.googleEventId);
+    }
+    return { success: true };
   }
 
   async markApplied(writeIds: string[]): Promise<void> {
