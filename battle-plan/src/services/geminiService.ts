@@ -8,7 +8,8 @@ import {
     prepareGeminiAudio,
     sleep,
 } from './audioAiPipeline';
-import { getSystemPrompt } from './semanticEngine';
+import { getSystemPrompt } from './semanticEngine.ts';
+import { buildAppContext } from './appContext.ts';
 export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
 export const AVAILABLE_GEMINI_MODELS = [
     DEFAULT_GEMINI_MODEL,
@@ -159,7 +160,8 @@ export class GeminiService {
                 }
             }
 
-            const systemPrompt = getSystemPrompt(dayName, today, now, contextInfo);
+            const appContext = await buildAppContext();
+            const systemPrompt = getSystemPrompt(dayName, today, now, contextInfo, appContext);
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
 
             const maxAttempts = 4;
