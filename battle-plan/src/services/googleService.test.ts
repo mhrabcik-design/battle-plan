@@ -549,9 +549,11 @@ test('U3: first sign-in — no prior userEmail — signIn() creates a new initTo
     assert.ok(typeof cfg.client_id === 'string', 'first-sign-in TokenClient config must include client_id');
 
     assert.equal(newClientRequestCount, 1, 'requestAccessToken must be invoked exactly once on the new client');
-    const reqOpts = newClientRequestOptions[0] as { prompt?: string; login_hint?: string | null } | undefined;
+    const reqOpts = newClientRequestOptions[0] as { prompt?: string; scope?: string; include_granted_scopes?: string; login_hint?: string | null } | undefined;
     assert.ok(reqOpts && typeof reqOpts === 'object', 'requestAccessToken must receive an options object');
-    assert.equal(reqOpts.prompt, '', 'first-sign-in must call requestAccessToken with prompt="" (empty) to trigger consent screen');
+    assert.equal(reqOpts.prompt, 'consent', 'first-sign-in must force prompt=consent on the request override');
+    assert.equal(reqOpts.scope, cfg.scope, 'first-sign-in request override must repeat the full scope string');
+    assert.equal(reqOpts.include_granted_scopes, 'true', 'first-sign-in request override must preserve incremental authorization');
 
     // Singleton client must NOT be used on first sign-in
     assert.deepEqual(singletonRequestOptions, [], 'singleton tokenClient must NOT be invoked on first sign-in');
@@ -609,9 +611,57 @@ test('signIn always uses a fresh consentClient (regardless of stored userEmail) 
     assert.equal(cfg.prompt, 'consent', 'consentClient must request prompt=consent so the user is re-prompted for new scopes');
     assert.equal(cfg.include_granted_scopes, 'true', 'consentClient must request include_granted_scopes=true so previously granted scopes are merged');
     assert.ok(typeof cfg.scope === 'string' && cfg.scope.length > 0, 'consentClient must include the full SCOPES string');
-    const reqOpts = consentRequestOptions[0] as { prompt?: string } | undefined;
+    const reqOpts = consentRequestOptions[0] as { prompt?: string; scope?: string; include_granted_scopes?: string } | undefined;
     assert.ok(reqOpts && typeof reqOpts === 'object', 'consentClient requestAccessToken must receive an options object');
-    assert.equal(reqOpts.prompt, '', 'consentClient requestAccessToken must be called with prompt="" to trigger the consent UI');
+    assert.equal(reqOpts.prompt, 'consent', 'consentClient requestAccessToken must force prompt=consent; prompt="" suppresses returning-user consent and returns stale scopes');
+    assert.equal(reqOpts.scope, cfg.scope, 'consentClient requestAccessToken must repeat the full scope string so the override cannot narrow scopes');
+    assert.equal(reqOpts.include_granted_scopes, 'true', 'consentClient requestAccessToken must preserve incremental authorization in the override');
+});
+
+test('signIn scope set includes userinfo and all Google API scopes needed by the app', () => {
+    clearStore();
+    let capturedConfig: unknown = null;
+
+    installGisMock({
+        initTokenClient: (config: unknown) => {
+            capturedConfig = config;
+            return { requestAccessToken: () => {} };
+        },
+    });
+
+    const svc = freshService();
+    svc.signIn();
+
+    const cfg = capturedConfig as { scope?: string } | undefined;
+    assert.ok(cfg?.scope, 'signIn must send a scope string');
+    const scopes = cfg.scope.split(/\s+/);
+    assert.ok(scopes.includes('openid'), 'scope must include openid so oauth2/v3/userinfo accepts the access token');
+    assert.ok(scopes.includes('email'), 'scope must include email so oauth2/v3/userinfo can return the signed-in email');
+    assert.ok(scopes.includes('profile'), 'scope must include profile for the userinfo endpoint');
+    assert.ok(scopes.includes('https://www.googleapis.com/auth/calendar.events'), 'scope must include calendar.events');
+    assert.ok(scopes.includes('https://www.googleapis.com/auth/drive'), 'scope must include full Drive access');
+    assert.ok(scopes.includes('https://www.googleapis.com/auth/tasks'), 'scope must include Google Tasks access');
+});
+
+test('handleTokenResponse rejects a token response that omits required scopes instead of entering SIGNED_IN', () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'old-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+    installGapiMock({});
+    installGisMock({});
+
+    const svc = freshService();
+    const handler = (svc as unknown as { handleTokenResponse: (r: { access_token: string; expires_in: number; scope: string }) => void }).handleTokenResponse;
+    handler({
+        access_token: 'token-without-tasks-scope',
+        expires_in: 3600,
+        scope: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive',
+    });
+
+    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', 'token missing the tasks scope must not be accepted as SIGNED_IN');
+    assert.equal(svc.getAuthStatus().accessToken, null, 'missing-scope token must not become the active access token');
+    assert.equal(localStorage.getItem('google_access_token'), 'old-token', 'missing-scope token must not overwrite the stored token');
 });
 
 test('U3: integration — successful first-sign-in token response populates google_access_token, google_token_expires_at, and google_user_email in localStorage', async () => {

@@ -44,21 +44,29 @@ declare global {
 }
 
 interface TokenClient {
-    requestAccessToken(options?: { prompt?: string; login_hint?: string | null }): void;
+    requestAccessToken(options?: { prompt?: string; login_hint?: string | null; scope?: string; include_granted_scopes?: string }): void;
 }
 
 interface TokenResponse {
     error?: string;
     access_token: string;
     expires_in?: number;
+    scope?: string;
 }
 
 const CLIENT_ID = (import.meta as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).env?.VITE_GOOGLE_CLIENT_ID || '216787355892-u9htv12p0b798vcc702h1qmfpppcc7m0.apps.googleusercontent.com';
-// Scopes: drive (full) instead of drive.file so BP app can read agent-suggestions.json
-// that was written by external agents (e.g. Anu bp_suggestions.py). The full drive
-// scope also includes drive.file semantics, so existing files remain accessible.
-// Re-authorization required after this change.
-const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks';
+// Scopes: include OpenID email/profile for oauth2/v3/userinfo and full drive
+// instead of drive.file so BP can read agent-suggestions.json written by
+// external agents (e.g. Anu bp_suggestions.py). Re-authorization required
+// after this scope set changes.
+const SCOPES = 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks';
+const REQUIRED_SCOPE_SET = SCOPES.split(/\s+/).filter(Boolean);
+
+function tokenHasRequiredScopes(response: TokenResponse): boolean {
+    if (!response.scope) return true;
+    const granted = new Set(response.scope.split(/\s+/).filter(Boolean));
+    return REQUIRED_SCOPE_SET.every(scope => granted.has(scope));
+}
 // R9: 403 with PERMISSION_DENIED means the stored token was issued under a
 // different (usually older) scope set; treat it like 401 for state-machine
 // purposes so the user is guided to re-grant via the consent flow on their
@@ -196,6 +204,11 @@ class GoogleService {
                     if (!response.access_token) {
                         // Empty access_token (malformed response) must not be
                         // persisted (U2 fix).
+                        done(false);
+                        return;
+                    }
+                    if (!tokenHasRequiredScopes(response)) {
+                        console.warn('Silent refresh returned a token missing required scopes', { grantedScopes: response.scope, requiredScopes: SCOPES });
                         done(false);
                         return;
                     }
@@ -354,18 +367,14 @@ class GoogleService {
         });
         if (this.signInInFlight) return this.signInInFlight;
         const promise = (async () => {
-            // Always go through the consent flow with prompt='consent' and
-            // include_granted_scopes='true'. This ensures the user is re-
-            // prompted to grant any scopes the app now requests that were
-            // not in their previous grant — e.g. when the app's SCOPES
-            // constant changed from drive.file to full drive. Without this,
-            // a stored userEmail from a prior session routes signIn into
-            // the silent tokenClient.requestAccessToken() path, which
-            // returns a token with the OLD scopes and immediately 403s on
-            // the next API call, which markAuthUnavailable flips back to
-            // IDLE — so the user clicks "Sign in", sees a consent prompt,
-            // grants access, and the UI snaps back to "Google Přihlášení"
-            // within a second.
+            // Always force the user-visible request itself through the consent
+            // flow. GIS treats requestAccessToken(options) as an override of
+            // initTokenClient config; passing { prompt: '' } here suppresses
+            // the consent prompt for returning users and can hand us an access
+            // token with the OLD scope set. That is exactly the production
+            // failure: user clicks Google Přihlášení, a token arrives, then
+            // Tasks API returns 403 PERMISSION_DENIED and the state snaps back
+            // to IDLE. Keep prompt='consent' on both init and request.
             const consentClient = window.google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
                 scope: SCOPES,
@@ -377,8 +386,12 @@ class GoogleService {
                     this.markAuthUnavailable();
                 },
             });
-            console.log('[sync-debug]', Date.now(), 'signIn: about to call requestAccessToken on consentClient');
-            consentClient.requestAccessToken({ prompt: '' });
+            console.log('[sync-debug]', Date.now(), 'signIn: about to call requestAccessToken on consentClient with prompt=consent');
+            consentClient.requestAccessToken({
+                prompt: 'consent',
+                scope: SCOPES,
+                include_granted_scopes: 'true',
+            });
         })().finally(() => {
             this.signInInFlight = null;
         });
@@ -394,6 +407,11 @@ class GoogleService {
         if (!response.access_token) {
             // Empty access_token (malformed response) must not be persisted
             // (U2 fix).
+            return;
+        }
+        if (!tokenHasRequiredScopes(response)) {
+            console.warn('Consent returned a token missing required scopes', { grantedScopes: response.scope, requiredScopes: SCOPES });
+            this.markAuthUnavailable();
             return;
         }
         this.accessToken = response.access_token;
