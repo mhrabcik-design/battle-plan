@@ -62,12 +62,12 @@ const gapiMock: {
             // Drive API for DriveJsonStore — return a 404 so readJsonFile returns null and applyWrite can still run.
             if (typeof args === 'object' && args !== null && 'path' in args) {
                 const path = (args as { path: string }).path;
-                if (path.includes('/files/') && (args as { method: string }).method === 'GET') {
+                if (path.includes('/files/') && (args as unknown as { method: string }).method === 'GET') {
                     const err = new Error('Not Found') as Error & { status?: number; code?: number };
                     err.status = 404; err.code = 404;
                     throw err;
                 }
-                if (path === '/files' && (args as { method: string }).method === 'GET') {
+                if (path === '/files' && (args as unknown as { method: string }).method === 'GET') {
                     return { result: { files: [] } };
                 }
             }
