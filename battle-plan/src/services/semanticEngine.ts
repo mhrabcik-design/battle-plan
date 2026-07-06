@@ -121,6 +121,14 @@ function clampProgress(val: unknown): number {
     return Math.min(100, Math.max(0, Math.round(n)));
 }
 
+// Stable identity for the normalized output. Optional `last_error` is set when
+// the input was coerced (e.g. unknown type → 'thought') so the agent path can
+// surface the coercion in `db.agentInbox.last_error`.
+export interface NormalizeResult<T> {
+  value: T;
+  last_error?: string;
+}
+
 interface AiResult {
     title?: string;
     description?: string;
@@ -152,25 +160,68 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
         duration: Number(result.duration) || defaultDuration,
         totalDuration: Number(result.totalDuration) || Number(result.duration) || defaultDuration,
         isAllDay,
-        subTasks: Array.isArray(result.subTasks) ? result.subTasks : [],
-        progress: clampProgress(result.progress),
-    };
+// Normalize the AI / agent payload into a Task that satisfies the
+// applySemanticResult invariants. Shared between the voice path and the
+// agent path so both produce the same output for the same input. The
+// helper is Task-only at this unit; WorkLog / Project / Setting
+// normalization (R3a-R3c) lands in U4.
+export function normalizeEntity(
+    result: AiResult | (Partial<Task> & Record<string, unknown>),
+    action: 'create' | 'update' | 'complete' | 'delete',
+    existing?: Task
+): NormalizeResult<Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }> {
+    const out: Record<string, unknown> = {};
+    const errors: string[] = [];
+
+    // Type: normalize; coerce unknowns to 'thought' and surface as last_error.
+    const finalType = action === 'create'
+        ? normalizeType(String(result.type || 'thought'))
+        : normalizeType(String(result.type || existing?.type || 'thought'));
+    if (action === 'create' && !result.type) errors.push('type coerced to thought (default)');
+    if (action !== 'create' && result.type && !EXACT_TYPE_MAP[String(result.type).toLowerCase().trim()] &&
+        !['task', 'meeting', 'thought'].includes(String(result.type).toLowerCase().trim())) {
+        errors.push(`unknown type "${String(result.type)}" coerced to thought`);
+    }
+    out.type = finalType;
+
+    // urgency: clamp to 1..3.
+    out.urgency = action === 'create' || result.urgency != null
+        ? clampUrgency(result.urgency)
+        : existing?.urgency ?? 2;
+
+    // startTime: clear when isAllDay is true.
+    const isAllDay = result.isAllDay != null
+        ? clampIsAllDay(result.isAllDay)
+        : existing?.isAllDay ?? false;
+    out.isAllDay = isAllDay;
+
+    // Type-mirroring of date↔deadline (mirrors applySemanticResult:169-178).
+    const r: Record<string, unknown> = { ...result };
+    if (finalType === 'task' || existing?.type === 'task') {
+        if (r.deadline && !r.date) r.date = r.deadline;
+        if (r.date && !r.deadline) r.deadline = r.date;
+    } else {
+        if (r.date && !r.deadline && (!existing?.deadline || existing.date === existing.deadline)) {
+            r.deadline = r.date;
+        } else if (r.deadline && !r.date && (!existing?.date || existing.date === existing.deadline)) {
+            r.date = r.deadline;
+        }
+    }
+    out.date = r.date ?? existing?.date;
+    out.deadline = r.deadline ?? existing?.deadline;
+    out.startTime = isAllDay ? undefined : (r.startTime ?? existing?.startTime ?? (finalType === 'meeting' ? '09:00' : (finalType === 'task' ? '15:00' : undefined)));
+    out.duration = r.duration != null ? Number(r.duration) : existing?.duration;
+    out.totalDuration = r.totalDuration != null ? Number(r.totalDuration) : (r.duration != null ? Number(r.duration) : existing?.totalDuration);
+    out.title = r.title ?? existing?.title ?? 'Nový záznam';
+    out.description = r.description ?? existing?.description ?? '';
+    out.internalNotes = r.internalNotes ?? existing?.internalNotes ?? '';
+    out.subTasks = Array.isArray(r.subTasks) ? r.subTasks : existing?.subTasks ?? [];
+    out.progress = r.progress != null ? clampProgress(r.progress) : existing?.progress;
+    out.status = action === 'complete' ? 'completed' : (action === 'delete' ? 'cancelled' : (existing?.status ?? 'pending'));
+
+    return { value: out as Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }, last_error: errors.length ? errors.join('; ') : undefined };
 }
 
- 
-export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: GoogleAuthStatus) => {
-    try {
-        if (updateId) {
-            const existing = await db.tasks.get(updateId);
-            if (!existing) return null;
-
-            const finalType = result.type ? normalizeType(String(result.type)) : existing.type;
-
-            if (finalType === 'task' || existing.type === 'task') {
-                if (result.deadline && !result.date) result.date = result.deadline;
-                if (result.date && !result.deadline) result.deadline = result.date;
-            } else {
-                if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
                     result.deadline = result.date;
                 } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
                     result.date = result.deadline;
