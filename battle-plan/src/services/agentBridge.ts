@@ -56,6 +56,12 @@ class AgentBridge {
   async init(options: { createFolder?: boolean } = {}): Promise<void> {
     if (this.isInitialized) return;
     this.isInitialized = await this.drive.init({ createFolder: options.createFolder ?? true });
+    // Hydrate the processedIds fast-path cache from the durable Dexie mirror so
+    // a reload survives a prior session that already applied some writes.
+    // (The inbox file's applied_at is the primary filter; this cache avoids
+    // an extra db.agentInbox read per id in fetchPendingWrites.)
+    const applied = await db.agentInbox.where('applied_at').above(0).primaryKeys();
+    for (const id of applied) this.processedIds.add(String(id));
   }
 
   async fetchPendingWrites(): Promise<AgentWrite[]> {
@@ -104,19 +110,11 @@ class AgentBridge {
   private async applyTaskAction(
     write: AgentWrite
   ): Promise<ApplyWriteResult> {
-    if (
-      write.action !== 'create_task' && write.action !== 'update_task' &&
-      write.action !== 'delete_task' && write.action !== 'complete_task'
-    ) {
-      return { success: false, last_error: 'not a task action' };
-    }
     const data = (write.task_data ?? {}) as Partial<Task> & { id?: number };
-
     if (write.action === 'create_task') {
       const norm = normalizeEntity(data, 'create', undefined);
       const newId = await db.tasks.add({
         ...norm.value,
-        status: norm.value.status ?? 'pending',
         source: 'agent',
         agent_write_id: write.id,
         updatedAt: Date.now(),
@@ -350,8 +348,7 @@ class AgentBridge {
   }
 
   // Mirror the inbox into db.agentInbox so the diagnostics surface can read
-  // pending writes via useLiveQuery. U5. Idempotent: re-reading the same id
-  // is a no-op. Returns the rows that were upserted.
+  // pending writes via useLiveQuery. U5. Idempotent on re-read.
   async mirrorInbox(writes: AgentWrite[]): Promise<void> {
     const now = Date.now();
     for (const w of writes) {
@@ -370,11 +367,17 @@ class AgentBridge {
     }
   }
 
+  // Record forces TypeScript to flag a missing entry when a new action is
+  // added to the union (compile-time coverage instead of runtime fallback).
+  private static readonly ENTITY_BY_ACTION: Record<AgentWriteAction, 'task' | 'worklog' | 'project' | 'settings'> = {
+    create_task: 'task', update_task: 'task', delete_task: 'task', complete_task: 'task',
+    create_worklog: 'worklog', update_worklog: 'worklog', delete_worklog: 'worklog',
+    create_project: 'project', update_project: 'project', delete_project: 'project',
+    create_settings: 'settings', update_settings: 'settings', delete_settings: 'settings',
+  };
+
   private inferEntityType(action: AgentWriteAction): 'task' | 'worklog' | 'project' | 'settings' {
-    if (action.endsWith('_task') || action === 'complete_task') return 'task';
-    if (action.endsWith('_worklog')) return 'worklog';
-    if (action.endsWith('_project')) return 'project';
-    return 'settings';
+    return AgentBridge.ENTITY_BY_ACTION[action];
   }
 
   // Mark a single inbox row as applied (or failed). U5. Called by useAgentBridgePolling

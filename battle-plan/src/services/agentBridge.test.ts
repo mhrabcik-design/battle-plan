@@ -163,6 +163,20 @@ test('U6: agentBridge.init({ createFolder: false }) is supported for tests', asy
     assert.deepEqual(received, { createFolder: false });
 });
 
+test('U6: agentBridge.init() hydrates processedIds from db.agentInbox.applied_at', async () => {
+    clearStore();
+    await db.agentInbox.put({ id: 'h1', action: 'create_task', entity_type: 'task', payload: {}, received_at: 1, applied_at: 2 });
+    await db.agentInbox.put({ id: 'h2', action: 'create_task', entity_type: 'task', payload: {}, received_at: 3, applied_at: 0 });
+    (agentBridge as unknown as { drive: { init: () => Promise<boolean> }; isInitialized: boolean }).drive = {
+        init: async () => true,
+    };
+    (agentBridge as unknown as { isInitialized: boolean }).isInitialized = false;
+    await agentBridge.init();
+    const cache = (agentBridge as unknown as { processedIds: Set<string> }).processedIds;
+    assert.ok(cache.has('h1'), 'applied row should be hydrated into processedIds');
+    assert.equal(cache.has('h2'), false, 'un-applied row (applied_at === 0) should NOT be hydrated');
+});
+
 test('U3: create_task stamps source=agent and agent_write_id on the row', async () => {
     seedSignedInStorage();
     setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
