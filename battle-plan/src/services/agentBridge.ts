@@ -180,7 +180,7 @@ class AgentBridge {
     // Calendar parity: clean up the linked Calendar event for meetings.
     const linked = existing as Task & { googleEventId?: string };
     if (linked.googleEventId) {
-      await googleService.deleteFromCalendar(linked.googleId);
+      await googleService.deleteFromCalendar(linked.googleEventId);
     }
     return { success: true };
   }
@@ -390,7 +390,7 @@ class AgentBridge {
   }
 
   async clearAppliedInbox(): Promise<void> {
-    await db.agentInbox.where('applied_at').notEqual(0 as unknown as null).delete();
+    await db.agentInbox.where('applied_at').above(0).delete();
   }
 
   get initialized(): boolean { return this.isInitialized; }

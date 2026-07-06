@@ -1,5 +1,5 @@
 
-import { db, type Task } from '../db.ts';
+import { db, type SubTask, type Task } from '../db.ts';
 import { googleService } from './googleService.ts';
 import type { GoogleAuthStatus } from '../types.ts';
 import { hasUsableAuth } from '../types.ts';
@@ -141,7 +141,7 @@ interface AiResult {
     duration?: unknown;
     totalDuration?: unknown;
     isAllDay?: unknown;
-    subTasks?: unknown[];
+    subTasks?: SubTask[];
     progress?: unknown;
 }
 
@@ -227,51 +227,48 @@ export function normalizeEntity(
     return { value: out as Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }, last_error: errors.length ? errors.join('; ') : undefined };
 }
 
+// applySemanticResult: thin wrapper around normalizeEntity. The voice path
+// kept here is unchanged in behavior from the pre-U2 inline implementation;
+// the data-shaping is delegated to normalizeEntity so both the voice path
+// and the agent path produce the same Task shape.
 export const applySemanticResult = async (result: unknown, updateId: number | null, googleAuth: GoogleAuthStatus) => {
     try {
         if (updateId) {
             const existing = await db.tasks.get(updateId);
             if (!existing) return null;
 
-            const obj = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
-            const finalType = obj.type ? normalizeType(String(obj.type)) : existing.type;
-
-            if (finalType === 'task' || existing.type === 'task') {
-                if (obj.deadline && !obj.date) obj.date = obj.deadline;
-                if (obj.date && !obj.deadline) obj.deadline = obj.date;
-            } else {
-                if (obj.date && !obj.deadline && (!existing.deadline || existing.date === existing.deadline)) {
-                    obj.deadline = obj.date;
-                } else if (obj.deadline && !obj.date && (!existing.date || existing.date === existing.deadline)) {
-                    obj.date = obj.deadline;
-                }
-            }
-
-            const updatedTask = {
-                title: obj.title ?? existing.title,
-                description: obj.description ?? existing.description,
-                internalNotes: obj.internalNotes ?? existing.internalNotes,
-                type: finalType,
-                urgency: obj.urgency != null ? clampUrgency(obj.urgency) : existing.urgency,
-                date: obj.date ?? existing.date,
-                deadline: obj.deadline ?? existing.deadline,
-                startTime: (obj.isAllDay === true) ? undefined : (obj.startTime ?? existing.startTime),
-                duration: obj.duration != null ? Number(obj.duration) : existing.duration,
-                totalDuration: obj.totalDuration != null ? Number(obj.totalDuration) : (obj.duration != null ? Number(obj.duration) : existing.totalDuration),
-                isAllDay: obj.isAllDay != null ? clampIsAllDay(obj.isAllDay) : existing.isAllDay,
-                subTasks: Array.isArray(obj.subTasks) ? obj.subTasks : existing.subTasks,
-                progress: obj.progress != null ? clampProgress(obj.progress) : existing.progress,
+            const norm = normalizeEntity(result, 'update', existing);
+            const normValue = norm.value as Partial<Task>;
+            const updated: Task = {
+                id: existing.id,
+                title: normValue.title ?? existing.title,
+                description: normValue.description ?? existing.description,
+                internalNotes: normValue.internalNotes ?? existing.internalNotes,
+                type: normValue.type ?? existing.type,
+                urgency: normValue.urgency ?? existing.urgency,
+                status: normValue.status ?? existing.status,
+                date: normValue.date ?? existing.date,
+                deadline: normValue.deadline ?? existing.deadline,
+                startTime: normValue.startTime ?? existing.startTime,
+                duration: normValue.duration ?? existing.duration,
+                totalDuration: normValue.totalDuration ?? existing.totalDuration,
+                isAllDay: normValue.isAllDay ?? existing.isAllDay,
+                subTasks: existing.subTasks ?? [],
+                progress: normValue.progress ?? existing.progress,
+                googleEventId: existing.googleEventId,
+                source: existing.source,
+                agent_write_id: existing.agent_write_id,
+                isDeleted: existing.isDeleted,
+                createdAt: existing.createdAt,
                 updatedAt: Date.now(),
             };
-            await db.tasks.update(updateId, updatedTask);
-            return { updatedId: updateId, result: updatedTask };
+            await db.tasks.update(updateId, updated as Partial<Task>);
+            return { updatedId: updateId, result: updated };
         } else {
-            const obj = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
-            const finalType = normalizeType(String(obj.type || 'thought'));
+            const norm = normalizeEntity(result, 'create', undefined);
+            const finalType = (norm.value.type ?? 'thought') as Task['type'];
             const defaultDuration = finalType === 'meeting' ? 60 : 30;
-
-            const sanitized = sanitizeResultFields(obj as AiResult, finalType, defaultDuration);
-
+            const sanitized = sanitizeResultFields(norm.value as unknown as AiResult, finalType, defaultDuration);
             const newTaskId = await db.tasks.add({
                 ...sanitized,
                 status: 'pending',
