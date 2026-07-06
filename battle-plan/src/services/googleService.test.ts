@@ -640,12 +640,19 @@ test('signIn scope set includes userinfo and all Google API scopes needed by the
     assert.ok(scopes.includes('https://www.googleapis.com/auth/tasks'), 'scope must include Google Tasks access');
 });
 
-test('handleTokenResponse rejects a token response that omits required scopes instead of entering SIGNED_IN', () => {
+test('handleTokenResponse accepts core scopes and disables Google Tasks when the token omits Tasks scope', async () => {
     clearStore();
     localStorage.setItem('google_access_token', 'old-token');
     localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
     localStorage.setItem('google_user_email', 'user@example.com');
-    installGapiMock({});
+
+    let tasklistsListCalls = 0;
+    installGapiMock({
+        tasklistsList: async () => {
+            tasklistsListCalls++;
+            return { result: { items: [{ id: 'list-1' }] } };
+        },
+    });
     installGisMock({});
 
     const svc = freshService();
@@ -656,9 +663,11 @@ test('handleTokenResponse rejects a token response that omits required scopes in
         scope: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive',
     });
 
-    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', 'token missing the tasks scope must not be accepted as SIGNED_IN');
-    assert.equal(svc.getAuthStatus().accessToken, null, 'missing-scope token must not become the active access token');
-    assert.equal(localStorage.getItem('google_access_token'), 'old-token', 'missing-scope token must not overwrite the stored token');
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN', 'token with core scopes must keep Drive auth active');
+    assert.equal(svc.getAuthStatus().accessToken, 'token-without-tasks-scope', 'core-scoped token becomes the active Drive token');
+    assert.equal(localStorage.getItem('google_access_token'), 'token-without-tasks-scope', 'core-scoped token must persist');
+    assert.deepEqual(await svc.getTaskLists(), [], 'missing optional Tasks scope must skip Google Tasks calls');
+    assert.equal(tasklistsListCalls, 0, 'Google Tasks API must not be called when the token lacks Tasks scope');
 });
 
 test('U3: integration — successful first-sign-in token response populates google_access_token, google_token_expires_at, and google_user_email in localStorage', async () => {

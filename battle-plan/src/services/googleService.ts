@@ -60,17 +60,27 @@ const CLIENT_ID = (import.meta as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).
 // instead of drive.file so BP can read agent-suggestions.json written by
 // external agents (e.g. Anu bp_suggestions.py). Re-authorization required
 // after this scope set changes.
-const SCOPES = 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks';
-const REQUIRED_SCOPE_SET = SCOPES.split(/\s+/).filter(Boolean);
+const GOOGLE_TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
+const CORE_SCOPES = 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive';
+const SCOPES = `${CORE_SCOPES} ${GOOGLE_TASKS_SCOPE}`;
+const CORE_SCOPE_SET = CORE_SCOPES.split(/\s+/).filter(Boolean);
 
-function tokenHasRequiredScopes(response: TokenResponse): boolean {
-    const [firstScope, ...restScopes] = REQUIRED_SCOPE_SET;
+function tokenHasScopes(response: TokenResponse, scopes: string[]): boolean | null {
+    const [firstScope, ...restScopes] = scopes;
     if (firstScope && window.google?.accounts?.oauth2?.hasGrantedAllScopes) {
         return window.google.accounts.oauth2.hasGrantedAllScopes(response, firstScope, ...restScopes);
     }
-    if (!response.scope) return true;
+    if (!response.scope) return null;
     const granted = new Set(response.scope.split(/\s+/).filter(Boolean));
-    return REQUIRED_SCOPE_SET.every(scope => granted.has(scope));
+    return scopes.every(scope => granted.has(scope));
+}
+
+function tokenHasCoreScopes(response: TokenResponse): boolean {
+    return tokenHasScopes(response, CORE_SCOPE_SET) !== false;
+}
+
+function tokenHasGoogleTasksScope(response: TokenResponse): boolean {
+    return tokenHasScopes(response, [GOOGLE_TASKS_SCOPE]) === true;
 }
 
 function isUnauthenticatedError(e: unknown): boolean {
@@ -95,6 +105,7 @@ class GoogleService {
     private refreshInFlight: Promise<boolean> | null = null;
     private lastRefreshFailedAt: number | null = null;
     private signInInFlight: Promise<void> | null = null;
+    private googleTasksScopeAvailable = true;
     private readonly refreshTimeoutMs: number;
 
     constructor(options: { refreshTimeoutMs?: number } = {}) {
@@ -212,11 +223,12 @@ class GoogleService {
                         done(false);
                         return;
                     }
-                    if (!tokenHasRequiredScopes(response)) {
-                        console.warn('Silent refresh returned a token missing required scopes', { grantedScopes: response.scope, requiredScopes: SCOPES });
+                    if (!tokenHasCoreScopes(response)) {
+                        console.warn('Silent refresh returned a token missing core scopes', { grantedScopes: response.scope, requiredScopes: CORE_SCOPES });
                         done(false);
                         return;
                     }
+                    this.googleTasksScopeAvailable = tokenHasGoogleTasksScope(response);
                     this.accessToken = response.access_token;
                     const expiresIn = response.expires_in || 3600;
                     this.expiresAt = Date.now() + (expiresIn * 1000);
@@ -414,11 +426,12 @@ class GoogleService {
             // (U2 fix).
             return;
         }
-        if (!tokenHasRequiredScopes(response)) {
-            console.warn('Consent returned a token missing required scopes', { grantedScopes: response.scope, requiredScopes: SCOPES });
+        if (!tokenHasCoreScopes(response)) {
+            console.warn('Consent returned a token missing core scopes', { grantedScopes: response.scope, requiredScopes: CORE_SCOPES });
             this.markAuthUnavailable();
             return;
         }
+        this.googleTasksScopeAvailable = tokenHasGoogleTasksScope(response);
         this.accessToken = response.access_token;
         const expiresIn = response.expires_in || 3600;
         this.expiresAt = Date.now() + (expiresIn * 1000);
@@ -461,6 +474,7 @@ class GoogleService {
         this.expiresAt = 0;
         this.userEmail = null;
         this.lastRefreshFailedAt = null;
+        this.googleTasksScopeAvailable = false;
         localStorage.removeItem('google_access_token');
         localStorage.removeItem('google_token_expires_at');
         localStorage.removeItem('google_user_email');
@@ -469,6 +483,7 @@ class GoogleService {
 
     async getTaskLists() {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return [];
+        if (!this.googleTasksScopeAvailable) return [];
         try {
             const response = await window.gapi.client.tasks.tasklists.list();
             return response.result.items || [];
@@ -478,6 +493,7 @@ class GoogleService {
                 return [];
             }
             if (isInsufficientScopeError(e)) {
+                this.googleTasksScopeAvailable = false;
                 console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return [];
             }
@@ -488,6 +504,7 @@ class GoogleService {
 
     async getTasks(taskListId: string = '@default') {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return [];
+        if (!this.googleTasksScopeAvailable) return [];
         try {
             const response = await window.gapi.client.tasks.tasks.list({
                 tasklist: taskListId,
@@ -501,6 +518,7 @@ class GoogleService {
                 return [];
             }
             if (isInsufficientScopeError(e)) {
+                this.googleTasksScopeAvailable = false;
                 console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return [];
             }
@@ -511,8 +529,9 @@ class GoogleService {
 
     async createGoogleTask(title: string, notes: string = '', taskListId: string = '@default', dueDate?: string) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
+        if (!this.googleTasksScopeAvailable) return null;
         try {
-            const task: any = { title, notes };
+            const task: Record<string, unknown> = { title, notes };
             if (dueDate) {
                 const d = new Date(dueDate);
                 if (!isNaN(d.getTime())) {
@@ -530,6 +549,7 @@ class GoogleService {
                 return null;
             }
             if (isInsufficientScopeError(e)) {
+                this.googleTasksScopeAvailable = false;
                 console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return null;
             }
@@ -538,8 +558,9 @@ class GoogleService {
         }
     }
 
-    async updateGoogleTask(taskId: string, updates: any, taskListId: string = '@default') {
+    async updateGoogleTask(taskId: string, updates: Record<string, unknown>, taskListId: string = '@default') {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
+        if (!this.googleTasksScopeAvailable) return null;
         try {
             const response = await window.gapi.client.tasks.tasks.patch({
                 tasklist: taskListId,
@@ -553,6 +574,7 @@ class GoogleService {
                 return null;
             }
             if (isInsufficientScopeError(e)) {
+                this.googleTasksScopeAvailable = false;
                 console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return null;
             }
@@ -563,6 +585,7 @@ class GoogleService {
 
     async deleteGoogleTask(taskId: string, taskListId: string = '@default') {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
+        if (!this.googleTasksScopeAvailable) return;
         try {
             await window.gapi.client.tasks.tasks.delete({
                 tasklist: taskListId,
@@ -574,6 +597,7 @@ class GoogleService {
                 return;
             }
             if (isInsufficientScopeError(e)) {
+                this.googleTasksScopeAvailable = false;
                 console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return;
             }
