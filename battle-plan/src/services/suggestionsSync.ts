@@ -166,6 +166,31 @@ class SuggestionsSync {
     }
   }
 
+  async deleteSuggestion(suggestionId: string): Promise<{ success: boolean }> {
+    if (!this.isInitialized || !this.suggestionsFileId) {
+      return { success: false };
+    }
+    try {
+      const [loadedSuggestions, loadedReplies] = await Promise.all([
+        this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME),
+        this.drive.readJsonFile<RepliesFile>(REPLIES_FILENAME),
+      ]);
+      if (!loadedSuggestions) return { success: false };
+      this.suggestionsFileId = loadedSuggestions.fileId;
+      const nextSuggestions = (loadedSuggestions.data.suggestions ?? []).filter((s) => s.id !== suggestionId);
+      await this.writeSuggestions({ ...loadedSuggestions.data, suggestions: nextSuggestions, last_updated: Date.now() });
+      if (loadedReplies) {
+        this.repliesFileId = loadedReplies.fileId;
+        const nextReplies = (loadedReplies.data.replies ?? []).filter((r) => r.suggestion_id !== suggestionId);
+        await this.writeReplies({ ...loadedReplies.data, replies: nextReplies, last_updated: Date.now() });
+      }
+      return { success: true };
+    } catch (e) {
+      console.error('SuggestionsSync: deleteSuggestion failed', e);
+      return { success: false };
+    }
+  }
+
   async addReply(reply: Omit<AgentSuggestionReply, 'id' | 'created_at'>): Promise<{ success: boolean; id?: string }> {
     if (!this.isInitialized || !this.repliesFileId) {
       return { success: false };
@@ -198,9 +223,7 @@ class SuggestionsSync {
   }
 
   async uploadVoiceReply(suggestionId: string, blob: Blob): Promise<{ success: boolean; fileId?: string }> {
-    if (!this.isInitialized) {
-      return { success: false };
-    }
+    if (!this.isInitialized) return { success: false };
 
     try {
       const safeName = `voice-reply-${suggestionId}-${Date.now()}.webm`;
@@ -224,6 +247,15 @@ class SuggestionsSync {
     if (!saved) return { success: false };
     if (saved.fileId) {
       this.suggestionsFileId = saved.fileId;
+    }
+    return { success: true };
+  }
+
+  private async writeReplies(data: RepliesFile): Promise<{ success: boolean }> {
+    const saved = await this.drive.writeJsonFile(REPLIES_FILENAME, data, this.repliesFileId);
+    if (!saved) return { success: false };
+    if (saved.fileId) {
+      this.repliesFileId = saved.fileId;
     }
     return { success: true };
   }
