@@ -30,14 +30,6 @@ export interface Task {
     createdAt: number;
 }
 
-export interface Recording {
-    id?: number;
-    blob: Blob;
-    transcript?: string;
-    analyzed: boolean;
-    createdAt: number;
-}
-
 export interface Setting {
     id: string;
     value: string;
@@ -83,12 +75,25 @@ export interface WorkLog {
     createdAt: number;
 }
 
+// AgentInbox row: mirror of the inbox file in Dexie so the diagnostics
+// surface can read pending writes via useLiveQuery without a Drive round-trip.
+export interface AgentInboxRow {
+    id: string;             // AgentWrite.id
+    action: string;         // AgentWriteAction
+    entity_type: 'task' | 'worklog' | 'project' | 'settings';
+    entity_id?: number;      // Dexie row id once applied
+    payload: unknown;        // normalized payload that was applied (or attempted)
+    received_at: number;     // timestamp when bridge first read the row from the inbox file
+    applied_at?: number;     // timestamp when applyWrite succeeded
+    last_error?: string;     // populated on failure so the next poll can retry
+}
+
 export class BattlePlanDB extends Dexie {
     tasks!: Table<Task>;
-    recordings!: Table<Recording>;
     settings!: Table<Setting>;
     workLogs!: Table<WorkLog>;
     projects!: Table<Project>;
+    agentInbox!: Table<AgentInboxRow>;
 
     constructor() {
         super('BattlePlanDB');
@@ -128,9 +133,18 @@ export class BattlePlanDB extends Dexie {
             workLogs: '++id, date, projectId, hours, createdAt',
             projects: '++id, name, isActive, createdAt'
         });
+        // v9: drop the unused recordings table; add the agentInbox mirror so
+        // the diagnostics surface can read pending agent writes via
+        // useLiveQuery. The other tables are unchanged from v8; existing rows
+        // carry source undefined (optional) so no backfill is required.
+        this.version(9).stores({
+            tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+            settings: 'id',
+            workLogs: '++id, date, projectId, hours, createdAt',
+            projects: '++id, name, isActive, createdAt',
+            agentInbox: 'id, action, entity_type, applied_at, received_at'
+        });
     }
 }
-
-
 
 export const db = new BattlePlanDB();
