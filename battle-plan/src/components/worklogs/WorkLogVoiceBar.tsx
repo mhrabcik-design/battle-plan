@@ -178,7 +178,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
         ? 'AI zpracovává diktát…'
         : isRecording
         ? 'Zastavit nahrávání a parsovat diktát'
-        : 'Nadiktovat pracovní činnost';
+        : 'Nadiktovat pracovní činnost — Anu vytvoří worklog podle projektu, lidí, hodin a popisu.';
 
     return (
         <>

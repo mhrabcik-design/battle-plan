@@ -21,6 +21,10 @@ import { syncIconFor } from './components/syncIcon';
 import { TaskCard } from './components/TaskCard';
 import { FocusEditor } from './components/FocusEditor';
 import { SettingsModal } from './components/SettingsModal';
+import { OnboardingCard } from './components/OnboardingCard';
+import { AnuSelfDescription } from './components/AnuSelfDescription';
+import { SlashCommandPalette } from './components/SlashCommandPalette';
+import { dismissOnboarding, isOnboardingDismissed } from './services/onboarding';
 import { WeeklyCalendar } from './components/WeeklyCalendar';
 import { SuggestionsPage } from './pages/SuggestionsPage';
 import { WorkLogsPage } from './pages/WorkLogsPage';
@@ -78,6 +82,7 @@ function App() {
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
   const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLogBatch | null>(null);
   const [workLogVoiceController, setWorkLogVoiceController] = useState<WorkLogVoiceController | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const { syncHealth, updateSyncHealth } = useSyncDiagnostics();
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
@@ -86,6 +91,22 @@ function App() {
     const time = new Date().toLocaleTimeString('cs-CZ');
     setDebugLogs(prev => [{ t: time, m: message, type }, ...prev].slice(0, 50));
     console.log(`[sync-debug] ${Date.now()} [addLog] [${type.toUpperCase()}] ${message}`);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (googleAuth.state !== 'SIGNED_IN' && googleAuth.state !== 'REFRESH_PENDING') return;
+    isOnboardingDismissed().then((dismissed) => {
+      if (!cancelled) setShowOnboarding(!dismissed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [googleAuth.state]);
+
+  const handleDismissOnboarding = useCallback(async () => {
+    await dismissOnboarding();
+    setShowOnboarding(false);
   }, []);
 
   useEffect(() => {
@@ -634,6 +655,8 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
             )}
           </div>
 
+          {hasUsableAuth && showOnboarding && <OnboardingCard onDismiss={handleDismissOnboarding} />}
+
           {viewMode === 'suggestions' && (
             <SuggestionsPage
               googleAuth={googleAuth}
@@ -672,6 +695,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                   Smazat
                 </button>
               </div>
+              <AnuSelfDescription />
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
                   <h3 className="text-xs font-black text-slate-500 uppercase mb-3">Build a prostředí</h3>
@@ -872,7 +896,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                       });
                     }}
                     disabled={floatingMicDisabled}
-                    title={isWorkLogVoiceMode ? 'Nadiktovat pracovní činnost' : 'Spustit diktování'}
+                    title={isWorkLogVoiceMode ? 'Nadiktovat pracovní činnost — Anu vytvoří worklog podle projektu, lidí, hodin a popisu.' : 'Spustit diktování — Anu vytvoří task / worklog / nápad podle toho, co řekneš.'}
                     className={`relative z-10 w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${floatingMicIsRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : floatingMicIsProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
                   >
                     {floatingMicIsProcessing ? <div className="w-5 h-5 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (floatingMicIsRecording ? <MicOff className="w-5 h-5 md:w-8 md:h-8 text-white" /> : <Mic className="w-5 h-5 md:w-8 md:h-8 text-white" />)}
@@ -881,6 +905,12 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
               </div>
             )}
           </AnimatePresence>
+          <SlashCommandPalette
+            onOpenVoice={() => setViewMode('battle')}
+            onOpenWorklogs={() => setViewMode('worklogs')}
+            onOpenSuggestions={() => setViewMode('suggestions')}
+            onOpenDiagnostics={() => setViewMode('debug')}
+          />
         </div>
       </main>
     </div>
