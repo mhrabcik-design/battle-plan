@@ -1,8 +1,8 @@
-import { googleService } from './googleService';
-import { normalizeEntity } from './semanticEngine';
-import type { AgentInboxRow, Project, Setting, Task, WorkLog } from '../db';
-import { db } from '../db';
-import { DriveJsonStore } from './driveJsonStore';
+import { googleService } from './googleService.ts';
+import { normalizeEntity } from './semanticEngine.ts';
+import type { AgentInboxRow, Project, Setting, Task, WorkLog } from '../db.ts';
+import { db } from '../db.ts';
+import { DriveJsonStore } from './driveJsonStore.ts';
 
 export type AgentWriteAction =
   | 'create_task'
