@@ -376,7 +376,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           Pro zobrazení návrhů se přihlas ke Googlu
         </p>
         <p className="text-slate-600 text-xs">
-          Suggestions panel čte z Anu-BattlePlan složky na Drive.
+          Suggestions panel čte z Anu-BattlePlan složky na Drive. Návrhy můžeš přijmout, zamítnout, odložit nebo smazat.
         </p>
       </div>
     );
@@ -392,6 +392,9 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           </h2>
           <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">
             {counts.open} nových · {counts.accepted + counts.converted} přijatých · {counts.deferred} odložených · {counts.rejected} zamítnutých
+          </p>
+          <p className="text-[11px] text-slate-500 mt-2 max-w-2xl">
+            Anu sleduje Drive návrhy: přijmi je jako task, zamítni, odlož na později nebo smaž, když už nejsou relevantní.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
