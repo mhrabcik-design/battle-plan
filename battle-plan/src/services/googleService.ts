@@ -36,7 +36,8 @@ declare global {
         google: {
             accounts: {
                 oauth2: {
-                    initTokenClient: (config: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: (err: unknown) => void; prompt?: string; include_granted_scopes?: string }) => TokenClient;
+                    initTokenClient: (config: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: (err: unknown) => void; prompt?: string; include_granted_scopes?: boolean }) => TokenClient;
+                    hasGrantedAllScopes?: (tokenResponse: TokenResponse, firstScope: string, ...restScopes: string[]) => boolean;
                 };
             };
         };
@@ -44,7 +45,7 @@ declare global {
 }
 
 interface TokenClient {
-    requestAccessToken(options?: { prompt?: string; login_hint?: string | null; scope?: string; include_granted_scopes?: string }): void;
+    requestAccessToken(options?: { prompt?: string; login_hint?: string | null; scope?: string; include_granted_scopes?: boolean }): void;
 }
 
 interface TokenResponse {
@@ -63,22 +64,26 @@ const SCOPES = 'openid email profile https://www.googleapis.com/auth/calendar.ev
 const REQUIRED_SCOPE_SET = SCOPES.split(/\s+/).filter(Boolean);
 
 function tokenHasRequiredScopes(response: TokenResponse): boolean {
+    const [firstScope, ...restScopes] = REQUIRED_SCOPE_SET;
+    if (firstScope && window.google?.accounts?.oauth2?.hasGrantedAllScopes) {
+        return window.google.accounts.oauth2.hasGrantedAllScopes(response, firstScope, ...restScopes);
+    }
     if (!response.scope) return true;
     const granted = new Set(response.scope.split(/\s+/).filter(Boolean));
     return REQUIRED_SCOPE_SET.every(scope => granted.has(scope));
 }
-// R9: 403 with PERMISSION_DENIED means the stored token was issued under a
-// different (usually older) scope set; treat it like 401 for state-machine
-// purposes so the user is guided to re-grant via the consent flow on their
-// next call attempt. The existing 401 / UNAUTHENTICATED detection is kept
-// in the same helper so all callers share one definition.
-function isAuthBreakingError(e: unknown): boolean {
+
+function isUnauthenticatedError(e: unknown): boolean {
     const err = e as { status?: number; result?: { error?: { status?: string; code?: number; message?: string } }; code?: number; message?: string };
-    if (err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED') return true;
+    return err?.status === 401 || err?.result?.error?.status === 'UNAUTHENTICATED';
+}
+
+function isInsufficientScopeError(e: unknown): boolean {
+    const err = e as { status?: number; result?: { error?: { status?: string; code?: number; message?: string } }; code?: number; message?: string };
     if (err?.status === 403) return true;
     if (err?.result?.error?.status === 'PERMISSION_DENIED') return true;
     if (err?.result?.error?.code === 403) return true;
-    return false;
+    return /insufficient|scope|permission_denied/i.test(err?.result?.error?.message ?? err?.message ?? '');
 }
 
 class GoogleService {
@@ -379,7 +384,7 @@ class GoogleService {
                 client_id: CLIENT_ID,
                 scope: SCOPES,
                 prompt: 'consent',
-                include_granted_scopes: 'true',
+                include_granted_scopes: false,
                 callback: this.handleTokenResponse,
                 error_callback: (err: unknown) => {
                     console.log('[sync-debug]', Date.now(), 'signIn GIS error_callback', err);
@@ -390,7 +395,7 @@ class GoogleService {
             consentClient.requestAccessToken({
                 prompt: 'consent',
                 scope: SCOPES,
-                include_granted_scopes: 'true',
+                include_granted_scopes: false,
             });
         })().finally(() => {
             this.signInInFlight = null;
@@ -468,8 +473,12 @@ class GoogleService {
             const response = await window.gapi.client.tasks.tasklists.list();
             return response.result.items || [];
         } catch (e: unknown) {
-            if (isAuthBreakingError(e)) {
+            if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
+                return [];
+            }
+            if (isInsufficientScopeError(e)) {
+                console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return [];
             }
             console.error('Error fetching task lists', e);
@@ -487,8 +496,12 @@ class GoogleService {
             });
             return response.result.items || [];
         } catch (e: unknown) {
-            if (isAuthBreakingError(e)) {
+            if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
+                return [];
+            }
+            if (isInsufficientScopeError(e)) {
+                console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return [];
             }
             console.error('Error fetching tasks', e);
@@ -512,8 +525,12 @@ class GoogleService {
             });
             return response.result;
         } catch (e: unknown) {
-            if (isAuthBreakingError(e)) {
+            if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
+                return null;
+            }
+            if (isInsufficientScopeError(e)) {
+                console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return null;
             }
             console.error('Error creating Google Task', e);
@@ -531,8 +548,12 @@ class GoogleService {
             });
             return response.result;
         } catch (e: unknown) {
-            if (isAuthBreakingError(e)) {
+            if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
+                return null;
+            }
+            if (isInsufficientScopeError(e)) {
+                console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return null;
             }
             console.error('Error updating Google Task', e);
@@ -548,8 +569,12 @@ class GoogleService {
                 task: taskId
             });
         } catch (e: unknown) {
-            if (isAuthBreakingError(e)) {
+            if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
+                return;
+            }
+            if (isInsufficientScopeError(e)) {
+                console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
                 return;
             }
             console.error('Error deleting Google Task', e);
@@ -625,7 +650,7 @@ class GoogleService {
         } catch (e: unknown) {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
-            if (isAuthBreakingError(e)) {
+            if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
                 return;
             }
@@ -645,7 +670,7 @@ class GoogleService {
         } catch (e: unknown) {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
-            if (isAuthBreakingError(e)) {
+            if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
                 return;
             }

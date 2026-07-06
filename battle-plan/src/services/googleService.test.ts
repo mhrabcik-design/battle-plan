@@ -540,20 +540,20 @@ test('U3: first sign-in — no prior userEmail — signIn() creates a new initTo
     svc.signIn();
 
     assert.equal(initCallCount, 1, 'signIn() must create exactly one new TokenClient on first sign-in');
-    const cfg = capturedConfig as { prompt?: string; include_granted_scopes?: string; scope?: string; client_id?: string; callback?: unknown };
+    const cfg = capturedConfig as { prompt?: string; include_granted_scopes?: boolean; scope?: string; client_id?: string; callback?: unknown };
     assert.ok(cfg && typeof cfg === 'object', 'initTokenClient must receive a config object');
     assert.equal(cfg.prompt, 'consent', 'first-sign-in TokenClient config must include prompt=consent');
-    assert.equal(cfg.include_granted_scopes, 'true', 'first-sign-in TokenClient config must include include_granted_scopes=true');
+    assert.equal(cfg.include_granted_scopes, false, 'first-sign-in TokenClient config must request exactly the current scope set');
     assert.ok(typeof cfg.callback === 'function', 'first-sign-in TokenClient config must include a callback');
     assert.ok(typeof cfg.scope === 'string' && cfg.scope.length > 0, 'first-sign-in TokenClient config must include scope');
     assert.ok(typeof cfg.client_id === 'string', 'first-sign-in TokenClient config must include client_id');
 
     assert.equal(newClientRequestCount, 1, 'requestAccessToken must be invoked exactly once on the new client');
-    const reqOpts = newClientRequestOptions[0] as { prompt?: string; scope?: string; include_granted_scopes?: string; login_hint?: string | null } | undefined;
+    const reqOpts = newClientRequestOptions[0] as { prompt?: string; scope?: string; include_granted_scopes?: boolean; login_hint?: string | null } | undefined;
     assert.ok(reqOpts && typeof reqOpts === 'object', 'requestAccessToken must receive an options object');
     assert.equal(reqOpts.prompt, 'consent', 'first-sign-in must force prompt=consent on the request override');
     assert.equal(reqOpts.scope, cfg.scope, 'first-sign-in request override must repeat the full scope string');
-    assert.equal(reqOpts.include_granted_scopes, 'true', 'first-sign-in request override must preserve incremental authorization');
+    assert.equal(reqOpts.include_granted_scopes, false, 'first-sign-in request override must request exactly the current scope set');
 
     // Singleton client must NOT be used on first sign-in
     assert.deepEqual(singletonRequestOptions, [], 'singleton tokenClient must NOT be invoked on first sign-in');
@@ -563,13 +563,10 @@ test('signIn always uses a fresh consentClient (regardless of stored userEmail) 
     clearStore();
     // A userEmail is already in localStorage from a prior session. Even so,
     // signIn must create a fresh consentClient with prompt=consent and
-    // include_granted_scopes=true so the user is re-prompted to grant any
-    // scopes the app now requests. This is the fix for the 4.3.12 symptom
-    // where the user clicks "Sign in", the consent prompt appears, they
-    // grant access, and the UI snaps back to "Google Přihlášení" within
-    // a second because the silent tokenClient.requestAccessToken path
-    // returned a token with the old scope set and the next API call
-    // 403'd, flipping the state back to OFFLINE_AUTH.
+    // include_granted_scopes=false so GIS issues a token for exactly the
+    // current scope set. Passing prompt="" at request time suppresses
+    // returning-user consent and was the production cause of old-scope
+    // tokens followed by Tasks API 403.
     localStorage.setItem('google_access_token', 'existing-token');
     localStorage.setItem('google_token_expires_at', String(Date.now() + 60 * 60 * 1000));
     localStorage.setItem('google_user_email', 'user@example.com');
@@ -607,15 +604,15 @@ test('signIn always uses a fresh consentClient (regardless of stored userEmail) 
     assert.ok(initCallCount >= 1, 'signIn() must call initTokenClient at least once to create a fresh consentClient');
     assert.equal(consentRequestCount, 1, 'signIn() must call requestAccessToken on the fresh consentClient exactly once');
     assert.ok(capturedConsentConfig && typeof capturedConsentConfig === 'object', 'consentClient initTokenClient must receive a config object');
-    const cfg = capturedConsentConfig as { prompt?: string; include_granted_scopes?: string; scope?: string };
+    const cfg = capturedConsentConfig as { prompt?: string; include_granted_scopes?: boolean; scope?: string };
     assert.equal(cfg.prompt, 'consent', 'consentClient must request prompt=consent so the user is re-prompted for new scopes');
-    assert.equal(cfg.include_granted_scopes, 'true', 'consentClient must request include_granted_scopes=true so previously granted scopes are merged');
+    assert.equal(cfg.include_granted_scopes, false, 'consentClient must request exactly the current scope set');
     assert.ok(typeof cfg.scope === 'string' && cfg.scope.length > 0, 'consentClient must include the full SCOPES string');
-    const reqOpts = consentRequestOptions[0] as { prompt?: string; scope?: string; include_granted_scopes?: string } | undefined;
+    const reqOpts = consentRequestOptions[0] as { prompt?: string; scope?: string; include_granted_scopes?: boolean } | undefined;
     assert.ok(reqOpts && typeof reqOpts === 'object', 'consentClient requestAccessToken must receive an options object');
     assert.equal(reqOpts.prompt, 'consent', 'consentClient requestAccessToken must force prompt=consent; prompt="" suppresses returning-user consent and returns stale scopes');
     assert.equal(reqOpts.scope, cfg.scope, 'consentClient requestAccessToken must repeat the full scope string so the override cannot narrow scopes');
-    assert.equal(reqOpts.include_granted_scopes, 'true', 'consentClient requestAccessToken must preserve incremental authorization in the override');
+    assert.equal(reqOpts.include_granted_scopes, false, 'consentClient requestAccessToken must request exactly the current scope set');
 });
 
 test('signIn scope set includes userinfo and all Google API scopes needed by the app', () => {
@@ -700,10 +697,10 @@ test('U3: integration — successful first-sign-in token response populates goog
 
     // Assert the config is wired up for the first-sign-in flow
     svc.signIn();
-    const cfg = firstSignInConfig as { prompt?: string; include_granted_scopes?: string } | undefined;
+    const cfg = firstSignInConfig as { prompt?: string; include_granted_scopes?: boolean } | undefined;
     assert.ok(cfg && typeof cfg === 'object', 'first sign-in must invoke initTokenClient with a config');
     assert.equal(cfg.prompt, 'consent', 'first sign-in config must set prompt=consent');
-    assert.equal(cfg.include_granted_scopes, 'true', 'first sign-in config must set include_granted_scopes=true');
+    assert.equal(cfg.include_granted_scopes, false, 'first sign-in config must request exactly the current scope set');
 
     // Yield so the callback's setTimeout-less promise chain settles (none in this flow; just for symmetry)
     await Promise.resolve();
@@ -1043,11 +1040,10 @@ test('U5: signIn is single-flight on double-click (first-sign-in path)', () => {
     assert.equal(requestCalls, 1, 'double signIn must only invoke requestAccessToken once');
 });
 
-// R9: 403 / PERMISSION_DENIED (scope-change / insufficient authentication scopes)
-// must transition the auth state machine to OFFLINE_AUTH, mirroring 401. This
-// guards existing users whose stored token was issued under a different scope
-// set: the first API call after a scope change surfaces the offline-auth UI
-// and the next signIn() routes through the consent flow.
+// 403 / PERMISSION_DENIED (scope-change / insufficient authentication scopes)
+// must NOT transition the whole auth state machine to OFFLINE_AUTH. It means
+// one Google API integration is missing a scope; Drive auth can still be valid
+// and must not be nulled by a Tasks/Calendar-specific failure.
 function installGapiMockThrowing403(api: {
     tasklistsList?: () => Promise<unknown>;
     tasksList?: () => Promise<unknown>;
@@ -1087,7 +1083,7 @@ function stubSilentRefresh(svc: { trySilentRefresh: () => Promise<boolean> }): v
     svc.trySilentRefresh = async () => true;
 }
 
-test('R9: getTaskLists 403 with status:403 transitions state to OFFLINE_AUTH and returns []', async () => {
+test('R9: getTaskLists 403 with status:403 keeps Google auth active and returns []', async () => {
     clearStore();
     seedSignedInStorage();
     installGapiMockThrowing403({ errBody: { status: 403 } });
@@ -1097,11 +1093,11 @@ test('R9: getTaskLists 403 with status:403 transitions state to OFFLINE_AUTH and
     const result = await svc.getTaskLists();
 
     assert.deepEqual(result, [], 'getTaskLists must return [] on 403');
-    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', '403 must transition state to OFFLINE_AUTH');
-    assert.equal(svc.getAuthStatus().accessToken, null, 'OFFLINE_AUTH must clear in-memory accessToken');
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN', '403 insufficient scope must not transition global auth to OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().accessToken, 'fresh-token', '403 insufficient scope must not clear in-memory accessToken');
 });
 
-test('R9: getTasks result.error.status=PERMISSION_DENIED transitions state to OFFLINE_AUTH', async () => {
+test('R9: getTasks result.error.status=PERMISSION_DENIED keeps Google auth active', async () => {
     clearStore();
     seedSignedInStorage();
     installGapiMockThrowing403({
@@ -1113,10 +1109,10 @@ test('R9: getTasks result.error.status=PERMISSION_DENIED transitions state to OF
     const result = await svc.getTasks('@default');
 
     assert.deepEqual(result, [], 'getTasks must return [] on PERMISSION_DENIED');
-    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
 
-test('R9: createGoogleTask result.error.code=403 transitions state to OFFLINE_AUTH and returns null', async () => {
+test('R9: createGoogleTask result.error.code=403 keeps Google auth active and returns null', async () => {
     clearStore();
     seedSignedInStorage();
     installGapiMockThrowing403({
@@ -1128,10 +1124,10 @@ test('R9: createGoogleTask result.error.code=403 transitions state to OFFLINE_AU
     const result = await svc.createGoogleTask('Test');
 
     assert.equal(result, null, 'createGoogleTask must return null on 403');
-    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
 
-test('R9: updateGoogleTask 403 transitions state to OFFLINE_AUTH and returns null', async () => {
+test('R9: updateGoogleTask 403 keeps Google auth active and returns null', async () => {
     clearStore();
     seedSignedInStorage();
     installGapiMockThrowing403({ errBody: { status: 403 } });
@@ -1141,10 +1137,10 @@ test('R9: updateGoogleTask 403 transitions state to OFFLINE_AUTH and returns nul
     const result = await svc.updateGoogleTask('task-1', { title: 'x' });
 
     assert.equal(result, null, 'updateGoogleTask must return null on 403');
-    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
 
-test('R9: deleteGoogleTask PERMISSION_DENIED transitions state to OFFLINE_AUTH (void return)', async () => {
+test('R9: deleteGoogleTask PERMISSION_DENIED keeps Google auth active (void return)', async () => {
     clearStore();
     seedSignedInStorage();
     installGapiMockThrowing403({
@@ -1155,19 +1151,20 @@ test('R9: deleteGoogleTask PERMISSION_DENIED transitions state to OFFLINE_AUTH (
 
     await svc.deleteGoogleTask('task-1');
 
-    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
 
-test('R9: addToCalendar 403 transitions state to OFFLINE_AUTH (no thrown error)', async () => {
+test('R9: addToCalendar 403 surfaces the calendar error without clearing Google auth', async () => {
     clearStore();
     seedSignedInStorage();
     installGapiMockThrowing403({ errBody: { status: 403 } });
     const svc = freshService();
     stubSilentRefresh(svc);
 
-    // addToCalendar must NOT throw on 403; the user-facing failure is the
-    // OFFLINE_AUTH state transition plus the sync icon flip, not an Error.
-    await svc.addToCalendar({ title: 't', date: '2026-07-04' });
+    await assert.rejects(
+        () => svc.addToCalendar({ title: 't', date: '2026-07-04' }),
+        /Google Calendar Error/
+    );
 
-    assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
+    assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
