@@ -1,8 +1,8 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { db, type Task } from '../db';
-import { googleService } from './googleService';
-import type { GoogleAuthStatus } from '../types';
-import { hasUsableAuth } from '../types';
+
+import { db, type Task } from '../db.ts';
+import { googleService } from './googleService.ts';
+import type { GoogleAuthStatus } from '../types.ts';
+import { hasUsableAuth } from '../types.ts';
 
 export const getSystemPrompt = (dayName: string, today: string, now: string, contextInfo: string) => `
 Jsi "Bitevní Plán", elitní AI asistent pro management času a strategické myšlení. 
@@ -121,20 +121,28 @@ function clampProgress(val: unknown): number {
     return Math.min(100, Math.max(0, Math.round(n)));
 }
 
+// Stable identity for the normalized output. Optional `last_error` is set when
+// the input was coerced (e.g. unknown type → 'thought') so the agent path can
+// surface the coercion in `db.agentInbox.last_error`.
+export interface NormalizeResult<T> {
+  value: T;
+  last_error?: string;
+}
+
 interface AiResult {
     title?: string;
     description?: string;
     internalNotes?: string;
     type?: string;
-    urgency?: any;
+    urgency?: unknown;
     date?: string;
     deadline?: string;
     startTime?: string;
-    duration?: any;
-    totalDuration?: any;
-    isAllDay?: any;
-    subTasks?: any[];
-    progress?: any;
+    duration?: unknown;
+    totalDuration?: unknown;
+    isAllDay?: unknown;
+    subTasks?: unknown[];
+    progress?: unknown;
 }
 
 function sanitizeResultFields(result: AiResult, finalType: Task['type'], defaultDuration: number) {
@@ -146,7 +154,6 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
         type: finalType,
         urgency: clampUrgency(result.urgency),
         date: result.date || new Date().toISOString().split('T')[0],
-        // Při all-day: startTime prázdné (pokud AI neposkytl)
         startTime: isAllDay ? undefined : (result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined))),
         deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
         duration: Number(result.duration) || defaultDuration,
@@ -157,50 +164,113 @@ function sanitizeResultFields(result: AiResult, finalType: Task['type'], default
     };
 }
 
- 
-export const applySemanticResult = async (result: any, updateId: number | null, googleAuth: GoogleAuthStatus) => {
+// Normalize the AI / agent payload into a Task that satisfies the
+// applySemanticResult invariants. Shared between the voice path and the
+// agent path so both produce the same output for the same input. The
+// helper is Task-only at this unit; WorkLog / Project / Setting
+// normalization (R3a-R3c) lands in U4.
+export function normalizeEntity(
+    result: unknown,
+    action: 'create' | 'update' | 'complete' | 'delete',
+    existing?: Task
+): NormalizeResult<Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }> {
+    const obj = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    const errors: string[] = [];
+
+    // Type: normalize; coerce unknowns to 'thought' and surface as last_error.
+    const finalType = action === 'create'
+        ? normalizeType(String(obj.type || 'thought'))
+        : normalizeType(String(obj.type || existing?.type || 'thought'));
+    if (action === 'create' && !obj.type) errors.push('type coerced to thought (default)');
+    if (action !== 'create' && obj.type && !EXACT_TYPE_MAP[String(obj.type).toLowerCase().trim()] &&
+        !['task', 'meeting', 'thought'].includes(String(obj.type).toLowerCase().trim())) {
+        errors.push(`unknown type "${String(obj.type)}" coerced to thought`);
+    }
+    out.type = finalType;
+
+    // urgency: clamp to 1..3.
+    out.urgency = action === 'create' || obj.urgency != null
+        ? clampUrgency(obj.urgency)
+        : existing?.urgency ?? 2;
+
+    // startTime: clear when isAllDay is true.
+    const isAllDay = obj.isAllDay != null
+        ? clampIsAllDay(obj.isAllDay)
+        : existing?.isAllDay ?? false;
+    out.isAllDay = isAllDay;
+
+    // Type-mirroring of date↔deadline (mirrors applySemanticResult:169-178).
+    const r: Record<string, unknown> = { ...obj };
+    if (finalType === 'task' || existing?.type === 'task') {
+        if (r.deadline && !r.date) r.date = r.deadline;
+        if (r.date && !r.deadline) r.deadline = r.date;
+    } else {
+        if (r.date && !r.deadline && (!existing?.deadline || existing.date === existing.deadline)) {
+            r.deadline = r.date;
+        } else if (r.deadline && !r.date && (!existing?.date || existing.date === existing.deadline)) {
+            r.date = r.deadline;
+        }
+    }
+    out.date = r.date ?? existing?.date;
+    out.deadline = r.deadline ?? existing?.deadline;
+    out.startTime = isAllDay ? undefined : (r.startTime ?? existing?.startTime ?? (finalType === 'meeting' ? '09:00' : (finalType === 'task' ? '15:00' : undefined)));
+    out.duration = r.duration != null ? Number(r.duration) : existing?.duration;
+    out.totalDuration = r.totalDuration != null ? Number(r.totalDuration) : (r.duration != null ? Number(r.duration) : existing?.totalDuration);
+    out.title = r.title ?? existing?.title ?? 'Nový záznam';
+    out.description = r.description ?? existing?.description ?? '';
+    out.internalNotes = r.internalNotes ?? existing?.internalNotes ?? '';
+    out.subTasks = Array.isArray(r.subTasks) ? r.subTasks : existing?.subTasks ?? [];
+    out.progress = r.progress != null ? clampProgress(r.progress) : existing?.progress;
+    out.status = action === 'complete' ? 'completed' : (action === 'delete' ? 'cancelled' : (existing?.status ?? 'pending'));
+
+    return { value: out as Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }, last_error: errors.length ? errors.join('; ') : undefined };
+}
+
+export const applySemanticResult = async (result: unknown, updateId: number | null, googleAuth: GoogleAuthStatus) => {
     try {
         if (updateId) {
             const existing = await db.tasks.get(updateId);
             if (!existing) return null;
 
-            const finalType = result.type ? normalizeType(String(result.type)) : existing.type;
+            const obj = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
+            const finalType = obj.type ? normalizeType(String(obj.type)) : existing.type;
 
             if (finalType === 'task' || existing.type === 'task') {
-                if (result.deadline && !result.date) result.date = result.deadline;
-                if (result.date && !result.deadline) result.deadline = result.date;
+                if (obj.deadline && !obj.date) obj.date = obj.deadline;
+                if (obj.date && !obj.deadline) obj.deadline = obj.date;
             } else {
-                if (result.date && !result.deadline && (!existing.deadline || existing.date === existing.deadline)) {
-                    result.deadline = result.date;
-                } else if (result.deadline && !result.date && (!existing.date || existing.date === existing.deadline)) {
-                    result.date = result.deadline;
+                if (obj.date && !obj.deadline && (!existing.deadline || existing.date === existing.deadline)) {
+                    obj.deadline = obj.date;
+                } else if (obj.deadline && !obj.date && (!existing.date || existing.date === existing.deadline)) {
+                    obj.date = obj.deadline;
                 }
             }
 
             const updatedTask = {
-                title: result.title ?? existing.title,
-                description: result.description ?? existing.description,
-                internalNotes: result.internalNotes ?? existing.internalNotes,
+                title: obj.title ?? existing.title,
+                description: obj.description ?? existing.description,
+                internalNotes: obj.internalNotes ?? existing.internalNotes,
                 type: finalType,
-                urgency: result.urgency != null ? clampUrgency(result.urgency) : existing.urgency,
-                date: result.date ?? existing.date,
-                deadline: result.deadline ?? existing.deadline,
-                // Pokud je isAllDay true z AI, vyčistíme startTime
-                startTime: (result.isAllDay === true) ? undefined : (result.startTime ?? existing.startTime),
-                duration: result.duration != null ? Number(result.duration) : existing.duration,
-                totalDuration: result.totalDuration != null ? Number(result.totalDuration) : (result.duration != null ? Number(result.duration) : existing.totalDuration),
-                isAllDay: result.isAllDay != null ? clampIsAllDay(result.isAllDay) : existing.isAllDay,
-                subTasks: Array.isArray(result.subTasks) ? result.subTasks : existing.subTasks,
-                progress: result.progress != null ? clampProgress(result.progress) : existing.progress,
+                urgency: obj.urgency != null ? clampUrgency(obj.urgency) : existing.urgency,
+                date: obj.date ?? existing.date,
+                deadline: obj.deadline ?? existing.deadline,
+                startTime: (obj.isAllDay === true) ? undefined : (obj.startTime ?? existing.startTime),
+                duration: obj.duration != null ? Number(obj.duration) : existing.duration,
+                totalDuration: obj.totalDuration != null ? Number(obj.totalDuration) : (obj.duration != null ? Number(obj.duration) : existing.totalDuration),
+                isAllDay: obj.isAllDay != null ? clampIsAllDay(obj.isAllDay) : existing.isAllDay,
+                subTasks: Array.isArray(obj.subTasks) ? obj.subTasks : existing.subTasks,
+                progress: obj.progress != null ? clampProgress(obj.progress) : existing.progress,
                 updatedAt: Date.now(),
             };
             await db.tasks.update(updateId, updatedTask);
             return { updatedId: updateId, result: updatedTask };
         } else {
-            const finalType = normalizeType(String(result.type || 'thought'));
+            const obj = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
+            const finalType = normalizeType(String(obj.type || 'thought'));
             const defaultDuration = finalType === 'meeting' ? 60 : 30;
 
-            const sanitized = sanitizeResultFields(result, finalType, defaultDuration);
+            const sanitized = sanitizeResultFields(obj as AiResult, finalType, defaultDuration);
 
             const newTaskId = await db.tasks.add({
                 ...sanitized,

@@ -23,6 +23,11 @@ export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePoll
         if (!agentBridge.initialized) return;
 
         const writes = await agentBridge.fetchPendingWrites();
+        if (writes.length > 0) {
+          // U5: mirror the inbox file into db.agentInbox before applying so
+          // the diagnostics surface can read pending writes via useLiveQuery.
+          await agentBridge.mirrorInbox(writes);
+        }
         if (writes.length === 0) return;
         if (cancelled) return;
 
@@ -32,7 +37,12 @@ export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePoll
         for (const w of writes) {
           if (cancelled) break;
           const result = await agentBridge.applyWrite(w);
-          if (result.success) applied.push(w.id);
+          if (result.success) {
+            applied.push(w.id);
+            await agentBridge.recordInboxResult(w.id, true);
+          } else {
+            await agentBridge.recordInboxResult(w.id, false, result.last_error);
+          }
         }
 
         if (applied.length > 0 && !cancelled) {
