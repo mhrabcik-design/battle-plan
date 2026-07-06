@@ -47,9 +47,9 @@ class AgentBridge {
   private isInitialized = false;
   private readonly drive = new DriveJsonStore();
 
-  async init(): Promise<void> {
+  async init(options: { createFolder?: boolean } = {}): Promise<void> {
     if (this.isInitialized) return;
-    this.isInitialized = await this.drive.init();
+    this.isInitialized = await this.drive.init({ createFolder: options.createFolder ?? true });
   }
 
   async fetchPendingWrites(): Promise<AgentWrite[]> {
