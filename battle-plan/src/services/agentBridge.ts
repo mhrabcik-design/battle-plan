@@ -1,10 +1,36 @@
-import type { Task } from '../db';
+import type { Project, Task, WorkLog } from '../db';
 import { DriveJsonStore } from './driveJsonStore';
+
+export type AgentWriteAction =
+  | 'create_task'
+  | 'update_task'
+  | 'delete_task'
+  | 'complete_task'
+  | 'create_worklog'
+  | 'update_worklog'
+  | 'delete_worklog'
+  | 'create_project'
+  | 'update_project'
+  | 'delete_project'
+  | 'create_settings'
+  | 'update_settings'
+  | 'delete_settings';
+
+// Per-action data shapes. `task_data` is preserved at the AgentWrite top level
+// for the task-shaped actions (back-compat with the original wire format);
+// worklog / project / settings actions carry their data in a typed sub-payload.
+export type AgentWriteTaskData = Partial<Task> & { id?: number };
+export type AgentWriteWorklogData = Partial<Omit<WorkLog, 'id' | 'source' | 'agent_write_id' | 'updatedAt' | 'createdAt'>> & { id?: number };
+export type AgentWriteProjectData = Partial<Omit<Project, 'id' | 'source' | 'agent_write_id' | 'updatedAt' | 'createdAt'>> & { id?: number };
+export type AgentWriteSettingsData = { id: string; value?: string };
 
 export interface AgentWrite {
   id: string;
-  action: 'create_task' | 'update_task' | 'delete_task';
-  task_data: Partial<Task> & { id?: number };
+  action: AgentWriteAction;
+  task_data?: AgentWriteTaskData;
+  worklog_data?: AgentWriteWorklogData;
+  project_data?: AgentWriteProjectData;
+  settings_data?: AgentWriteSettingsData;
   created_at: number;
   applied_at?: number;
 }

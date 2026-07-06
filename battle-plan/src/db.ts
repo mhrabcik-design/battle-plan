@@ -23,6 +23,8 @@ export interface Task {
     subTasks?: SubTask[];
     progress?: number; // 0-100
     googleEventId?: string;
+    source?: 'user' | 'agent'; // attribution: which surface produced this row
+    agent_write_id?: string; // inbox AgentWrite.id (only present when source === 'agent')
     updatedAt: number;
     isDeleted?: boolean;
     createdAt: number;
@@ -39,6 +41,8 @@ export interface Recording {
 export interface Setting {
     id: string;
     value: string;
+    source?: 'user' | 'agent';
+    agent_write_id?: string;
 }
 
 // === Work Logs (Pracovní činnosti) ===
@@ -52,6 +56,8 @@ export interface Project {
     name: string;       // unikátní (case-insensitive), např. "KB Plaza Liberec"
     color: ProjectColor;
     isActive: boolean;  // soft-delete — staré projekty se v pickeru nezobrazí, ale WorkLog záznamy zůstanou
+    source?: 'user' | 'agent';
+    agent_write_id?: string;
     updatedAt: number;
     createdAt: number;
 }
@@ -71,7 +77,8 @@ export interface WorkLog {
     assumptions?: string[];
     extractionBatchId?: string;
     description?: string;  // co se dělalo
-    source: 'voice' | 'manual';
+    source: 'voice' | 'manual' | 'agent'; // 'agent' added by agent write path (U4)
+    agent_write_id?: string;
     updatedAt: number;
     createdAt: number;
 }
