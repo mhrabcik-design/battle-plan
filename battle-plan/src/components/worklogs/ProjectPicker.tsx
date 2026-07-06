@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, X, Check } from 'lucide-react';
+import { Plus, X, Check, Trash2 } from 'lucide-react';
 import { db, type Project, type ProjectColor } from '../../db';
 
 interface ProjectPickerProps {
@@ -32,6 +32,7 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
     };
 
     useEffect(() => {
+        // Init happens on the first user click; avoid touching Dexie before that
         queueMicrotask(() => {
             loadProjects();
         });
@@ -40,15 +41,13 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
     // Zavři dropdown při kliknutí mimo
     useEffect(() => {
         if (!open) return;
-        const onClick = (e: MouseEvent) => {
+        const onClickOutside = (e: MouseEvent) => {
             if (ref.current && !ref.current.contains(e.target as Node)) {
                 setOpen(false);
-                setShowNew(false);
-                setDupWarning(null);
             }
         };
-        document.addEventListener('mousedown', onClick);
-        return () => document.removeEventListener('mousedown', onClick);
+        document.addEventListener('mousedown', onClickOutside);
+        return () => document.removeEventListener('mousedown', onClickOutside);
     }, [open]);
 
     const selected = projects.find((p) => p.id === selectedProjectId) ?? null;
@@ -89,6 +88,19 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
         setDupWarning(null);
     };
 
+    // Soft-delete the project. Local-only; the next Drive sync propagates
+    // isActive: false to other devices through mergeCloudToLocal. Worklogs
+    // pointing at the project are NOT remapped (ProjectPicker filters out
+    // inactive projects, so the worklog row's projectId becomes orphaned
+    // but is still displayable through the historical view).
+    const handleDelete = async (project: Project) => {
+        if (!project.id) return;
+        if (!window.confirm(`Smazat projekt „${project.name}"?`)) return;
+        await db.projects.update(project.id, { isActive: false, updatedAt: Date.now() });
+        if (selectedProjectId === project.id) onSelect({ ...project, id: 0 } as Project);
+        await loadProjects();
+    };
+
     return (
         <div ref={ref} className="relative w-full">
             {/* Trigger */}
@@ -124,21 +136,36 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
                                     </div>
                                 ) : (
                                     projects.map((p) => (
-                                        <button
+                                        <div
                                             key={p.id}
-                                            type="button"
-                                            onClick={() => {
-                                                onSelect(p);
-                                                setOpen(false);
-                                            }}
-                                            className={`w-full flex items-center gap-2 px-4 py-2.5 hover:bg-slate-800/60 transition-all ${
+                                            className={`w-full flex items-center gap-1 px-2 py-1.5 hover:bg-slate-800/60 transition-all ${
                                                 p.id === selectedProjectId ? 'bg-indigo-600/10' : ''
                                             }`}
                                         >
-                                            <span className={`w-3 h-3 rounded-full shrink-0 ${COLOR_PRESETS.find((c) => c.value === p.color)?.bg.split(' ')[0]}`} />
-                                            <span className="text-sm text-white truncate flex-1 text-left">{p.name}</span>
-                                            {p.id === selectedProjectId && <Check className="w-3.5 h-3.5 text-indigo-400" />}
-                                        </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    onSelect(p);
+                                                    setOpen(false);
+                                                }}
+                                                className="flex-1 flex items-center gap-2 min-w-0 text-left"
+                                            >
+                                                <span className={`w-3 h-3 rounded-full shrink-0 ${COLOR_PRESETS.find((c) => c.value === p.color)?.bg.split(' ')[0]}`} />
+                                                <span className="text-sm text-white truncate flex-1 text-left">{p.name}</span>
+                                                {p.id === selectedProjectId && <Check className="w-3.5 h-3.5 text-indigo-400" />}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                aria-label={`Smazat projekt ${p.name}`}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleDelete(p);
+                                                }}
+                                                className="text-slate-500 hover:text-red-400 p-1"
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
                                     ))
                                 )}
                                 <button

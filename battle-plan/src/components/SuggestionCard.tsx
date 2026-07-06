@@ -13,6 +13,7 @@ import {
   Play,
   Pause,
   FileText,
+  Trash2,
 } from 'lucide-react';
 import type { AgentSuggestion, AgentSuggestionReply } from '../services/suggestionsSync';
 
@@ -25,6 +26,7 @@ interface SuggestionCardProps {
   onTextReply: (text: string) => Promise<void>;
   onVoiceReply: (blob: Blob) => Promise<void>;
   onUpdate: (updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null }) => Promise<void>;
+  onDelete: () => Promise<void>;
   isProcessing: boolean;
   expandedTextReply: boolean;
   onExpandTextReply: (expand: boolean) => void;
@@ -73,12 +75,11 @@ function formatDeadline(ts: number | null): string | null {
   if (!ts) return null;
   const d = new Date(ts);
   const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
-  const isTomorrow = d.toDateString() === tomorrow.toDateString();
-  if (sameDay) return `dnes ${d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}`;
-  if (isTomorrow) return `zítra ${d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}`;
+  if (d.getTime() < now.getTime()) {
+    const daysAgo = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
+    if (daysAgo === 0) return 'Dnes';
+    return `Před ${daysAgo}d`;
+  }
   return d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
@@ -91,6 +92,7 @@ export function SuggestionCard({
   onTextReply,
   onVoiceReply,
   onUpdate,
+  onDelete,
   isProcessing,
   expandedTextReply,
   onExpandTextReply,
@@ -358,7 +360,7 @@ export function SuggestionCard({
             type="date"
             value={deferDate}
             onChange={(e) => setDeferDate(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 text-sm focus:outline-none focus:border-indigo-600"
+            className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-600"
           />
           <div className="flex gap-2 justify-end">
             <button
@@ -401,6 +403,17 @@ export function SuggestionCard({
             className="px-3 py-1.5 rounded-lg bg-amber-600/15 text-amber-300 text-[11px] font-black uppercase tracking-widest border border-amber-600/25 hover:bg-amber-600/25 transition-all disabled:opacity-40"
           >
             <Hourglass className="w-3 h-3 inline-block mr-1" /> Odložit
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              if (window.confirm('Smazat návrh?')) await onDelete();
+            }}
+            disabled={isProcessing}
+            title="Smazat návrh"
+            className="px-3 py-1.5 rounded-lg bg-slate-800/30 text-slate-500 text-[11px] font-black uppercase tracking-widest border border-slate-700/50 hover:text-red-400 hover:border-red-500/30 transition-all disabled:opacity-40"
+          >
+            <Trash2 className="w-3 h-3 inline-block mr-1" /> Smazat
           </button>
           <div className="flex-1" />
           <button

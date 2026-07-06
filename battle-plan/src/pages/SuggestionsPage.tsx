@@ -177,7 +177,30 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     }
   };
 
-  const defer = async (suggestion: AgentSuggestion, deferUntil: string) => {
+  const deleteSuggestion = async (suggestion: AgentSuggestion) => {
+    setProcessingId(suggestion.id);
+    try {
+      const result = await suggestionsSync.deleteSuggestion(suggestion.id);
+      if (result.success) {
+        setSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
+        setRepliesBySuggestion((prev) => {
+          const next = { ...prev };
+          delete next[suggestion.id];
+          return next;
+        });
+        onAddLog(`Suggestions: Smazáno: ${suggestion.title.slice(0, 50)}`);
+      } else {
+        onAddLog('Suggestions: Smazat návrh selhalo', 'error');
+      }
+    } catch (e) {
+      console.error('Delete suggestion failed', e);
+      onAddLog('Suggestions: Smazat návrh selhalo', 'error');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+   const defer = async (suggestion: AgentSuggestion, deferUntil: string) => {
     setProcessingId(suggestion.id);
     try {
       await suggestionsSync.addReply({
@@ -423,6 +446,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
               onTextReply={(text) => sendTextReply(s, text)}
               onVoiceReply={(blob) => sendVoiceReply(s, blob)}
               onUpdate={(updates) => updateSuggestion(s, updates)}
+              onDelete={() => deleteSuggestion(s)}
             />
           ))}
         </AnimatePresence>
