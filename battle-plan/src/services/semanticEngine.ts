@@ -1,11 +1,10 @@
-
 import { db, type SubTask, type Task } from '../db.ts';
 import { googleService } from './googleService.ts';
 import type { GoogleAuthStatus } from '../types.ts';
 import { hasUsableAuth } from '../types.ts';
 
 export const getSystemPrompt = (dayName: string, today: string, now: string, contextInfo: string) => `
-Jsi "Bitevní Plán", elitní AI asistent pro management času a strategické myšlení. 
+Jsi "Bitevní Plán", elitní AI asistent pro management času a strategické myšlení.
 Tvým posláním je transformovat hlasové pokyny do perfektně strukturovaných dat podle tvého "AI Intelligence Manifestu".
 
 Dnešní datum je: ${dayName} ${today} (čas: ${now}). ${contextInfo}
@@ -27,7 +26,7 @@ Všechny časy v polích \`startTime\`, \`endTime\` nebo \`time\` MUSÍ být ve 
 - Pokud není řečeno, použij výchozí: meeting = 60 min, task = 30 min
 
 ### 🔄 PRAVIDLO PRO AKTUALIZACI (ZÁSADNÍ):
-Pokud provádíš aktualizaci (máš KONTEXT), postupuj takto:
+Pokud provádíš aktualizaci (más KONTEXT), postupuj takto:
 1. **METADATA (date, deadline, startTime, urgency, title, type, isAllDay, duration)**: Pokud audio obsahuje novou informaci (např. jiný čas nebo den), tyto hodnoty VŽDY **PŘEPIŠ** novými. Pokud audio říká "na celý den", nastav isAllDay: true i když v kontextu je startTime.
 2. **POPIS (description)**: Zde původní text **NEPŘEPISUJ, ALE DOPLŇUJ**. Zachovej všechen detailní text z KONTEXTU a pouze do něj zapracuj změnu (např. v textu oprav větu o čase).
 3. **SUBTASKY (subTasks)**: Zachovej původní a přidej nové, pokud plynou z audia.
@@ -58,7 +57,7 @@ V polích \`date\` a \`deadline\` VŽDY vrať absolutní datum ve formátu YYYY-
 
 ### 💡 PROFIL: PARTNER (vše co zní jako myšlenka/nápad)
 - **title**: "💡 " + STRUČNÝ NÁZEV NÁPADU (max 5 slov, VELKÁ PÍSMENA).
-- **description**: MAXIMÁLNÍ INICIATIVA. Rozviň nápad, hledej souvislosti, navrhuj logické kroky a rizika. Bohatě strukturovaný brainstormingový výstup s mnoha detaily.
+- **description**: MAXIMÁLNÍ INICIATIVA. Rozviň nápad, hledej souvislosti, navrhni logické kroky a rizika. Bohatě strukturovaný brainstormingový výstup s mnoha detaily.
 
 ### 🛑 KRITICKÁ PRAVIDLA:
 1. **TITULKY**: Název (title) nesmí být "věta". Musí to být úderný popisek. Veškerá "omáčka" a detaily patří do pole \`description\`.
@@ -121,54 +120,15 @@ function clampProgress(val: unknown): number {
     return Math.min(100, Math.max(0, Math.round(n)));
 }
 
-// Stable identity for the normalized output. Optional `last_error` is set when
-// the input was coerced (e.g. unknown type → 'thought') so the agent path can
-// surface the coercion in `db.agentInbox.last_error`.
 export interface NormalizeResult<T> {
   value: T;
   last_error?: string;
 }
 
-interface AiResult {
-    title?: string;
-    description?: string;
-    internalNotes?: string;
-    type?: string;
-    urgency?: unknown;
-    date?: string;
-    deadline?: string;
-    startTime?: string;
-    duration?: unknown;
-    totalDuration?: unknown;
-    isAllDay?: unknown;
-    subTasks?: SubTask[];
-    progress?: unknown;
-}
-
-function sanitizeResultFields(result: AiResult, finalType: Task['type'], defaultDuration: number) {
-    const isAllDay = clampIsAllDay(result.isAllDay);
-    return {
-        title: result.title || "Nový záznam",
-        description: result.description || "",
-        internalNotes: result.internalNotes || "",
-        type: finalType,
-        urgency: clampUrgency(result.urgency),
-        date: result.date || new Date().toISOString().split('T')[0],
-        startTime: isAllDay ? undefined : (result.startTime || (finalType === 'meeting' ? "09:00" : (finalType === 'task' ? "15:00" : undefined))),
-        deadline: result.deadline || result.date || new Date().toISOString().split('T')[0],
-        duration: Number(result.duration) || defaultDuration,
-        totalDuration: Number(result.totalDuration) || Number(result.duration) || defaultDuration,
-        isAllDay,
-        subTasks: Array.isArray(result.subTasks) ? result.subTasks : [],
-        progress: clampProgress(result.progress),
-    };
-}
-
-// Normalize the AI / agent payload into a Task that satisfies the
-// applySemanticResult invariants. Shared between the voice path and the
-// agent path so both produce the same output for the same input. The
-// helper is Task-only at this unit; WorkLog / Project / Setting
-// normalization (R3a-R3c) lands in U4.
+// Shared between the voice path and the agent path. The voice path
+// (`applySemanticResult`) and the agent path (`agentBridge.applyTaskAction`)
+// both call this; result invariants are identical so a Task written by
+// either path round-trips through Dexie without drift.
 export function normalizeEntity(
     result: unknown,
     action: 'create' | 'update' | 'complete' | 'delete',
@@ -178,29 +138,24 @@ export function normalizeEntity(
     const out: Record<string, unknown> = {};
     const errors: string[] = [];
 
-    // Type: normalize; coerce unknowns to 'thought' and surface as last_error.
     const finalType = action === 'create'
         ? normalizeType(String(obj.type || 'thought'))
         : normalizeType(String(obj.type || existing?.type || 'thought'));
-    if (action === 'create' && !obj.type) errors.push('type coerced to thought (default)');
-    if (action !== 'create' && obj.type && !EXACT_TYPE_MAP[String(obj.type).toLowerCase().trim()] &&
-        !['task', 'meeting', 'thought'].includes(String(obj.type).toLowerCase().trim())) {
+    if (action !== 'create' && obj.type && !EXACT_TYPE_MAP[String(obj.type).toLowerCase().trim()]) {
         errors.push(`unknown type "${String(obj.type)}" coerced to thought`);
     }
     out.type = finalType;
 
-    // urgency: clamp to 1..3.
     out.urgency = action === 'create' || obj.urgency != null
         ? clampUrgency(obj.urgency)
         : existing?.urgency ?? 2;
 
-    // startTime: clear when isAllDay is true.
     const isAllDay = obj.isAllDay != null
         ? clampIsAllDay(obj.isAllDay)
         : existing?.isAllDay ?? false;
     out.isAllDay = isAllDay;
 
-    // Type-mirroring of date↔deadline (mirrors applySemanticResult:169-178).
+    // Type-mirroring of date↔deadline.
     const r: Record<string, unknown> = { ...obj };
     if (finalType === 'task' || existing?.type === 'task') {
         if (r.deadline && !r.date) r.date = r.deadline;
@@ -220,17 +175,13 @@ export function normalizeEntity(
     out.title = r.title ?? existing?.title ?? 'Nový záznam';
     out.description = r.description ?? existing?.description ?? '';
     out.internalNotes = r.internalNotes ?? existing?.internalNotes ?? '';
-    out.subTasks = Array.isArray(r.subTasks) ? r.subTasks : existing?.subTasks ?? [];
+    out.subTasks = Array.isArray(r.subTasks) ? (r.subTasks as SubTask[]) : existing?.subTasks ?? [];
     out.progress = r.progress != null ? clampProgress(r.progress) : existing?.progress;
-    out.status = action === 'complete' ? 'completed' : (action === 'delete' ? 'cancelled' : (existing?.status ?? 'pending'));
+    out.status = action === 'complete' ? 'completed' : (existing?.status ?? 'pending');
 
     return { value: out as Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }, last_error: errors.length ? errors.join('; ') : undefined };
 }
 
-// applySemanticResult: thin wrapper around normalizeEntity. The voice path
-// kept here is unchanged in behavior from the pre-U2 inline implementation;
-// the data-shaping is delegated to normalizeEntity so both the voice path
-// and the agent path produce the same Task shape.
 export const applySemanticResult = async (result: unknown, updateId: number | null, googleAuth: GoogleAuthStatus) => {
     try {
         if (updateId) {
@@ -266,17 +217,15 @@ export const applySemanticResult = async (result: unknown, updateId: number | nu
             return { updatedId: updateId, result: updated };
         } else {
             const norm = normalizeEntity(result, 'create', undefined);
-            const finalType = (norm.value.type ?? 'thought') as Task['type'];
-            const defaultDuration = finalType === 'meeting' ? 60 : 30;
-            const sanitized = sanitizeResultFields(norm.value as unknown as AiResult, finalType, defaultDuration);
+            const v = norm.value as Partial<Task> & { title: string; type: Task['type']; urgency: 1 | 2 | 3 };
             const newTaskId = await db.tasks.add({
-                ...sanitized,
+                ...v,
                 status: 'pending',
                 updatedAt: Date.now(),
                 createdAt: Date.now()
             });
 
-            if (finalType === 'meeting' && hasUsableAuth(googleAuth)) {
+            if (v.type === 'meeting' && hasUsableAuth(googleAuth)) {
                 const addedTask = await db.tasks.get(newTaskId);
                 if (addedTask) {
                     try {
