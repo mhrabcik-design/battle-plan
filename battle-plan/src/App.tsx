@@ -327,7 +327,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   useAgentBridgePolling({ googleAuth, addLog });
 
   useEffect(() => {
-    if (hasUsableAuth) {
+    if (hasUsableAuth && viewMode === 'tasks') {
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     }
   }, [hasUsableAuth, viewMode, activeTaskList]);

@@ -66,13 +66,17 @@ const SCOPES = `${CORE_SCOPES} ${GOOGLE_TASKS_SCOPE}`;
 const CORE_SCOPE_SET = CORE_SCOPES.split(/\s+/).filter(Boolean);
 
 function tokenHasScopes(response: TokenResponse, scopes: string[]): boolean | null {
+    if (response.scope) {
+        const granted = new Set(response.scope.split(/\s+/).filter(Boolean));
+        return scopes.every(scope => granted.has(scope));
+    }
+
     const [firstScope, ...restScopes] = scopes;
     if (firstScope && window.google?.accounts?.oauth2?.hasGrantedAllScopes) {
         return window.google.accounts.oauth2.hasGrantedAllScopes(response, firstScope, ...restScopes);
     }
-    if (!response.scope) return null;
-    const granted = new Set(response.scope.split(/\s+/).filter(Boolean));
-    return scopes.every(scope => granted.has(scope));
+
+    return null;
 }
 
 function tokenHasCoreScopes(response: TokenResponse): boolean {

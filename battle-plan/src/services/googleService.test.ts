@@ -670,6 +670,44 @@ test('handleTokenResponse accepts core scopes and disables Google Tasks when the
     assert.equal(tasklistsListCalls, 0, 'Google Tasks API must not be called when the token lacks Tasks scope');
 });
 
+test('handleTokenResponse trusts response.scope over GIS helper for optional Tasks scope', async () => {
+    clearStore();
+    localStorage.setItem('google_access_token', 'old-token');
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 5 * 60 * 1000));
+    localStorage.setItem('google_user_email', 'user@example.com');
+
+    let tasksListCalls = 0;
+    installGapiMock({
+        tasksList: async () => {
+            tasksListCalls++;
+            return { result: { items: [{ id: 'task-1' }] } };
+        },
+    });
+    installGisMock({});
+    (globalThis as unknown as {
+        window: {
+            google: {
+                accounts: {
+                    oauth2: {
+                        hasGrantedAllScopes: () => boolean;
+                    };
+                };
+            };
+        };
+    }).window.google.accounts.oauth2.hasGrantedAllScopes = () => true;
+
+    const svc = freshService();
+    const handler = (svc as unknown as { handleTokenResponse: (r: { access_token: string; expires_in: number; scope: string }) => void }).handleTokenResponse;
+    handler({
+        access_token: 'token-without-tasks-scope',
+        expires_in: 3600,
+        scope: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive',
+    });
+
+    assert.deepEqual(await svc.getTasks('@default'), [], 'explicit response.scope without Tasks must suppress Google Tasks API calls');
+    assert.equal(tasksListCalls, 0, 'stale GIS granted-scope helper must not trigger a Tasks network request');
+});
+
 test('U3: integration — successful first-sign-in token response populates google_access_token, google_token_expires_at, and google_user_email in localStorage', async () => {
     clearStore();
     // No userEmail => first sign-in
