@@ -67,12 +67,22 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
         const sugs = suggestionsResult.suggestions;
         const open = sugs.filter((s) => s.status === 'open').length;
         setSuggestionsBadge(open);
-        updateSyncHealth('suggestions', {
-          state: 'ok',
-          detail: suggestionsResult.kind === 'missing-file' ? emptySuggestionsHealth().detail : `${open} otevřených návrhů`,
-          lastSuccess: new Date().toLocaleString('cs-CZ'),
-          lastError: null,
-        });
+        // Race guard: if markAuthUnavailable flipped the auth state to
+        // OFFLINE_AUTH / SIGNED_OUT while we were inside the await chain
+        // above, do NOT overwrite the 'idle' state the useEffect re-run
+        // already installed. Mirrors the guard in
+        // useDriveSyncOrchestration.checkSync.
+        const authBeforeSuggestionsOk = googleService.getAuthStatus();
+        if (authBeforeSuggestionsOk.state !== 'OFFLINE_AUTH' && authBeforeSuggestionsOk.state !== 'SIGNED_OUT') {
+          updateSyncHealth('suggestions', {
+            state: 'ok',
+            detail: suggestionsResult.kind === 'missing-file' ? emptySuggestionsHealth().detail : `${open} otevřených návrhů`,
+            lastSuccess: new Date().toLocaleString('cs-CZ'),
+            lastError: null,
+          });
+        } else {
+          console.log('[sync-debug]', Date.now(), 'skipping suggestions=ok update — auth flipped mid-fetch', { state: authBeforeSuggestionsOk.state });
+        }
       } catch (e) {
         const errorMessage = formatError(e);
         const lastErrorString = typeof errorMessage === 'string' ? errorMessage : String(errorMessage);

@@ -133,12 +133,25 @@ export function useDriveSyncOrchestration({
           setLastSync(now);
           localStorage.setItem('last_drive_sync', now);
           localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
-          updateSyncHealth('tasks', {
-            state: 'ok',
-            detail: 'Drive data načtena',
-            lastSuccess: now,
-            lastError: null,
-          });
+          // Race guard: if markAuthUnavailable flipped the auth state to
+          // OFFLINE_AUTH / SIGNED_OUT while we were inside the await chain
+          // above (a typical case when the server returns 403 from a
+          // different in-flight call, or the token was revoked by a
+          // concurrent request), do NOT overwrite the 'idle' state the
+          // useEffect re-run already installed. The data we just merged
+          // into the local DB is still valid, but the UI must reflect the
+          // current auth reality, not a stale success snapshot.
+          const authBeforeTasksOk = googleService.getAuthStatus();
+          if (authBeforeTasksOk.state !== 'OFFLINE_AUTH' && authBeforeTasksOk.state !== 'SIGNED_OUT') {
+            updateSyncHealth('tasks', {
+              state: 'ok',
+              detail: 'Drive data načtena',
+              lastSuccess: now,
+              lastError: null,
+            });
+          } else {
+            console.log('[sync-debug]', Date.now(), 'skipping tasks=ok update — auth flipped mid-merge', { state: authBeforeTasksOk.state });
+          }
         }
         const authAfterTasks = googleService.getAuthStatus();
         if (authAfterTasks.state === 'OFFLINE_AUTH' || authAfterTasks.state === 'SIGNED_OUT') {
