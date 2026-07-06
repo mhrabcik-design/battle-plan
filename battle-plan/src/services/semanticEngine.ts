@@ -2,7 +2,7 @@ import { db, type SubTask, type Task } from '../db.ts';
 import { googleService } from './googleService.ts';
 import type { GoogleAuthStatus } from '../types.ts';
 import { hasUsableAuth } from '../types.ts';
-
+import { EXACT_TYPE_MAP, normalizeType, clampUrgency, clampIsAllDay, clampProgress } from './taskNormalization.ts';
 import type { AppContext } from './appContext.ts';
 import { renderAppContextSection } from './appContext.ts';
 export const getSystemPrompt = (dayName: string, today: string, now: string, contextInfo: string, appContext?: AppContext) => `
@@ -66,7 +66,17 @@ ${appContext ? '\n' + renderAppContextSection(appContext) + '\n' : ''}
 5. **TYPY**: Používej pouze: "task", "meeting", "thought".
 
 
-Příklad JSON struktury:
+### ⚙️ SANITIZAČNÍ PRAVIDLA (tato pravidla dodržuj dříve než vrátíš výstup):
+7. **Type**: \`task\`, \`meeting\`, \`thought\` pouze. České synonymy mapují na stejný typ: \`úkol\` → \`task\`, \`sraz\`/\`schůzka\` → \`meeting\`, \`myšlenka\`/\`poznámka\`/\`note\` → \`thought\`. Cokoli jiného → \`thought\`.
+8. **Urgency**: škála 1..3 s defaultem 2. 1 = Nízká, 2 = Normální, 3 = Urgentní. Pokud váháš, default 2.
+9. **isAllDay**: true pokud uživatel řekl "na celý den" / "celodenní" / "bez času" / "celý den". Při \`isAllDay: true\` vyčisti \`startTime\` a \`duration\` na type-default.
+10. **startTime default**: meeting → \`09:00\`, task → \`15:00\`. Použij pokud uživatel čas explicitne nezadal.
+11. **progress**: celé číslo 0..100.
+
+### 🛑 KRITICKÁ PRAVIDLA (TYPESAFE BACKSTOP):
+Tyto kontroly provede aplikace po tvé odpovědi. Pokud je pravidlo v rozporu, tak to znamená, že jsi je porušil(a) a v dalším requestu to naprav.
+
+### 🛑 KRITICKÁ PRAVIDLA:
 {
   "title": "NÁZEV",
   "description": "Strukturovaný text...",
@@ -78,46 +88,10 @@ Příklad JSON struktury:
   "subTasks": [{"id": "1", "title": "Krok 1", "completed": false}]
 }`;
 
-const EXACT_TYPE_MAP: Record<string, Task['type']> = {
-    'task': 'task',
-    'úkol': 'task',
-    'meeting': 'meeting',
-    'sraz': 'meeting',
-    'schůzka': 'meeting',
-    'thought': 'thought',
-    'myšlenka': 'thought',
-    'note': 'thought',
-};
-
-function normalizeType(aiType: string): Task['type'] {
-    const lower = aiType.toLowerCase().trim();
-
-    if (EXACT_TYPE_MAP[lower]) return EXACT_TYPE_MAP[lower];
-
-    if (lower === 'task' || lower.includes('úkol')) return 'task';
-    if (lower === 'meeting' || lower.includes('sraz') || lower.includes('schůzka')) return 'meeting';
-    if (lower === 'thought' || lower.includes('myšlenka') || lower === 'note') return 'thought';
-
-    return 'thought';
-}
-
-function clampUrgency(val: unknown): 1 | 2 | 3 {
-    const n = Number(val);
-    if (isNaN(n)) return 2;
-    return Math.min(3, Math.max(1, n)) as 1 | 2 | 3;
-}
-
-function clampIsAllDay(val: unknown): boolean {
-    if (val === true || val === 'true') return true;
-    if (val === false || val === 'false') return false;
-    return false;
-}
-
-function clampProgress(val: unknown): number {
-    const n = Number(val);
-    if (isNaN(n)) return 0;
-    return Math.min(100, Math.max(0, Math.round(n)));
-}
+// Type/clamp helpers and the EXACT_TYPE_MAP live in taskNormalization.ts.
+// The high-level rules are documented in the system prompt's
+// "## ⚙️ SANITIZAČNÍ PRAVIDLA" section above; these helpers round values
+// the AI may have mis-typed but do not override correct values.
 
 export interface NormalizeResult<T> {
   value: T;
