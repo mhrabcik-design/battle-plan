@@ -1,4 +1,11 @@
-import type { AgentSuggestionReply } from '../services/suggestionsSync.ts';
+import type {
+    AgentSuggestionReply,
+    RepliesFetchResult,
+} from '../services/suggestionsSync.ts';
+
+export type SuggestionsSnapshotResolution =
+    | { kind: 'replace'; repliesBySuggestion: Record<string, AgentSuggestionReply[]> }
+    | { kind: 'preserve'; message: string };
 
 export function groupSuggestionReplies(
     suggestionIds: readonly string[],
@@ -17,4 +24,31 @@ export function groupSuggestionReplies(
     }
 
     return grouped;
+}
+
+export function resolveSuggestionsSnapshot(
+    suggestions: readonly { id: string }[],
+    repliesResult: RepliesFetchResult,
+): SuggestionsSnapshotResolution {
+    if (repliesResult.kind === 'loaded' || repliesResult.kind === 'missing-file') {
+        return {
+            kind: 'replace',
+            repliesBySuggestion: groupSuggestionReplies(
+                suggestions.map((suggestion) => suggestion.id),
+                repliesResult.replies,
+            ),
+        };
+    }
+
+    if (repliesResult.kind === 'store-unavailable') {
+        return {
+            kind: 'preserve',
+            message: `Suggestions: Odpovědi nejsou dostupné (${repliesResult.status.message}); zachovávám poslední úplný stav.`,
+        };
+    }
+
+    return {
+        kind: 'preserve',
+        message: `Suggestions: Odpovědi se nepodařilo načíst (${repliesResult.message}); zachovávám poslední úplný stav.`,
+    };
 }

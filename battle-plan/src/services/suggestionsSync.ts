@@ -1,4 +1,5 @@
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
+import { getErrorMessage } from '../utils/errors.ts';
 
 export interface AgentSuggestion {
   id: string;
@@ -51,6 +52,12 @@ export type SuggestionsFetchResult =
   | { kind: 'store-unavailable'; status: DriveStoreStatus; suggestions: AgentSuggestion[] }
   | { kind: 'error'; message: string; suggestions: AgentSuggestion[] };
 
+export type RepliesFetchResult =
+  | { kind: 'loaded'; replies: AgentSuggestionReply[] }
+  | { kind: 'missing-file'; replies: AgentSuggestionReply[] }
+  | { kind: 'store-unavailable'; status: DriveStoreStatus; replies: AgentSuggestionReply[] }
+  | { kind: 'error'; message: string; replies: AgentSuggestionReply[] };
+
 const SUGGESTIONS_FILENAME = 'agent-suggestions.json';
 const REPLIES_FILENAME = 'agent-suggestion-replies.json';
 
@@ -85,25 +92,35 @@ class SuggestionsSync {
       return { kind: 'loaded', suggestions: result.data.suggestions ?? [] };
     } catch (e) {
       console.error('SuggestionsSync: fetchSuggestions failed', e);
-      return { kind: 'error', message: e instanceof Error ? e.message : String(e), suggestions: [] };
+      return { kind: 'error', message: getErrorMessage(e), suggestions: [] };
     }
   }
 
   async fetchReplies(suggestionId?: string): Promise<AgentSuggestionReply[]> {
-    if (!this.isInitialized) return [];
+    const result = await this.fetchRepliesDetailed(suggestionId);
+    return result.replies;
+  }
+
+  async fetchRepliesDetailed(suggestionId?: string): Promise<RepliesFetchResult> {
+    if (!this.isInitialized) {
+      return { kind: 'store-unavailable', status: this.drive.lastStatus, replies: [] };
+    }
 
     try {
-      const loaded = await this.drive.readJsonFile<RepliesFile>(REPLIES_FILENAME);
-      if (!loaded) return [];
-      this.repliesFileId = loaded.fileId;
-      let replies = loaded.data.replies ?? [];
+      const result = await this.drive.readJsonFileWithStatus<RepliesFile>(REPLIES_FILENAME);
+      if (result.kind === 'missing-file') return { kind: 'missing-file', replies: [] };
+      if (result.kind === 'store-unavailable') return { ...result, replies: [] };
+      if (result.kind === 'error') return { ...result, replies: [] };
+
+      this.repliesFileId = result.fileId;
+      let replies = result.data.replies ?? [];
       if (suggestionId) {
         replies = replies.filter((r) => r.suggestion_id === suggestionId);
       }
-      return replies;
+      return { kind: 'loaded', replies };
     } catch (e) {
       console.error('SuggestionsSync: fetchReplies failed', e);
-      return [];
+      return { kind: 'error', message: getErrorMessage(e), replies: [] };
     }
   }
 

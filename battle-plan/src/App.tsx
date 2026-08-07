@@ -23,6 +23,7 @@ import { FocusEditor } from './components/FocusEditor';
 import { SettingsModal } from './components/SettingsModal';
 import { OnboardingCard } from './components/OnboardingCard';
 import { SlashCommandPalette } from './components/SlashCommandPalette';
+import { PageErrorBoundary } from './components/PageErrorBoundary';
 import { dismissOnboarding, isOnboardingDismissed } from './services/onboarding';
 import { WeeklyCalendar } from './components/WeeklyCalendar';
 import type { WorkLogVoiceController } from './components/worklogs/WorkLogVoiceBar';
@@ -496,11 +497,13 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   const memoizedGetDeadlineColor = useCallback((date?: string, time?: string) => getDeadlineColor(currentTime, date, time), [currentTime]);
   const memoizedFormatTimeLeft = useCallback((date?: string, time?: string) => formatTimeLeft(currentTime, date, time), [currentTime]);
   const showTaskGrid = TASK_GRID_VIEW_MODES.includes(viewMode);
-  const activeWorkLogVoiceController = viewMode === 'worklogs' ? workLogVoiceController : null;
-  const isWorkLogVoiceMode = !!activeWorkLogVoiceController;
+  const isWorkLogVoiceMode = viewMode === 'worklogs';
+  const activeWorkLogVoiceController = isWorkLogVoiceMode ? workLogVoiceController : null;
   const floatingMicIsRecording = activeWorkLogVoiceController?.isRecording ?? isRecording;
   const floatingMicIsProcessing = activeWorkLogVoiceController?.processing ?? isProcessing;
-  const floatingMicDisabled = activeWorkLogVoiceController?.disabled ?? isProcessing;
+  const floatingMicDisabled = isWorkLogVoiceMode
+    ? !activeWorkLogVoiceController || activeWorkLogVoiceController.disabled
+    : isProcessing;
 
   return (
     <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
@@ -657,18 +660,22 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           {hasUsableAuth && showOnboarding && <OnboardingCard onDismiss={handleDismissOnboarding} />}
 
           {viewMode === 'suggestions' && (
-            <Suspense fallback={pageFallback}>
-              <SuggestionsPage googleAuth={googleAuth} onAddLog={addLog} />
-            </Suspense>
+            <PageErrorBoundary resetKey={viewMode}>
+              <Suspense fallback={pageFallback}>
+                <SuggestionsPage googleAuth={googleAuth} onAddLog={addLog} />
+              </Suspense>
+            </PageErrorBoundary>
           )}
 
           {viewMode === 'worklogs' && (
-            <Suspense fallback={pageFallback}>
-              <WorkLogsPage
-                onAddLog={addLog}
-                onVoiceControllerChange={setWorkLogVoiceController}
-              />
-            </Suspense>
+            <PageErrorBoundary resetKey={viewMode}>
+              <Suspense fallback={pageFallback}>
+                <WorkLogsPage
+                  onAddLog={addLog}
+                  onVoiceControllerChange={setWorkLogVoiceController}
+                />
+              </Suspense>
+            </PageErrorBoundary>
           )}
 
           {viewMode === 'week' && (
@@ -684,16 +691,18 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           )}
 
           {viewMode === 'debug' && (
-            <Suspense fallback={pageFallback}>
-              <DiagnosticsPage
-                syncHealth={syncHealth}
-                logs={debugLogs}
-                selectedModel={selectedModel}
-                apiKeySuffix={apiKey.slice(-6)}
-                isAiActive={isAiActive}
-                onClearLogs={() => setDebugLogs([])}
-              />
-            </Suspense>
+            <PageErrorBoundary resetKey={viewMode}>
+              <Suspense fallback={pageFallback}>
+                <DiagnosticsPage
+                  syncHealth={syncHealth}
+                  logs={debugLogs}
+                  selectedModel={selectedModel}
+                  apiKeySuffix={apiKey.slice(-6)}
+                  isAiActive={isAiActive}
+                  onClearLogs={() => setDebugLogs([])}
+                />
+              </Suspense>
+            </PageErrorBoundary>
           )}
 
 
@@ -797,7 +806,8 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                   </AnimatePresence>
                   <button
                     onClick={async () => {
-                      if (activeWorkLogVoiceController) {
+                      if (isWorkLogVoiceMode) {
+                        if (!activeWorkLogVoiceController) return;
                         await activeWorkLogVoiceController.toggle();
                         return;
                       }

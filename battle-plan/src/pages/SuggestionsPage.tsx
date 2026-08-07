@@ -10,7 +10,7 @@ import { db } from '../db';
 import { SuggestionCard } from '../components/SuggestionCard';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
-import { groupSuggestionReplies } from '../utils/suggestionReplies';
+import { resolveSuggestionsSnapshot } from '../utils/suggestionReplies';
 
 type FilterMode = 'all' | 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted';
 
@@ -47,13 +47,20 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         onAddLog('SuggestionsSync: BP složka nenalezena. Otevři BP app a nech poprvé synchronizovat.', 'error');
         return;
       }
-      const [sugs, replies] = await Promise.all([
+      const [sugs, repliesResult] = await Promise.all([
         suggestionsSync.fetchSuggestions(),
-        suggestionsSync.fetchReplies(),
+        suggestionsSync.fetchRepliesDetailed(),
       ]);
-      const replyMap = groupSuggestionReplies(sugs.map((suggestion) => suggestion.id), replies);
+
+      const snapshot = resolveSuggestionsSnapshot(sugs, repliesResult);
+      if (snapshot.kind === 'preserve') {
+        console.error(snapshot.message);
+        onAddLog(snapshot.message, 'error');
+        return;
+      }
+
       setSuggestions(sugs);
-      setRepliesBySuggestion(replyMap);
+      setRepliesBySuggestion(snapshot.repliesBySuggestion);
     } catch (e) {
       console.error('Load suggestions failed', e);
       onAddLog('Suggestions: Nepodařilo se načíst návrhy', 'error');
