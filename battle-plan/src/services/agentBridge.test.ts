@@ -127,7 +127,7 @@ async function resetDb() {
     await db.agentInbox.clear();
 }
 
-test('U1: AgentWrite union accepts all 12 actions', () => {
+test('U1: AgentWrite union accepts all 13 actions', () => {
     // Compile-time check: the union compiles for every action.
     const actions: Array<typeof agentBridge extends { markApplied: unknown } ? string : never> = [];
     void actions;
@@ -138,7 +138,7 @@ test('U1: AgentWrite union accepts all 12 actions', () => {
         create_project: '8', update_project: '9', delete_project: '10',
         create_settings: '11', update_settings: '12', delete_settings: '13',
     };
-    assert.equal(Object.keys(ids).length, 13); // 12 actions + the dispatch unit
+    assert.equal(Object.keys(ids).length, 13);
 });
 
 test('U6: agentBridge.init() calls drive.init with createFolder:true by default', async () => {

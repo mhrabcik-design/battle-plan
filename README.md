@@ -1,45 +1,52 @@
-# Bitevni Plan
+# Bitevní Plán
 
-Kanonicky rozcestnik projektu. Aplikace samotna je v adresari `battle-plan/`; historicke planovaci dokumenty a projektova dokumentace jsou v `docs/`.
+Produkční desktop-first PWA pro hlasové plánování úkolů, schůzek, myšlenek a odpracovaných činností. Aplikace běží z adresáře `battle-plan/`; zbytek repozitáře drží pouze aktuální dokumentaci a trvalé technické poznatky.
 
-## Aktualni stav
+## Zdroj pravdy
 
-- Produkt: desktop-first PWA pro hlasove planovani ukolu, schuzek, myslenek a pracovnich cinnosti.
-- Verze aplikace: `4.3.6` podle `battle-plan/package.json`.
-- Frontend: React 19, TypeScript, Vite, Tailwind CSS 4.
-- Lokalni data: IndexedDB pres Dexie (`tasks`, `settings`, `projects`, `workLogs`).
-- AI: Google Gemini REST API, audio se pred odeslanim normalizuje na podporovany format.
-- Google integrace: Drive zaloha/obnova, Google Tasks, Google Calendar, Anu/BattlePlan sdilena slozka.
-- Release pravidlo: kazdy deploy na GitHub Pages musi mit zvednutou viditelnou verzi podle build identity z `battle-plan/package.json`; patch pro opravy, minor pro nove funkce, major pro zasadni etapy.
+- Produkční kód: `battle-plan/src/` na větvi `main`.
+- Aktuální verze: `battle-plan/package.json`. Číslo verze se v dokumentaci neduplikuje.
+- Datový model: `battle-plan/src/db.ts` (Dexie / IndexedDB).
+- AI pravidla: `battle-plan/src/services/semanticEngine.ts`, `workLogExtractor.ts` a [AI manifest](docs/AI_MANIFEST.md).
+- Build a deploy: `.github/workflows/deploy.yml`.
 
-## Hlavni dokumenty
+## Mapa repozitáře
 
-- [Projektovy prehled a dokumentacni index](docs/README.md)
-- [Aktualni zadani a roadmapa](zadani.md)
-- [Uzivatelska prirucka](navod.md)
-- [Logika zaznamu a AI pravidla](logika_zaznamu.md)
-- [AI manifest](docs/AI_MANIFEST.md)
-- [Budouci rozvoj](FUTURE_PLANS.md)
+| Cesta | Účel |
+| --- | --- |
+| `battle-plan/` | React + TypeScript + Vite PWA |
+| `docs/PRODUCT.md` | Současný produktový kontrakt |
+| `docs/ARCHITECTURE.md` | Architektura a datové toky |
+| `docs/ROADMAP.md` | Otevřený backlog pro další etapu |
+| `docs/USER_GUIDE.md` | Uživatelská příručka |
+| `docs/AI_MANIFEST.md` | AI a datová pravidla |
+| `docs/solutions/` | Trvalé poznatky z vyřešených problémů |
+| `CONCEPTS.md` | Sdílený slovník projektu |
 
-## Prace s aplikaci
+Podrobný rozcestník je v [docs/README.md](docs/README.md).
+
+## Lokální práce
 
 ```powershell
 cd battle-plan
-npm install
+npm ci
 npm run dev
 ```
 
-Produkci overis prikazem:
+Před odevzdáním změny:
 
 ```powershell
-cd battle-plan
+npm run lint
+npm test
 npm run build
 ```
 
-## Dokumentacni pravidlo
+## Release
 
-Novy stav projektu zapisuj nejdriv do `docs/README.md` a az potom do specializovanych dokumentu. Soubory `docs/PLAN-*` a starsi task dokumenty jsou archiv implementacnich rozhodnuti, ne aktualni backlog.
+Push do `main` spustí GitHub Actions, automaticky zvýší patch verzi, provede kontrolní příkazy a nasadí GitHub Pages. Major nebo minor release se zahajuje tagem `vX.Y.Z`. Běžný lokální deploy přes historickou větev `gh-pages` se nepoužívá.
 
-## Compound Engineering
+Viditelná verze, čas buildu a commit jsou do aplikace vložené při buildu a zobrazují se v Nastavení / Diagnostice.
 
-Pro dalsi praci s Compound Engineering pluginy zacni v `docs/README.md`. Aktualni implementacni zaklad je `main` na verzi `4.3.6`; historicke `docs/PLAN-*` dokumenty pouzivej jen jako kontext. Pri produkcnim deployi vzdy zkontroluj, ze verze v `battle-plan/package.json`, viditelna verze v UI, Diagnostika a nasazeny bundle na `gh-pages` patri ke stejne zmene.
+## Pravidlo dokumentace
+
+Git historie je archiv dokončených plánů a starých stavů. V repozitáři zůstává jen současný kontrakt, otevřená roadmapa a poznatky, které jsou stále užitečné. Aktivní implementační plán může dočasně vzniknout v `docs/plans/`, ale po dokončení se nemá stát druhým zdrojem pravdy.

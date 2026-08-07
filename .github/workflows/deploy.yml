@@ -47,7 +47,7 @@ jobs:
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           echo "Tag push detected, setting version to $TAG_VERSION"
           npm version "$TAG_VERSION" --no-git-tag-version --commit-hooks=false
-          git add package.json
+          git add package.json package-lock.json
           git commit -m "chore(release): bump version to $TAG_VERSION"
           git push origin HEAD:main
 
@@ -62,7 +62,7 @@ jobs:
             npm version patch --no-git-tag-version --commit-hooks=false
             NEW_VERSION=$(node -p "require('./package.json').version")
             echo "Bumping patch version to $NEW_VERSION"
-            git add package.json
+            git add package.json package-lock.json
             git commit -m "chore(release): bump version to $NEW_VERSION"
             git push origin HEAD:main
           fi
@@ -70,6 +70,10 @@ jobs:
       - name: Lint
         working-directory: battle-plan
         run: npm run lint
+
+      - name: Test
+        working-directory: battle-plan
+        run: npm test
 
       - name: Build
         working-directory: battle-plan

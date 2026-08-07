@@ -192,4 +192,3 @@ PR #24 added onboarding, the `JSEM ANU` self-description card, capability hints,
 - `docs/solutions/integration-issues/google-tasks-scope-403-background-fetch-2026-07-06.md` — related to optional Google Tasks behavior and rec 8 sync wiring.
 - `docs/solutions/integration-issues/drive-readiness-diagnostic-states-2026-07-05.md` — related Drive-backed service diagnostic context.
 - `docs/solutions/integration-issues/ensure-fresh-token-refresh-dedup-2026-07-04.md` — relevant when new sync/polling paths introduce additional Google calls.
-- `docs/plans/2026-07-06-002-fix-agent-bridge-polling-cadence-plan.md` through `docs/plans/2026-07-06-007-add-agent-capability-discovery-plan.md` — source plans for the audit recommendation wave.

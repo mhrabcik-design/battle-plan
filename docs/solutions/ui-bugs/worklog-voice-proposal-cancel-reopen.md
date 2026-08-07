@@ -103,6 +103,5 @@ The same principle applies to route changes and unmounts.
 ## Related Issues
 
 - Related pattern: `docs/solutions/design-patterns/worklog-batch-person-hour-extraction.md`
-- Work plan: `docs/plans/2026-07-02-001-fix-worklog-floating-mic-routing-plan.md`
 - PR: `https://github.com/mhrabcik-design/battle-plan/pull/10`
 - Production fix commit: `6870f64 fix(worklogs): dismiss cancelled voice proposals`

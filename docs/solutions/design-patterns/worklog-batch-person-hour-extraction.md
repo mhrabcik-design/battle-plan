@@ -101,7 +101,6 @@ Verification added for this implementation:
 ## Related
 
 - Implementation commit: `78a7440 feat(worklogs): support batch person-hour extraction`
-- Plan: `docs/plans/2026-06-30-001-feat-worklog-batch-extraction-plan.md`
 - Prompt contract: `docs/AI_MANIFEST.md`
 - WorkLog area guide: `docs/README.md`
 - No older `docs/solutions/` entry covered this pattern at the time this learning was written.

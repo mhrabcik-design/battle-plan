@@ -1,45 +1,40 @@
-# Bitevni Plan App
+# Bitevní Plán — aplikace
 
-React + TypeScript + Vite aplikace pro projekt Bitevni Plan.
+React 19 + TypeScript + Vite PWA. Produkční base path je `/battle-plan/` a nasazení zajišťuje GitHub Actions.
 
-## Stack
+## Požadavky
 
-- React 19
-- TypeScript
-- Vite 7
-- Tailwind CSS 4
-- Dexie / IndexedDB
-- Google Gemini REST API
-- Google Drive, Tasks a Calendar API
-- Vite PWA
+- Node.js 24 (stejná řada jako v CI)
+- npm a přístup k závislostem z `package-lock.json`
 
-## Aktualni moduly
-
-- `Plán`, `Týden`, `Úkoly`, `Schůzky`, `Myšlenky`
-- `Práce` (`worklogs`) pro projekty, lidi, hodiny a pracovní popisy
-- `Návrhy` (`suggestions`) pro schvalování návrhů od Anu
-
-## Lokalne spusteni
+## Příkazy
 
 ```powershell
-npm install
+npm ci
 npm run dev
-```
-
-## Overeni produkcniho buildu
-
-```powershell
+npm run lint
+npm test
 npm run build
 ```
 
-## Nasazeni
+`npm test` spouští současnou Node testovací sadu nad službami, synchronizací, autentizací, WorkLogs a diagnostikou. `npm run build` provede TypeScript build a produkční Vite/PWA bundle.
 
-Projekt je pripraveny pro GitHub Pages s base path `/battle-plan/`.
+## Struktura
 
-```powershell
-npm run deploy
-```
+| Cesta | Role |
+| --- | --- |
+| `src/App.tsx` | Shell aplikace a skládání obrazovek |
+| `src/components/` | Sdílené UI a WorkLogs komponenty |
+| `src/hooks/` | Orchestrace hlasu, synchronizace a příkazů |
+| `src/services/` | Gemini, Google API, Drive store, agent bridge a doménové služby |
+| `src/db.ts` | Dexie schéma a doménové typy uložených dat |
+| `src/utils/` | Čisté transformační a diagnostické funkce |
+| `vite.config.ts` | PWA, base path a build identity |
+
+## Konfigurace za běhu
+
+Gemini API klíč a Google přihlášení se nastavují v aplikaci. Do repozitáře nepatří tokeny, klíče ani exporty uživatelských dat.
 
 ## Dokumentace
 
-Hlavni dokumentacni index je v [../docs/README.md](../docs/README.md). Tento README popisuje pouze technicky vstup do aplikace.
+Produktový a technický kontext začíná v [../docs/README.md](../docs/README.md).

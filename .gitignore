@@ -1,1 +1,5 @@
 graphify-out/
+.agent/
+.agents/
+current-task.md
+handoffs/
