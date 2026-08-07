@@ -38,4 +38,3 @@ export interface GoogleTaskRaw {
     due?: string;
     updated: string;
 }
-
