@@ -10,6 +10,7 @@ import { db } from '../db';
 import { SuggestionCard } from '../components/SuggestionCard';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
+import { groupSuggestionReplies } from '../utils/suggestionReplies';
 
 type FilterMode = 'all' | 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted';
 
@@ -47,11 +48,8 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         return;
       }
       const sugs = await suggestionsSync.fetchSuggestions();
-      const replyMap: Record<string, AgentSuggestionReply[]> = {};
-      for (const s of sugs) {
-        const r = await suggestionsSync.fetchReplies(s.id);
-        replyMap[s.id] = r.sort((a, b) => a.created_at - b.created_at);
-      }
+      const replies = await suggestionsSync.fetchReplies();
+      const replyMap = groupSuggestionReplies(sugs.map((suggestion) => suggestion.id), replies);
       setSuggestions(sugs);
       setRepliesBySuggestion(replyMap);
     } catch (e) {

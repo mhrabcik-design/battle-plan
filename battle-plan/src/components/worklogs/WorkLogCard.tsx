@@ -15,14 +15,6 @@ interface WorkLogCardProps {
     onUpdated?: (log: WorkLog) => void;
 }
 
-const COLOR_DOT: Record<string, string> = {
-    slate: 'bg-slate-400',
-    indigo: 'bg-indigo-400',
-    emerald: 'bg-emerald-400',
-    amber: 'bg-amber-400',
-    rose: 'bg-rose-400',
-};
-
 export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
     const [editing, setEditing] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -215,7 +207,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1.5">
-                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${COLOR_DOT['slate']}`} />
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-slate-400" />
                             <span className="text-xs font-black text-white uppercase tracking-tight truncate">
                                 {log.projectName}
                             </span>

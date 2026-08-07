@@ -1,7 +1,18 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildWorkLogsFileMetadata } from './workLogsDriveMetadata.ts';
+
+const storage = new Map<string, string>();
+(globalThis as unknown as { localStorage: Storage }).localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => { storage.set(key, value); },
+    removeItem: (key) => { storage.delete(key); },
+    clear: () => { storage.clear(); },
+    key: (index) => Array.from(storage.keys())[index] ?? null,
+    get length() { return storage.size; },
+};
+
+const { buildWorkLogsFileMetadata } = await import('./workLogsDriveMetadata.ts');
 
 test('buildWorkLogsFileMetadata puts a new file into the BattlePlan Drive folder', () => {
     assert.deepEqual(

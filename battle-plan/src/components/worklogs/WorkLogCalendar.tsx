@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { type WorkLog, type Project } from '../../db';
+import { type WorkLog, type Project, type ProjectColor } from '../../db';
+import { currentMonthKey, monthKeyToDate, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
 import { WorkLogCard } from './WorkLogCard';
 
 interface WorkLogCalendarProps {
@@ -9,38 +10,12 @@ interface WorkLogCalendarProps {
     projects: Project[];
 }
 
-const COLOR_DOT: Record<string, string> = {
+const COLOR_DOT: Record<ProjectColor, string> = {
     slate: 'bg-slate-400',
     indigo: 'bg-indigo-400',
     emerald: 'bg-emerald-400',
     amber: 'bg-amber-400',
     rose: 'bg-rose-400',
-};
-
-/** YYYY-MM-01 → Date */
-const monthKeyToDate = (key: string): Date => {
-    const [y, m] = key.split('-').map(Number);
-    return new Date(y, m - 1, 1);
-};
-
-const currentMonthKey = (offset = 0): string => {
-    const d = new Date();
-    d.setDate(1);
-    d.setMonth(d.getMonth() + offset);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-};
-
-const monthKeyToOffset = (key: string): number => {
-    const [y, m] = key.split('-').map(Number);
-    const now = new Date();
-    const baseY = now.getFullYear();
-    const baseM = now.getMonth() + 1;
-    return (y - baseY) * 12 + (m - baseM);
-};
-
-const monthLabel = (key: string): string => {
-    const d = monthKeyToDate(key);
-    return d.toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' });
 };
 
 const isoDate = (year: number, month0: number, day: number): string => {
