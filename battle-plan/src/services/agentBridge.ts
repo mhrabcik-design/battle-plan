@@ -9,6 +9,11 @@ import {
   updateProject,
   type ProjectCatalogResult,
 } from './projectCatalog.ts';
+import {
+  addWorkLogsWithActiveProjects,
+  ProjectUnavailableError,
+  type NewWorkLogDraft,
+} from './workLogPersistence.ts';
 
 export type AgentWriteAction =
   | 'create_task'
@@ -215,18 +220,37 @@ class AgentBridge {
 
     if (write.action === 'create_worklog') {
       if (!data.projectId) return { success: false, last_error: 'projectId required' };
-      const project = await db.projects.get(data.projectId);
-      if (!project || !project.isActive) return { success: false, last_error: 'project-not-found' };
       if (!data.date) return { success: false, last_error: 'date required' };
       if (typeof data.hours !== 'number' || data.hours <= 0) return { success: false, last_error: 'hours must be > 0' };
-      const newId = await db.workLogs.add({
-        ...data,
+      const now = Date.now();
+      const draft: NewWorkLogDraft = {
+        syncId: data.syncId,
+        date: data.date,
+        projectId: data.projectId,
+        projectName: data.projectName,
+        people: data.people ?? '',
+        hours: data.hours,
+        hoursPerPerson: data.hoursPerPerson,
+        peopleCount: data.peopleCount,
+        calculationNote: data.calculationNote,
+        assumptions: data.assumptions,
+        extractionBatchId: data.extractionBatchId,
+        description: data.description,
         source: 'agent',
         agent_write_id: write.id,
-        updatedAt: Date.now(),
-        createdAt: Date.now(),
-      } as WorkLog);
-      return { success: true, newId: newId as number };
+        updatedAt: now,
+        createdAt: now,
+      };
+      let saved: WorkLog;
+      try {
+        saved = (await addWorkLogsWithActiveProjects([draft]))[0]!;
+      } catch (error) {
+        if (error instanceof ProjectUnavailableError) {
+          return { success: false, last_error: error.message };
+        }
+        throw error;
+      }
+      return { success: true, newId: saved.id };
     }
 
     if (write.action === 'update_worklog') {

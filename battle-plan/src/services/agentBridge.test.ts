@@ -331,6 +331,22 @@ test('U4: create_worklog rejects inactive projectId with project-not-found', asy
     });
     assert.equal(result.success, false);
     assert.equal(result.last_error, 'project-not-found');
+    assert.equal(await db.workLogs.count(), 0, 'rejected agent write must not persist a partial WorkLog');
+});
+
+test('U3: create_worklog rejects an unknown project atomically', async () => {
+    await resetDb();
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-wl-unknown',
+        action: 'create_worklog',
+        worklog_data: { projectId: 999_999, date: '2026-07-06', hours: 8, people: 'A' },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.last_error, 'project-not-found');
+    assert.equal(await db.workLogs.count(), 0);
 });
 
 test('U1: Agent Bridge create confirms a trimmed archived match and preserves its identity', async () => {
@@ -537,6 +553,7 @@ test('U4: create_worklog lands in db.workLogs (NOT db.tasks)', async () => {
     const wl = await db.workLogs.get(result.newId!);
     assert.ok(wl);
     assert.equal((wl as WorkLog).source, 'agent');
+    assert.equal((wl as WorkLog).projectName, 'Plaza', 'the transaction snapshots the active catalog name');
     // Crucially: it must NOT be in db.tasks
     const taskWithSameId = await db.tasks.get(result.newId!);
     assert.equal(taskWithSameId, undefined, 'create_worklog must not write to db.tasks');

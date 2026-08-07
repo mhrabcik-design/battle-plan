@@ -16,6 +16,7 @@ import {
     normalizePeopleList,
     toIsoDate,
 } from '../utils/workLogBatch.ts';
+import { normalizeProjectName } from './projectCatalog.ts';
 
 /**
  * WorkLog extractor — z Gemini audio transkripce vytáhne strukturovaný WorkLog.
@@ -112,15 +113,20 @@ export interface ExtractedWorkLogBatch {
 /** Pokusí se najít projekt v DB — case-insensitive match, přesná shoda, contains. */
 export function findProjectByName(name: string, allProjects: Project[]): Project | null {
     if (!name || !name.trim()) return null;
-    const needle = name.trim().toLowerCase();
+    const needle = normalizeProjectName(name);
+    const activeProjects = allProjects.filter((project) => project.isActive);
     // 1. Přesná shoda (case-insensitive)
-    const exact = allProjects.find((p) => p.isActive && p.name.toLowerCase() === needle);
-    if (exact) return exact;
+    const exact = activeProjects.filter((project) => normalizeProjectName(project.name) === needle);
+    if (exact.length === 1) return exact[0]!;
+    if (exact.length > 1) return null;
     // 2. Obsahuje (exact v needlu nebo needle v exact)
-    const partial = allProjects.find(
-        (p) => p.isActive && (p.name.toLowerCase().includes(needle) || needle.includes(p.name.toLowerCase()))
+    const partial = activeProjects.filter(
+        (project) => {
+            const candidate = normalizeProjectName(project.name);
+            return candidate.includes(needle) || needle.includes(candidate);
+        },
     );
-    return partial ?? null;
+    return partial.length === 1 ? partial[0]! : null;
 }
 
 /**
