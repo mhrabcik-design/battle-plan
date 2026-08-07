@@ -10,9 +10,12 @@ Tento soubor obsahuje jen otevřenou práci. Po dokončení se položka odstran�
 
 ## 2. Vývojová kvalita
 
-- [ ] Opravit dvě současná upozornění `react-hooks/exhaustive-deps` v `App.tsx` a `useDriveSyncOrchestration.ts` s regresními testy.
 - [ ] Prověřit 13 nálezů z `npm audit` (1 low, 2 moderate, 10 high), určit jejich dosažitelnost v produkčním buildu a aktualizovat závislosti bez automatického `audit fix`.
-- [ ] Rozdělit velký produkční JS bundle; současný build překračuje doporučených 500 kB a `googleService` je současně importovaný staticky i dynamicky.
+- [ ] Pokračovat v dělení hlavního produkčního bundle pod doporučených 500 kB; sekundární obrazovky už mají samostatné chunky a dvojí statický/dynamický import `googleService` byl odstraněn.
+- [ ] Doplnit characterization testy pro skutečný WorkLogs merge/sync tok dříve, než se budou sjednocovat jeho vrstvy nebo kontrakty.
+- [ ] Zajistit idempotenci agent pollingu při souběhu intervalu, focus a visibility událostí; oddělit in-flight guard od trvalého `processedIds` acknowledgementu.
+- [ ] Sjednotit výchozí Gemini model a audio JSON transport až po doplnění síťových testů pro retry, 429 a nevalidní odpovědi.
+- [ ] Přesunout sdílené sync DTO a stavové kontrakty z hooků/služeb do neutrální doménové vrstvy, aby nižší utility nezávisely na Reactu.
 - [ ] Zavést standardní coverage/reporting nad existující Node testovací sadou.
 - [ ] Pravidelně aktualizovat Browserslist data v kontrolovaném dependency PR.
 
