@@ -3,15 +3,21 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, Save, X, AlertTriangle, RotateCcw, Trash2 } from 'lucide-react';
 import { db, type Project, type WorkLog } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
-import { findProjectByName, type ApplyResult, type ExtractedWorkLog, type ExtractedWorkLogBatch } from '../../services/workLogExtractor';
+import { findProjectByName, type ExtractedWorkLog, type ExtractedWorkLogBatch } from '../../services/workLogExtractor';
 import { derivePersonHourMetadata, getWorkLogRowIssues, parseDecimalHours } from '../../utils/workLogBatch';
 import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
 
 interface WorkLogVoiceConfirmProps {
     extracted: ExtractedWorkLogBatch;
-    onConfirmed: (result: ApplyResult) => void;
+    onConfirmed: (result: WorkLogVoiceConfirmResult) => void;
     onCancelled: () => void;
 }
+
+export type WorkLogVoiceConfirmResult = {
+    ok: true;
+    workLog: WorkLog;
+    workLogs: WorkLog[];
+};
 
 type EditableEntry = ExtractedWorkLog & {
     localId: string;

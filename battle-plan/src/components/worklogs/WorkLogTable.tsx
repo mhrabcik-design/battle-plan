@@ -1,11 +1,9 @@
 import { useState, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { type WorkLog } from '../../db';
 
 interface WorkLogTableProps {
     logs: WorkLog[];
-    /** Když true, komponenta sama zobrazuje toolbar s měsícem + součty. Když false, je to "holá" tabulka (placeholder pro F4 calendar). */
-    embedded?: boolean;
 }
 
 const COLOR_DOT: Record<string, string> = {
@@ -56,7 +54,7 @@ function aggregateByDay(logs: WorkLog[]) {
     return days;
 }
 
-export function WorkLogTable({ logs, embedded = true }: WorkLogTableProps) {
+export function WorkLogTable({ logs }: WorkLogTableProps) {
     const [monthKey, setMonthKey] = useState(currentMonthKey(0));
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -97,16 +95,6 @@ export function WorkLogTable({ logs, embedded = true }: WorkLogTableProps) {
             return next;
         });
     };
-
-    if (!embedded) {
-        // Placeholder pro F4 calendar — zatím prázdné
-        return (
-            <div className="p-12 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
-                <CalendarIcon className="w-10 h-10 text-slate-800 mx-auto mb-3" />
-                <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">Kalendář (připravujeme)</p>
-            </div>
-        );
-    }
 
     return (
         <div className="space-y-4">

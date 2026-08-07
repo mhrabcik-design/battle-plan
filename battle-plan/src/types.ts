@@ -35,5 +35,3 @@ export interface GoogleTaskRaw {
     updated: string;
 }
 
-/** Pohled v záložce Pracovní činnosti. */
-export type WorkLogsView = 'calendar' | 'table';

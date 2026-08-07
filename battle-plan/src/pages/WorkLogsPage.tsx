@@ -8,11 +8,8 @@ import { WorkLogTable } from '../components/worklogs/WorkLogTable';
 import { WorkLogCalendar } from '../components/worklogs/WorkLogCalendar';
 import { WorkLogVoiceBar, type WorkLogVoiceController } from '../components/worklogs/WorkLogVoiceBar';
 import { filterWorkLogsForPrace } from '../utils/workLogFilter';
-import type { GoogleAuthStatus } from '../types';
 
 interface WorkLogsPageProps {
-    // U8: consume the new four-state GoogleAuthStatus shape.
-    googleAuth: GoogleAuthStatus;
     onAddLog?: (message: string, type?: 'info' | 'error') => void;
     onVoiceControllerChange?: (controller: WorkLogVoiceController | null) => void;
 }
@@ -179,7 +176,7 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
             )}
 
             {view === 'table' && (
-                <WorkLogTable logs={effectiveLogs} embedded={true} />
+                <WorkLogTable logs={effectiveLogs} />
             )}
         </div>
     );

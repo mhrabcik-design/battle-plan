@@ -4,11 +4,10 @@ import { motion } from 'framer-motion';
 import { useAudioRecorder } from '../../hooks/useAudioRecorder';
 import {
     processWorkLogAudio,
-    type ApplyResult,
     type ExtractedWorkLogBatch,
 } from '../../services/workLogExtractor';
 import { db, type WorkLog } from '../../db';
-import { WorkLogVoiceConfirm } from './WorkLogVoiceConfirm';
+import { WorkLogVoiceConfirm, type WorkLogVoiceConfirmResult } from './WorkLogVoiceConfirm';
 
 interface WorkLogVoiceBarProps {
     onSaved?: (log: WorkLog) => void;
@@ -47,7 +46,6 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
     } = useAudioRecorder();
     const [processing, setProcessing] = useState(false);
     const [extracted, setExtracted] = useState<ExtractedWorkLogBatch | null>(null);
-    const [manualProjectRequired, setManualProjectRequired] = useState(false);
     const [showRecordingGuide, setShowRecordingGuide] = useState(false);
     const processingRef = useRef(false);
     const [probeError, setProbeError] = useState<string | null>(() =>
@@ -112,43 +110,19 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
     }, [audioBlob, clearAudio, onError, onInfo]);
 
     const handleConfirmed = useCallback(
-        (result: ApplyResult) => {
-            // Diskriminace přes 'workLog' / 'needsProject' / 'error' (ApplyResult je union)
-            if ('workLog' in result) {
-                if (result.workLogs.length > 1) {
-                    const totalHours = result.workLogs.reduce((sum, log) => sum + log.hours, 0);
-                    onInfo?.(`Uloženo ${result.workLogs.length} záznamů práce (${totalHours.toFixed(2)} h).`);
-                }
-                onSaved?.(result.workLog);
-                setExtracted(null);
-                setManualProjectRequired(false);
-                return;
+        (result: WorkLogVoiceConfirmResult) => {
+            if (result.workLogs.length > 1) {
+                const totalHours = result.workLogs.reduce((sum, log) => sum + log.hours, 0);
+                onInfo?.(`Uloženo ${result.workLogs.length} záznamů práce (${totalHours.toFixed(2)} h).`);
             }
-            if ('needsProject' in result) {
-                setExtracted({
-                    entries: [result.extracted],
-                    assumptions: result.extracted.assumptions ?? [],
-                    needsConfirmation: true,
-                    confirmationReasons: ['AI nerozpoznalo projekt. Vyber ho v otevřeném okně.'],
-                });
-                setManualProjectRequired(true);
-                onInfo?.('AI nerozpoznalo projekt. Vyber ho v otevřeném okně.');
-                return;
-            }
-            if ('error' in result) {
-                onError?.(`Uložení selhalo: ${result.error}`);
-            } else {
-                onError?.('Uložení selhalo.');
-            }
+            onSaved?.(result.workLog);
             setExtracted(null);
-            setManualProjectRequired(false);
         },
-        [onSaved, onError, onInfo],
+        [onSaved, onInfo],
     );
 
     const handleCancelled = useCallback(() => {
         setExtracted(null);
-        setManualProjectRequired(false);
         clearAudio();
         processingRef.current = false;
     }, [clearAudio]);
@@ -255,12 +229,6 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
                         </div>
                     </div>
                 </motion.div>
-            )}
-
-            {manualProjectRequired && (
-                <div className="text-[10px] text-amber-400 uppercase tracking-widest font-bold">
-                    AI nerozpoznalo projekt — vyber ručně v okně
-                </div>
             )}
 
             {probeError && (

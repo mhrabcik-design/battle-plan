@@ -18,8 +18,6 @@ export const EXACT_TYPE_MAP: Record<string, Task['type']> = {
     'note': 'thought',
 };
 
-const KNOWN_TYPES: Task['type'][] = ['task', 'meeting', 'thought'];
-
 export function normalizeType(aiType: string | undefined | null): Task['type'] {
     if (aiType == null) return 'thought';
     const lower = aiType.toLowerCase().trim();
@@ -49,15 +47,4 @@ export function clampProgress(val: unknown): number {
     const n = Number(val);
     if (isNaN(n)) return 0;
     return Math.min(100, Math.max(0, Math.round(n)));
-}
-
-export function inferStartTime(type: Task['type'], existing?: Task): string | undefined {
-    if (existing?.isAllDay) return undefined;
-    if (type === 'meeting') return '09:00';
-    if (type === 'task') return '15:00';
-    return undefined;
-}
-
-export function isKnownType(t: string): t is Task['type'] {
-    return (KNOWN_TYPES as string[]).includes(t);
 }

@@ -666,7 +666,6 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
 
           {viewMode === 'worklogs' && (
             <WorkLogsPage
-              googleAuth={googleAuth}
               onAddLog={(msg, type) => addLog(msg, type)}
               onVoiceControllerChange={setWorkLogVoiceController}
             />

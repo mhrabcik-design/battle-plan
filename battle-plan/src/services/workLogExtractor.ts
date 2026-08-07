@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { db, type WorkLog, type Project } from '../db.ts';
+import { db, type Project } from '../db.ts';
 import {
     fetchWithTimeout,
     getErrorMessage,
@@ -16,7 +16,6 @@ import {
     normalizePeopleList,
     toIsoDate,
 } from '../utils/workLogBatch.ts';
-import { createWorkLogSyncId } from '../utils/workLogSyncIdentity.ts';
 
 /**
  * WorkLog extractor — z Gemini audio transkripce vytáhne strukturovaný WorkLog.
@@ -113,13 +112,6 @@ export interface ExtractedWorkLogBatch {
     confirmationReasons: string[];
 }
 
-export const createEmptyWorkLogBatch = (): ExtractedWorkLogBatch => ({
-    entries: [],
-    assumptions: [],
-    needsConfirmation: false,
-    confirmationReasons: [],
-});
-
 /** Pokusí se najít projekt v DB — case-insensitive match, přesná shoda, contains. */
 export function findProjectByName(name: string, allProjects: Project[]): Project | null {
     if (!name || !name.trim()) return null;
@@ -214,96 +206,6 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
             needsConfirmation: needsConfirmation || confirmationReasons.length > 0,
             confirmationReasons: Array.from(new Set(confirmationReasons)),
         },
-    };
-}
-
-/**
- * Aplikuje extrahovaná data — najde projekt, uloží WorkLog.
- * Vrací buď vytvořený WorkLog, nebo potřebu ručního doplnění projektu, nebo chybu.
- */
-export type ApplyResult =
-    | { ok: true; workLog: WorkLog; workLogs: WorkLog[] }
-    | { ok: false; error: string }
-    | { needsProject: true; extracted: ExtractedWorkLog };
-
-export async function applyExtractedWorkLog(
-    extracted: ExtractedWorkLog,
-    manualProjectId?: number
-): Promise<ApplyResult> {
-    const allProjects = await db.projects.toArray();
-    const activeProjects = allProjects.filter((p) => p.isActive);
-
-    // 1. Buď ručně zadaný projekt…
-    let project: Project | null = null;
-    if (manualProjectId) {
-        project = activeProjects.find((p) => p.id === manualProjectId) ?? null;
-    }
-
-    // 2. …nebo hledáme podle jména
-    if (!project) {
-        project = findProjectByName(extracted.projectName, activeProjects);
-    }
-
-    if (!project) {
-        return { needsProject: true, extracted };
-    }
-
-    // 3. Ulož WorkLog
-    const now = Date.now();
-    const syncId = createWorkLogSyncId();
-    const id = await db.workLogs.add({
-        syncId,
-        date: extracted.date,
-        projectId: project.id!,
-        projectName: project.name, // použijeme canonical name z DB
-        people: extracted.people,
-        hours: extracted.hours,
-        hoursPerPerson: extracted.hoursPerPerson,
-        peopleCount: extracted.peopleCount,
-        calculationNote: extracted.calculationNote,
-        assumptions: extracted.assumptions,
-        description: extracted.description || undefined,
-        source: 'voice',
-        createdAt: now,
-        updatedAt: now,
-    });
-
-    return {
-        ok: true,
-        workLog: {
-            id: id as number,
-            syncId,
-            date: extracted.date,
-            projectId: project.id!,
-            projectName: project.name,
-            people: extracted.people,
-            hours: extracted.hours,
-            hoursPerPerson: extracted.hoursPerPerson,
-            peopleCount: extracted.peopleCount,
-            calculationNote: extracted.calculationNote,
-            assumptions: extracted.assumptions,
-            description: extracted.description || undefined,
-            source: 'voice',
-            createdAt: now,
-            updatedAt: now,
-        },
-        workLogs: [{
-            id: id as number,
-            syncId,
-            date: extracted.date,
-            projectId: project.id!,
-            projectName: project.name,
-            people: extracted.people,
-            hours: extracted.hours,
-            hoursPerPerson: extracted.hoursPerPerson,
-            peopleCount: extracted.peopleCount,
-            calculationNote: extracted.calculationNote,
-            assumptions: extracted.assumptions,
-            description: extracted.description || undefined,
-            source: 'voice',
-            createdAt: now,
-            updatedAt: now,
-        }],
     };
 }
 
