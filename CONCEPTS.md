@@ -41,3 +41,5 @@ The shared pipeline does not merge domain logic: task semantic editing and WorkL
 The full lifecycle from browser microphone recording through AI extraction, proposal review, save, cancel, navigation away, and recorder unmount.
 
 Terminal actions in this lifecycle must clean up both visible proposal UI and source recorder state such as audio blobs, processing guards, timers, audio contexts, media recorder handlers, and media tracks.
+
+A shared voice entry point remains owned by the selected voice domain even while its page-local controller is not ready. During that interval it fails closed instead of falling back to a recorder from another domain.

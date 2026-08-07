@@ -1,13 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { db, type WorkLog, type Project } from '../db.ts';
+import { db, type Project } from '../db.ts';
 import {
     fetchWithTimeout,
-    getErrorMessage,
     getRetryDelay,
     isRetryableFetchError,
     prepareGeminiAudio,
     sleep,
 } from './audioAiPipeline.ts';
+import { getErrorMessage } from '../utils/errors.ts';
 import {
     calculatePersonHours,
     createWorkLogProposal,
@@ -16,15 +16,11 @@ import {
     normalizePeopleList,
     toIsoDate,
 } from '../utils/workLogBatch.ts';
-import { createWorkLogSyncId } from '../utils/workLogSyncIdentity.ts';
 
 /**
  * WorkLog extractor — z Gemini audio transkripce vytáhne strukturovaný WorkLog.
  *
- * Volá se z App.tsx, když `viewMode === 'worklogs'`. Vrací buď:
- *   - { workLog: {...} } při úspěchu (validní + projekt nalezen)
- *   - { needsProjectMatch: { ... } } když AI nenašel projekt v seznamu
- *   - { error: string } při chybě
+ * Převádí audio na dávku strukturovaných návrhů, které UI před uložením validuje a potvrdí.
  */
 
 export const WORKLOG_SYSTEM_PROMPT = `
@@ -112,13 +108,6 @@ export interface ExtractedWorkLogBatch {
     needsConfirmation: boolean;
     confirmationReasons: string[];
 }
-
-export const createEmptyWorkLogBatch = (): ExtractedWorkLogBatch => ({
-    entries: [],
-    assumptions: [],
-    needsConfirmation: false,
-    confirmationReasons: [],
-});
 
 /** Pokusí se najít projekt v DB — case-insensitive match, přesná shoda, contains. */
 export function findProjectByName(name: string, allProjects: Project[]): Project | null {
@@ -217,96 +206,6 @@ export function sanitizeExtractedWorkLog(raw: any): WorkLogExtractionResult {
     };
 }
 
-/**
- * Aplikuje extrahovaná data — najde projekt, uloží WorkLog.
- * Vrací buď vytvořený WorkLog, nebo potřebu ručního doplnění projektu, nebo chybu.
- */
-export type ApplyResult =
-    | { ok: true; workLog: WorkLog; workLogs: WorkLog[] }
-    | { ok: false; error: string }
-    | { needsProject: true; extracted: ExtractedWorkLog };
-
-export async function applyExtractedWorkLog(
-    extracted: ExtractedWorkLog,
-    manualProjectId?: number
-): Promise<ApplyResult> {
-    const allProjects = await db.projects.toArray();
-    const activeProjects = allProjects.filter((p) => p.isActive);
-
-    // 1. Buď ručně zadaný projekt…
-    let project: Project | null = null;
-    if (manualProjectId) {
-        project = activeProjects.find((p) => p.id === manualProjectId) ?? null;
-    }
-
-    // 2. …nebo hledáme podle jména
-    if (!project) {
-        project = findProjectByName(extracted.projectName, activeProjects);
-    }
-
-    if (!project) {
-        return { needsProject: true, extracted };
-    }
-
-    // 3. Ulož WorkLog
-    const now = Date.now();
-    const syncId = createWorkLogSyncId();
-    const id = await db.workLogs.add({
-        syncId,
-        date: extracted.date,
-        projectId: project.id!,
-        projectName: project.name, // použijeme canonical name z DB
-        people: extracted.people,
-        hours: extracted.hours,
-        hoursPerPerson: extracted.hoursPerPerson,
-        peopleCount: extracted.peopleCount,
-        calculationNote: extracted.calculationNote,
-        assumptions: extracted.assumptions,
-        description: extracted.description || undefined,
-        source: 'voice',
-        createdAt: now,
-        updatedAt: now,
-    });
-
-    return {
-        ok: true,
-        workLog: {
-            id: id as number,
-            syncId,
-            date: extracted.date,
-            projectId: project.id!,
-            projectName: project.name,
-            people: extracted.people,
-            hours: extracted.hours,
-            hoursPerPerson: extracted.hoursPerPerson,
-            peopleCount: extracted.peopleCount,
-            calculationNote: extracted.calculationNote,
-            assumptions: extracted.assumptions,
-            description: extracted.description || undefined,
-            source: 'voice',
-            createdAt: now,
-            updatedAt: now,
-        },
-        workLogs: [{
-            id: id as number,
-            syncId,
-            date: extracted.date,
-            projectId: project.id!,
-            projectName: project.name,
-            people: extracted.people,
-            hours: extracted.hours,
-            hoursPerPerson: extracted.hoursPerPerson,
-            peopleCount: extracted.peopleCount,
-            calculationNote: extracted.calculationNote,
-            assumptions: extracted.assumptions,
-            description: extracted.description || undefined,
-            source: 'voice',
-            createdAt: now,
-            updatedAt: now,
-        }],
-    };
-}
-
 // === Audio processing (paralelní geminiService.processAudio, ale s WorkLog promptem) ===
 
 const buildWorkLogSystemPrompt = (referenceDate = new Date()): string => {
@@ -401,7 +300,7 @@ export async function processWorkLogAudio(
             try {
                 parsed = JSON.parse(jsonMatch[0]);
             } catch (e) {
-                return { ok: false, error: `JSON parse fail: ${e instanceof Error ? e.message : String(e)}` };
+                return { ok: false, error: `JSON parse fail: ${getErrorMessage(e)}` };
             }
 
             return sanitizeExtractedWorkLog(parsed);

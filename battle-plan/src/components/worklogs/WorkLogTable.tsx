@@ -1,34 +1,11 @@
 import { useState, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { type WorkLog } from '../../db';
+import { currentMonthKey, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
 
 interface WorkLogTableProps {
     logs: WorkLog[];
-    /** Když true, komponenta sama zobrazuje toolbar s měsícem + součty. Když false, je to "holá" tabulka (placeholder pro F4 calendar). */
-    embedded?: boolean;
 }
-
-const COLOR_DOT: Record<string, string> = {
-    slate: 'bg-slate-400',
-    indigo: 'bg-indigo-400',
-    emerald: 'bg-emerald-400',
-    amber: 'bg-amber-400',
-    rose: 'bg-rose-400',
-};
-
-/** Vrátí YYYY-MM první den aktuálního měsíce. */
-const currentMonthKey = (offset = 0): string => {
-    const d = new Date();
-    d.setDate(1);
-    d.setMonth(d.getMonth() + offset);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-};
-
-const monthLabel = (key: string): string => {
-    const [y, m] = key.split('-');
-    const d = new Date(Number(y), Number(m) - 1, 1);
-    return d.toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' });
-};
 
 const dateInMonth = (date: string, monthKey: string): boolean => date.startsWith(monthKey);
 
@@ -56,7 +33,7 @@ function aggregateByDay(logs: WorkLog[]) {
     return days;
 }
 
-export function WorkLogTable({ logs, embedded = true }: WorkLogTableProps) {
+export function WorkLogTable({ logs }: WorkLogTableProps) {
     const [monthKey, setMonthKey] = useState(currentMonthKey(0));
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -97,16 +74,6 @@ export function WorkLogTable({ logs, embedded = true }: WorkLogTableProps) {
             return next;
         });
     };
-
-    if (!embedded) {
-        // Placeholder pro F4 calendar — zatím prázdné
-        return (
-            <div className="p-12 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
-                <CalendarIcon className="w-10 h-10 text-slate-800 mx-auto mb-3" />
-                <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">Kalendář (připravujeme)</p>
-            </div>
-        );
-    }
 
     return (
         <div className="space-y-4">
@@ -209,7 +176,7 @@ export function WorkLogTable({ logs, embedded = true }: WorkLogTableProps) {
                                                     <td className="px-4 py-2"></td>
                                                     <td className="px-4 py-2">
                                                         <span className="flex items-center gap-2">
-                                                            <span className={`w-2 h-2 rounded-full ${COLOR_DOT['slate']}`} />
+                                                            <span className="w-2 h-2 rounded-full bg-slate-400" />
                                                             <span className="text-white text-xs font-bold">{projectName}</span>
                                                         </span>
                                                     </td>
@@ -259,13 +226,4 @@ export function WorkLogTable({ logs, embedded = true }: WorkLogTableProps) {
             </div>
         </div>
     );
-}
-
-// Helper — převede YYYY-MM klíč na offset měsíců od aktuálního
-function monthKeyToOffset(key: string): number {
-    const [y, m] = key.split('-').map(Number);
-    const now = new Date();
-    const baseY = now.getFullYear();
-    const baseM = now.getMonth() + 1;
-    return (y - baseY) * 12 + (m - baseM);
 }
