@@ -99,3 +99,120 @@ test('U3: Drive merge applies newer archive and restore states without rewriting
     assert.equal(await db.projects.count(), 1);
     assert.deepEqual(await db.workLogs.get(workLogId), history);
 });
+
+test('Drive merge matches trim-equivalent project names through catalog normalization', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({
+        name: '  Plaza  ', color: 'slate', isActive: true, createdAt: 10, updatedAt: 20,
+    });
+
+    const result = await mergeCloudToLocal([], [{
+        id: 999,
+        name: 'PLAZA',
+        color: 'rose',
+        isActive: false,
+        createdAt: 1,
+        updatedAt: 40,
+    }]);
+
+    assert.equal(result.projectsAdded, 0);
+    assert.equal(result.projectsUpdated, 1);
+    assert.equal(await db.projects.count(), 1);
+    assert.deepEqual(await db.projects.get(projectId), {
+        id: projectId,
+        name: 'PLAZA',
+        color: 'rose',
+        isActive: false,
+        createdAt: 10,
+        updatedAt: 40,
+    });
+});
+
+test('Drive merge does not guess among multiple legacy normalized project matches', async () => {
+    await resetDb();
+    const firstId = await db.projects.add({
+        name: 'Plaza', color: 'slate', isActive: true, createdAt: 10, updatedAt: 20,
+    });
+    const secondId = await db.projects.add({
+        name: ' plaza ', color: 'emerald', isActive: false, createdAt: 11, updatedAt: 21,
+    });
+
+    const result = await mergeCloudToLocal([], [{
+        id: 999,
+        name: 'PLAZA',
+        color: 'rose',
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 40,
+    }]);
+
+    assert.equal(result.projectsAdded, 0);
+    assert.equal(result.projectsUpdated, 0);
+    assert.equal(await db.projects.count(), 2);
+    assert.equal((await db.projects.get(firstId))?.color, 'slate');
+    assert.equal((await db.projects.get(firstId))?.updatedAt, 20);
+    assert.equal((await db.projects.get(secondId))?.color, 'emerald');
+    assert.equal((await db.projects.get(secondId))?.updatedAt, 21);
+});
+
+test('Drive merge keeps normalized project buckets current within one cloud payload', async () => {
+    await resetDb();
+
+    const result = await mergeCloudToLocal([], [
+        {
+            id: 998,
+            name: 'Plaza',
+            color: 'slate',
+            isActive: true,
+            createdAt: 10,
+            updatedAt: 20,
+        },
+        {
+            id: 999,
+            name: ' plaza ',
+            color: 'rose',
+            isActive: false,
+            createdAt: 11,
+            updatedAt: 40,
+        },
+    ]);
+
+    assert.equal(result.projectsAdded, 1);
+    assert.equal(result.projectsUpdated, 1);
+    assert.equal(await db.projects.count(), 1);
+    const [project] = await db.projects.toArray();
+    assert.equal(project?.name, ' plaza ');
+    assert.equal(project?.color, 'rose');
+    assert.equal(project?.isActive, false);
+    assert.equal(project?.createdAt, 10);
+    assert.equal(project?.updatedAt, 40);
+});
+
+test('overlapping Drive merges cannot create normalized project duplicates', async () => {
+    await resetDb();
+
+    const results = await Promise.all([
+        mergeCloudToLocal([], [{
+            id: 998,
+            name: 'Plaza',
+            color: 'slate',
+            isActive: true,
+            createdAt: 10,
+            updatedAt: 20,
+        }]),
+        mergeCloudToLocal([], [{
+            id: 999,
+            name: ' plaza ',
+            color: 'rose',
+            isActive: false,
+            createdAt: 11,
+            updatedAt: 40,
+        }]),
+    ]);
+
+    assert.equal(results.reduce((sum, result) => sum + result.projectsAdded, 0), 1);
+    assert.equal(await db.projects.count(), 1);
+    const [project] = await db.projects.toArray();
+    assert.equal(project?.color, 'rose');
+    assert.equal(project?.updatedAt, 40);
+});

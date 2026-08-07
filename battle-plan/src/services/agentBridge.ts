@@ -13,7 +13,10 @@ import {
   addWorkLogWithActiveProject,
   ProjectUnavailableError,
   type NewWorkLogDraft,
+  type WorkLogEditableChanges,
+  updateWorkLogWithProjectSelection,
 } from './workLogPersistence.ts';
+import { createWorkLogSyncId } from '../utils/workLogSyncIdentity.ts';
 
 export type AgentWriteAction =
   | 'create_task'
@@ -54,9 +57,28 @@ interface PendingWritesFile {
 
 export interface ApplyWriteResult {
   success: boolean;
+  disposition: 'applied' | 'terminal' | 'retryable';
   newId?: number;
   last_error?: string;
   outcome?: ProjectCatalogResult['outcome'];
+}
+
+type ApplyWriteDetails = Partial<Pick<ApplyWriteResult, 'newId' | 'last_error' | 'outcome'>>;
+
+function appliedWrite(details: ApplyWriteDetails = {}): ApplyWriteResult {
+  return { success: true, disposition: 'applied', ...details };
+}
+
+function terminalWrite(last_error: string, details: ApplyWriteDetails = {}): ApplyWriteResult {
+  return { success: false, disposition: 'terminal', last_error, ...details };
+}
+
+function retryableWrite(last_error: string): ApplyWriteResult {
+  return { success: false, disposition: 'retryable', last_error };
+}
+
+export function shouldAcknowledgeApplyWrite(result: ApplyWriteResult): boolean {
+  return result.disposition !== 'retryable';
 }
 
 function projectResultToApplyWrite(result: ProjectCatalogResult): ApplyWriteResult {
@@ -65,15 +87,15 @@ function projectResultToApplyWrite(result: ProjectCatalogResult): ApplyWriteResu
     case 'restored':
     case 'updated':
     case 'archived':
-      return { success: true, newId: result.project.id, outcome: result.outcome };
+      return appliedWrite({ newId: result.project.id, outcome: result.outcome });
     case 'duplicate':
-      return { success: false, last_error: 'project already exists', outcome: result.outcome };
+      return terminalWrite('project already exists', { outcome: result.outcome });
     case 'archived-match':
-      return { success: false, last_error: 'project archived', outcome: result.outcome };
+      return terminalWrite('project archived', { outcome: result.outcome });
     case 'conflict':
-      return { success: false, last_error: 'project name conflict', outcome: result.outcome };
+      return terminalWrite('project name conflict', { outcome: result.outcome });
     case 'validation':
-      return { success: false, last_error: result.message, outcome: result.outcome };
+      return terminalWrite(result.message, { outcome: result.outcome });
   }
 }
 
@@ -130,10 +152,10 @@ class AgentBridge {
       if (write.action === 'create_settings' || write.action === 'update_settings' || write.action === 'delete_settings') {
         return await this.applySettingsAction(write);
       }
-      return { success: false, last_error: `unsupported action: ${write.action}` };
+      return terminalWrite(`unsupported action: ${write.action}`);
     } catch (e) {
       console.error('AgentBridge: applyWrite failed', e);
-      return { success: false, last_error: e instanceof Error ? e.message : String(e) };
+      return retryableWrite(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -159,13 +181,13 @@ class AgentBridge {
         }
       }
 
-      return { success: true, newId: newId as number, last_error: norm.last_error };
+      return appliedWrite({ newId: newId as number, last_error: norm.last_error });
     }
 
     if (write.action === 'update_task') {
-      if (!data.id) return { success: false, last_error: 'task_data.id missing' };
+      if (!data.id) return terminalWrite('task_data.id missing');
       const existing = await db.tasks.get(data.id);
-      if (!existing) return { success: false, last_error: 'task not found' };
+      if (!existing) return terminalWrite('task not found');
       const norm = normalizeEntity(data, 'update', existing);
       await db.tasks.update(data.id, {
         ...norm.value,
@@ -173,13 +195,13 @@ class AgentBridge {
         agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
         updatedAt: Date.now(),
       });
-      return { success: true, last_error: norm.last_error };
+      return appliedWrite({ last_error: norm.last_error });
     }
 
     if (write.action === 'complete_task') {
-      if (!data.id) return { success: false, last_error: 'task_data.id missing' };
+      if (!data.id) return terminalWrite('task_data.id missing');
       const existing = await db.tasks.get(data.id);
-      if (!existing) return { success: false, last_error: 'task not found' };
+      if (!existing) return terminalWrite('task not found');
       const norm = normalizeEntity(data, 'complete', existing);
       await db.tasks.update(data.id, {
         ...norm.value,
@@ -192,13 +214,13 @@ class AgentBridge {
       if (linked.googleId) {
         await googleService.updateGoogleTask(linked.googleId, { status: 'completed' }, linked.googleListId);
       }
-      return { success: true, last_error: norm.last_error };
+      return appliedWrite({ last_error: norm.last_error });
     }
 
     // delete_task
-    if (!data.id) return { success: false, last_error: 'task_data.id missing' };
+    if (!data.id) return terminalWrite('task_data.id missing');
     const existing = await db.tasks.get(data.id);
-    if (!existing) return { success: false, last_error: 'task not found' };
+    if (!existing) return terminalWrite('task not found');
     await db.tasks.update(data.id, {
       isDeleted: true,
       source: existing.source ?? 'agent',
@@ -210,7 +232,7 @@ class AgentBridge {
     if (linked.googleEventId) {
       await googleService.deleteFromCalendar(linked.googleEventId);
     }
-    return { success: true };
+    return appliedWrite();
   }
 
   private async applyWorklogAction(
@@ -219,12 +241,12 @@ class AgentBridge {
     const data = (write.worklog_data ?? {}) as Partial<WorkLog> & { id?: number };
 
     if (write.action === 'create_worklog') {
-      if (!data.projectId) return { success: false, last_error: 'projectId required' };
-      if (!data.date) return { success: false, last_error: 'date required' };
-      if (typeof data.hours !== 'number' || data.hours <= 0) return { success: false, last_error: 'hours must be > 0' };
+      if (!data.projectId) return terminalWrite('projectId required');
+      if (!data.date) return terminalWrite('date required');
+      if (typeof data.hours !== 'number' || data.hours <= 0) return terminalWrite('hours must be > 0');
       const now = Date.now();
       const draft: NewWorkLogDraft = {
-        syncId: data.syncId,
+        syncId: data.syncId ?? createWorkLogSyncId(),
         date: data.date,
         projectId: data.projectId,
         projectName: data.projectName,
@@ -246,30 +268,65 @@ class AgentBridge {
         saved = await addWorkLogWithActiveProject(draft);
       } catch (error) {
         if (error instanceof ProjectUnavailableError) {
-          return { success: false, last_error: error.message };
+          return terminalWrite(error.message);
         }
         throw error;
       }
-      return { success: true, newId: saved.id };
+      return appliedWrite({ newId: saved.id });
     }
 
     if (write.action === 'update_worklog') {
-      if (!data.id) return { success: false, last_error: 'worklog id missing' };
-      const existing = await db.workLogs.get(data.id);
-      if (!existing) return { success: false, last_error: 'worklog not found' };
-      await db.workLogs.update(data.id, {
-        ...data,
-        source: existing.source,
-        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+      if (!data.id) return terminalWrite('worklog id missing');
+      const hasProjectId = data.projectId !== undefined;
+      const hasProjectName = data.projectName !== undefined;
+      if (hasProjectId !== hasProjectName) {
+        return terminalWrite('projectId and projectName required together');
+      }
+      if (hasProjectId && (
+        typeof data.projectId !== 'number'
+        || !Number.isSafeInteger(data.projectId)
+        || data.projectId <= 0
+        || typeof data.projectName !== 'string'
+        || !data.projectName.trim()
+      )) {
+        return terminalWrite('valid projectId and projectName required together');
+      }
+
+      const changes: WorkLogEditableChanges = {
+        ...(data.date === undefined ? {} : { date: data.date }),
+        ...(data.people === undefined ? {} : { people: data.people }),
+        ...(data.hours === undefined ? {} : { hours: data.hours }),
+        ...(data.hoursPerPerson === undefined ? {} : { hoursPerPerson: data.hoursPerPerson }),
+        ...(data.peopleCount === undefined ? {} : { peopleCount: data.peopleCount }),
+        ...(data.calculationNote === undefined ? {} : { calculationNote: data.calculationNote }),
+        ...(data.assumptions === undefined ? {} : { assumptions: data.assumptions }),
+        ...(data.extractionBatchId === undefined ? {} : { extractionBatchId: data.extractionBatchId }),
+        ...(data.description === undefined ? {} : { description: data.description }),
         updatedAt: Date.now(),
-      });
-      return { success: true };
+      };
+      const selectedProject = hasProjectId
+        ? { id: data.projectId!, name: data.projectName! }
+        : null;
+
+      try {
+        await updateWorkLogWithProjectSelection({
+          id: data.id,
+          selectedProject,
+          changes,
+        });
+      } catch (error) {
+        if (error instanceof ProjectUnavailableError || (error instanceof Error && error.message === 'worklog-not-found')) {
+          return terminalWrite(error.message);
+        }
+        throw error;
+      }
+      return appliedWrite();
     }
 
     // delete_worklog: hard delete (worklogs are not soft-deleted in this app).
-    if (!data.id) return { success: false, last_error: 'worklog id missing' };
+    if (!data.id) return terminalWrite('worklog id missing');
     await db.workLogs.delete(data.id);
-    return { success: true };
+    return appliedWrite();
   }
 
   private async applyProjectAction(
@@ -311,20 +368,20 @@ class AgentBridge {
     write: AgentWrite
   ): Promise<ApplyWriteResult> {
     const data = write.settings_data;
-    if (!data || !data.id) return { success: false, last_error: 'settings id required' };
+    if (!data || !data.id) return terminalWrite('settings id required');
 
     if (write.action === 'delete_settings') {
       if (!AgentBridge.DELETABLE_SETTINGS[data.id]) {
-        return { success: false, last_error: 'key-not-deletable' };
+        return terminalWrite('key-not-deletable');
       }
       await db.settings.delete(data.id);
-      return { success: true };
+      return appliedWrite();
     }
 
     // create_settings / update_settings: the put() is the same operation in
     // Dexie; the action name disambiguates intent.
     if (data.value === '' && data.id === 'gemini_api_key') {
-      return { success: false, last_error: 'gemini_api_key cannot be empty' };
+      return terminalWrite('gemini_api_key cannot be empty');
     }
     const existing = await db.settings.get(data.id);
     const next: Setting = {
@@ -340,7 +397,7 @@ class AgentBridge {
       next.agent_write_id = existing.agent_write_id ?? write.id;
     }
     await db.settings.put(next);
-    return { success: true };
+    return appliedWrite();
   }
 
   async markApplied(writeIds: string[]): Promise<void> {

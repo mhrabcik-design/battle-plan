@@ -57,7 +57,10 @@ Agent zapisuje příkazy do Google Drive souboru `agent-pending-writes.json`. Ko
 - Kořen souboru obsahuje `writes[]`.
 - Každý zápis má stabilní `id`, `action`, `created_at` a právě jeden odpovídající payload: `task_data`, `worklog_data`, `project_data` nebo `settings_data`.
 - Podporováno je 13 akcí: `create_task`, `update_task`, `delete_task`, `complete_task`; `create_worklog`, `update_worklog`, `delete_worklog`; `create_project`, `update_project`, `delete_project`; `create_settings`, `update_settings`, `delete_settings`.
-- Aplikace načítá jen dosud neaplikované zápisy, zrcadlí jejich stav do `agentInbox`, provede doménovou změnu a po úspěchu doplní `applied_at` zpět do Drive souboru.
+- `create_project` založí aktivní projekt. Stejný normalizovaný název aktivního projektu je terminální duplicita; stejný název archivovaného projektu obnoví původní ID. Volitelná `color` při obnovení nahradí uloženou barvu.
+- `delete_project` je měkká archivace (`isActive: false`): projekt ani jeho historické WorkLogy se nemažou. Samostatná restore akce neexistuje; pro obnovu použij `create_project` se stejným názvem.
+- `update_worklog` bez `projectId` a `projectName` zachová historické přiřazení. Změna projektu musí poslat obě pole a cílit na aktuálně aktivní shodné ID/jméno; `syncId` ani auditní pole se aktualizací nemění.
+- Aplikace načítá jen dosud neaplikované zápisy, zrcadlí jejich stav do `agentInbox` a provede doménovou změnu. Úspěšné i deterministicky neplatné zápisy dostanou `applied_at` zpět do Drive souboru; přechodná I/O selhání zůstávají k opakování.
 - Změna seznamu akcí nebo payloadu vyžaduje současnou úpravu typů, mapy `ENTITY_BY_ACTION`, testů Agent Bridge a tohoto dokumentu.
 
 ## Datové mapování

@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, Plus, X } from 'lucide-react';
 import { db, type Project, type ProjectColor } from '../../db';
-import { createProject, type ProjectCatalogResult } from '../../services/projectCatalog';
+import { createProject, restoreProject, type ProjectCatalogResult } from '../../services/projectCatalog';
 import { PROJECT_COLOR_OPTIONS } from '../../utils/projectColors';
 
 interface ProjectPickerProps {
@@ -18,6 +18,8 @@ function resultMessage(result: ProjectCatalogResult): string {
     return 'Projekt se nepodařilo založit.';
 }
 
+const CATALOG_FAILURE_MESSAGE = 'Projekt se nepodařilo uložit. Zkuste to znovu.';
+
 export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProps) {
     const [open, setOpen] = useState(false);
     const [showNew, setShowNew] = useState(false);
@@ -26,6 +28,7 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
     const [message, setMessage] = useState<string | null>(null);
     const [pendingRestore, setPendingRestore] = useState<Project | null>(null);
     const [busy, setBusy] = useState(false);
+    const busyRef = useRef(false);
     const ref = useRef<HTMLDivElement>(null);
     const projects = useLiveQuery(async () => {
         const all = await db.projects.toArray();
@@ -51,16 +54,26 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
         setMessage(null);
     };
 
-    const handleCreate = async (confirmRestore = false) => {
-        if (!newName.trim()) return;
+    const beginCatalogRequest = () => {
+        if (busyRef.current) return false;
+        busyRef.current = true;
         setBusy(true);
+        return true;
+    };
+
+    const endCatalogRequest = () => {
+        busyRef.current = false;
+        setBusy(false);
+    };
+
+    const handleCreate = async () => {
+        if (!newName.trim() || !beginCatalogRequest()) return;
         setMessage(null);
         try {
             const result = await createProject({
                 name: newName,
                 color: newColor,
                 source: 'user',
-                confirmRestore,
             });
             if (result.outcome === 'archived-match') {
                 setPendingRestore(result.project);
@@ -74,8 +87,34 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
                 return;
             }
             setMessage(resultMessage(result));
+        } catch {
+            setMessage(CATALOG_FAILURE_MESSAGE);
         } finally {
-            setBusy(false);
+            endCatalogRequest();
+        }
+    };
+
+    const handlePendingRestore = async () => {
+        const project = pendingRestore;
+        if (!project?.id || !beginCatalogRequest()) return;
+        setMessage(null);
+        try {
+            const result = await restoreProject({
+                id: project.id,
+                color: newColor,
+                source: 'user',
+            });
+            if (result.outcome === 'restored') {
+                onSelect(result.project);
+                resetCreate();
+                setOpen(false);
+                return;
+            }
+            setMessage(resultMessage(result));
+        } catch {
+            setMessage(CATALOG_FAILURE_MESSAGE);
+        } finally {
+            endCatalogRequest();
         }
     };
 
@@ -136,16 +175,17 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
                             <div className="space-y-3 p-4">
                                 <div className="flex items-center justify-between">
                                     <span className="text-xs font-black uppercase tracking-widest text-slate-400">Nový projekt</span>
-                                    <button type="button" aria-label="Zavřít založení projektu" onClick={resetCreate} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button>
+                                    <button type="button" aria-label="Zavřít založení projektu" onClick={resetCreate} disabled={busy} className="text-slate-500 hover:text-white disabled:opacity-50"><X className="h-4 w-4" /></button>
                                 </div>
                                 <label>
                                     <span className="sr-only">Název nového projektu</span>
                                     <input
                                         value={newName}
                                         onChange={(event) => { setNewName(event.target.value); setPendingRestore(null); setMessage(null); }}
-                                        onKeyDown={(event) => { if (event.key === 'Enter') void handleCreate(false); }}
+                                        onKeyDown={(event) => { if (event.key === 'Enter') void handleCreate(); }}
+                                        disabled={busy}
                                         placeholder="Název projektu (např. KB Plaza)"
-                                        className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-600 focus:border-indigo-500"
+                                        className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-600 focus:border-indigo-500 disabled:opacity-50"
                                         autoFocus
                                     />
                                 </label>
@@ -158,17 +198,18 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
                                                 key={color.value}
                                                 type="button"
                                                 onClick={() => setNewColor(color.value)}
+                                                disabled={busy}
                                                 aria-label={`Barva ${color.label}`}
                                                 aria-pressed={newColor === color.value}
-                                                className={`h-9 w-9 rounded-lg border-2 transition-all ${color.bg} ${newColor === color.value ? `scale-110 ring-2 ${color.ring}` : 'opacity-60 hover:opacity-100'}`}
+                                                className={`h-9 w-9 rounded-lg border-2 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${color.bg} ${newColor === color.value ? `scale-110 ring-2 ${color.ring}` : 'opacity-60 hover:opacity-100'}`}
                                             />
                                         ))}
                                     </div>
                                 </fieldset>
                                 {pendingRestore ? (
-                                    <button type="button" onClick={() => void handleCreate(true)} disabled={busy} className="w-full rounded-lg bg-amber-500/20 py-2 text-sm font-black uppercase tracking-widest text-amber-200 hover:bg-amber-500/30 disabled:opacity-50">Obnovit původní projekt</button>
+                                    <button type="button" onClick={() => void handlePendingRestore()} disabled={busy} className="w-full rounded-lg bg-amber-500/20 py-2 text-sm font-black uppercase tracking-widest text-amber-200 hover:bg-amber-500/30 disabled:opacity-50">Obnovit původní projekt</button>
                                 ) : (
-                                    <button type="button" onClick={() => void handleCreate(false)} disabled={!newName.trim() || busy} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-black uppercase tracking-widest text-white hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600">Vytvořit projekt</button>
+                                    <button type="button" onClick={() => void handleCreate()} disabled={!newName.trim() || busy} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-black uppercase tracking-widest text-white hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600">Vytvořit projekt</button>
                                 )}
                             </div>
                         )}

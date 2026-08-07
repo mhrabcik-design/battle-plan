@@ -2,6 +2,7 @@ import { db, type Project, type Setting, type WorkLog } from '../db.ts';
 
 export interface AppContext {
     activeProjects: { id: number; name: string; color: Project['color'] }[];
+    archivedProjects: { id: number; name: string; color: Project['color'] }[];
     todaysWorklogs: { id: number; projectName: string; hours: number }[];
     config: { model: string; uiScale: number; locale: string };
 }
@@ -26,6 +27,14 @@ function pickActiveProjects(all: Project[]): { id: number; name: string; color: 
         .map((p) => ({ id: p.id!, name: p.name, color: p.color }));
 }
 
+function pickArchivedProjects(all: Project[]): { id: number; name: string; color: Project['color'] }[] {
+    return all
+        .filter((p) => !p.isActive)
+        .sort((a, b) => a.name.localeCompare(b.name, 'cs'))
+        .slice(0, ACTIVE_PROJECTS_LIMIT)
+        .map((p) => ({ id: p.id!, name: p.name, color: p.color }));
+}
+
 function pickTodaysWorklogs(all: WorkLog[], today: string): { id: number; projectName: string; hours: number }[] {
     return all
         .filter((w) => w.date === today)
@@ -44,6 +53,7 @@ export async function buildAppContext(): Promise<AppContext> {
     ]);
     return {
         activeProjects: pickActiveProjects(projects),
+        archivedProjects: pickArchivedProjects(projects),
         todaysWorklogs: pickTodaysWorklogs(worklogs, today),
         config: {
             model: modelSetting?.value ?? DEFAULT_MODEL,
@@ -67,6 +77,19 @@ export function renderAppContextSection(ctx: AppContext): string {
         }
     } else {
         sections.push('Žádné aktivní projekty.');
+    }
+    sections.push('');
+    if (ctx.archivedProjects.length > 0) {
+        sections.push('**Archivované projekty (nejsou platné pro nové WorkLogy):**');
+        for (const p of ctx.archivedProjects) {
+            sections.push(`- ${p.name} (id=${p.id}, barva=${p.color})`);
+        }
+        if (ctx.archivedProjects.length === ACTIVE_PROJECTS_LIMIT) {
+            sections.push(`(+ další)`);
+        }
+        sections.push('Obnovení: pošli create_project se stejným názvem; aplikace obnoví původní ID.');
+    } else {
+        sections.push('Žádné archivované projekty.');
     }
     sections.push('');
     if (ctx.todaysWorklogs.length > 0) {

@@ -27,15 +27,16 @@ Treat the project catalog as one domain boundary, not as picker state.
 
 - Normalize names in one place and make lookup plus mutation one transaction. The catalog service returns explicit outcomes for create, duplicate, archived match, restore, conflict, and validation instead of making callers infer what happened (`battle-plan/src/services/projectCatalog.ts:83`).
 - Use soft archival. New records can select only active projects, while existing WorkLogs keep their snapshotted project name. The durable Project and WorkLog fields are defined separately (`battle-plan/src/db.ts:46`, `battle-plan/src/db.ts:58`).
-- Make UI consumers reactive to persisted state. The management surface and picker observe the project table, so create, archive, restore, and color changes appear without remounting (`battle-plan/src/components/worklogs/ProjectManager.tsx:41`, `battle-plan/src/components/worklogs/ProjectPicker.tsx:37`).
-- Validate the project in the same transaction that writes a new WorkLog. Batch voice input validates every project before adding any row, so one stale selection aborts the whole batch (`battle-plan/src/services/workLogPersistence.ts:40`).
-- Preserve an unchanged historical assignment during edit. Require an active project only when the assignment changes (`battle-plan/src/services/workLogPersistence.ts:74`).
+- Make UI consumers reactive to persisted state. The management surface and picker observe the project table, so create, archive, restore, and color changes appear without remounting (`battle-plan/src/components/worklogs/ProjectManager.tsx:27`, `battle-plan/src/components/worklogs/ProjectPicker.tsx:33`). Restore confirmations bind to the captured project ID, not a second name lookup.
+- Validate the project in the same transaction that writes a new WorkLog. Batch voice input validates every project before adding any row, so one stale selection aborts the whole batch (`battle-plan/src/services/workLogPersistence.ts:47`).
+- Preserve an unchanged historical assignment during edit. Require an active project only when the assignment changes (`battle-plan/src/services/workLogPersistence.ts:86`). Agent updates use this same boundary and preserve the WorkLog sync identity.
+- Use the catalog's normalization rule when merging synced projects. Keep collision buckets rather than one arbitrary row, and never guess when legacy data contains multiple normalized matches (`battle-plan/src/services/workLogsSync.ts:176`).
 
 An archived normalized-name match is not silently treated as a new project. Human-facing creation asks for confirmation before restoring the original row. An explicit Agent Bridge create action already carries that intent. If old data contains multiple normalized matches, the catalog reports a conflict and does not guess, merge identities, or rewrite WorkLogs.
 
 ## Why This Matters
 
-Keeping lifecycle logic in one transaction boundary prevents two callers from creating normalized duplicates and closes the gap where a project could be archived between validation and WorkLog persistence. Explicit outcomes also keep UI feedback and Agent Bridge behavior aligned.
+Keeping lifecycle logic in one transaction boundary prevents two callers from creating normalized duplicates and closes the gap where a project could be archived between validation and WorkLog persistence. Explicit outcomes also keep UI feedback and Agent Bridge behavior aligned. Deterministic Agent Bridge rejections are terminal acknowledgements; only transient storage or transport failures should be retried.
 
 The denormalized project name on each WorkLog is intentional historical data. It keeps reports readable when a project is archived, missing, or imported from another device whose numeric project ID collides with a different local row. Numeric IDs are therefore not sufficient to identify an imported selection; the stored name must agree too.
 

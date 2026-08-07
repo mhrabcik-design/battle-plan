@@ -2,6 +2,7 @@ import { db, type WorkLog, type Project } from '../db';
 import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
 import { getWorkLogSyncKey } from '../utils/workLogSyncIdentity';
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
+import { normalizeProjectName } from './projectCatalog';
 
 /**
  * WorkLogsSync — Drive I/O pro `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
@@ -164,20 +165,24 @@ export async function mergeCloudToLocal(
     };
 
     const localWorkLogs = await db.workLogs.toArray();
-    const localProjects = await db.projects.toArray();
-
     const localWorkLogsByCompositeKey = new Map<string, WorkLog>();
     for (const wl of localWorkLogs) {
         const key = getWorkLogSyncKey(wl);
         localWorkLogsByCompositeKey.set(key, wl);
     }
 
-    const localProjectsByName = new Map<string, Project>();
-    for (const p of localProjects) {
-        localProjectsByName.set(p.name.toLowerCase(), p);
-    }
-
     await db.transaction('rw', [db.workLogs, db.projects], async () => {
+        const localProjectsByName = new Map<string, Project[]>();
+        for (const project of await db.projects.toArray()) {
+            const normalizedName = normalizeProjectName(project.name);
+            const matches = localProjectsByName.get(normalizedName);
+            if (matches) {
+                matches.push(project);
+            } else {
+                localProjectsByName.set(normalizedName, [project]);
+            }
+        }
+
         // === WorkLogs ===
         for (const cw of cloudWorkLogs) {
             const key = getWorkLogSyncKey(cw);
@@ -207,25 +212,33 @@ export async function mergeCloudToLocal(
 
         // === Projects ===
         for (const cp of cloudProjects) {
-            const local = localProjectsByName.get(cp.name.toLowerCase());
-            if (!local) {
+            const normalizedName = normalizeProjectName(cp.name);
+            const matches = localProjectsByName.get(normalizedName) ?? [];
+            if (matches.length === 0) {
                 const withoutId = { ...cp };
                 delete withoutId.id;
-                await db.projects.add({
+                const project: Project = {
                     ...withoutId,
                     isActive: withoutId.isActive ?? true,
                     createdAt: withoutId.createdAt ?? Date.now(),
                     updatedAt: withoutId.updatedAt ?? Date.now(),
-                });
+                };
+                const id = await db.projects.add(project);
+                localProjectsByName.set(normalizedName, [{ ...project, id: id as number }]);
                 result.projectsAdded++;
-            } else if ((cp.updatedAt ?? 0) > (local.updatedAt ?? 0)) {
-                await db.projects.update(local.id!, {
+            } else if (matches.length === 1) {
+                const local = matches[0]!;
+                if ((cp.updatedAt ?? 0) <= (local.updatedAt ?? 0)) continue;
+
+                const changes: Partial<Project> = {
                     name: cp.name,
                     color: cp.color,
                     isActive: cp.isActive,
                     updatedAt: cp.updatedAt ?? Date.now(),
                     // createdAt zachovej
-                });
+                };
+                await db.projects.update(local.id!, changes);
+                matches[0] = { ...local, ...changes };
                 result.projectsUpdated++;
             }
         }
