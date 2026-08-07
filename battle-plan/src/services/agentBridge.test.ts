@@ -333,7 +333,7 @@ test('U4: create_worklog rejects inactive projectId with project-not-found', asy
     assert.equal(result.last_error, 'project-not-found');
 });
 
-test('U4: create_project re-activates an existing soft-deleted project with the same name (case-insensitive)', async () => {
+test('U1: Agent Bridge create confirms a trimmed archived match and preserves its identity', async () => {
     seedSignedInStorage();
     setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
     (agentBridge as unknown as { drive: { init: () => Promise<boolean>; readJsonFile: () => Promise<{ fileId: string | null; data: unknown } | null>; writeJsonFile: () => Promise<string> } }).drive = {
@@ -342,21 +342,72 @@ test('U4: create_project re-activates an existing soft-deleted project with the 
         writeJsonFile: async () => 'fake-file-id',
     };
     await resetDb();
+    const createdAt = Date.now() - 10_000;
     const oldId = await db.projects.add({
-        name: 'Plaza', color: 'slate', isActive: false, updatedAt: Date.now(), createdAt: Date.now(),
+        name: 'Plaza', color: 'slate', isActive: false, source: 'user', updatedAt: createdAt, createdAt,
     } as Project);
 
     const result = await agentBridge.applyWrite({
         id: 'agent-proj-1',
         action: 'create_project',
-        project_data: { name: 'plaza', color: 'indigo' },
+        project_data: { name: '  plaza  ', color: 'indigo' },
         created_at: Date.now(),
     });
     assert.equal(result.success, true);
+    assert.equal(result.outcome, 'restored');
     assert.equal(result.newId, oldId, 'should re-activate the existing project, not create a new one');
+    assert.equal(await db.projects.count(), 1);
     const stored = await db.projects.get(oldId);
     assert.equal(stored!.isActive, true);
+    assert.equal(stored!.name, 'Plaza');
     assert.equal(stored!.color, 'indigo');
+    assert.equal(stored!.source, 'agent');
+    assert.equal(stored!.agent_write_id, 'agent-proj-1');
+    assert.equal(stored!.createdAt, createdAt);
+});
+
+test('U1: Agent Bridge returns duplicate for an active normalized match without writing', async () => {
+    await resetDb();
+    const original: Project = {
+        name: 'Plaza', color: 'slate', isActive: true, source: 'user', updatedAt: 20, createdAt: 10,
+    };
+    const id = await db.projects.add(original);
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-proj-duplicate',
+        action: 'create_project',
+        project_data: { name: ' PLAZA ', color: 'rose' },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.outcome, 'duplicate');
+    assert.equal(result.last_error, 'project already exists');
+    assert.deepEqual(await db.projects.toArray(), [{ ...original, id }]);
+});
+
+test('U1: Agent Bridge surfaces seeded legacy collisions as conflict without mutation', async () => {
+    await resetDb();
+    const first = await db.projects.add({
+        name: 'Plaza', color: 'slate', isActive: true, updatedAt: 20, createdAt: 10,
+    } as Project);
+    const second = await db.projects.add({
+        name: ' plaza ', color: 'rose', isActive: false, updatedAt: 40, createdAt: 30,
+    } as Project);
+    const before = await db.projects.toArray();
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-proj-conflict',
+        action: 'create_project',
+        project_data: { name: 'PLAZA', color: 'emerald' },
+        created_at: Date.now(),
+    });
+
+    assert.ok(first !== second);
+    assert.equal(result.success, false);
+    assert.equal(result.outcome, 'conflict');
+    assert.equal(result.last_error, 'project name conflict');
+    assert.deepEqual(await db.projects.toArray(), before);
 });
 
 test('U4: create_project rejects empty name with name required', async () => {

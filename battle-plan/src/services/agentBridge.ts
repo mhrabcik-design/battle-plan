@@ -3,6 +3,12 @@ import { normalizeEntity } from './semanticEngine.ts';
 import type { AgentInboxRow, Project, Setting, Task, WorkLog } from '../db.ts';
 import { db } from '../db.ts';
 import { DriveJsonStore } from './driveJsonStore.ts';
+import {
+  archiveProject,
+  createProject,
+  updateProject,
+  type ProjectCatalogResult,
+} from './projectCatalog.ts';
 
 export type AgentWriteAction =
   | 'create_task'
@@ -45,6 +51,25 @@ export interface ApplyWriteResult {
   success: boolean;
   newId?: number;
   last_error?: string;
+  outcome?: ProjectCatalogResult['outcome'];
+}
+
+function projectResultToApplyWrite(result: ProjectCatalogResult): ApplyWriteResult {
+  switch (result.outcome) {
+    case 'created':
+    case 'restored':
+    case 'updated':
+    case 'archived':
+      return { success: true, newId: result.project.id, outcome: result.outcome };
+    case 'duplicate':
+      return { success: false, last_error: 'project already exists', outcome: result.outcome };
+    case 'archived-match':
+      return { success: false, last_error: 'project archived', outcome: result.outcome };
+    case 'conflict':
+      return { success: false, last_error: 'project name conflict', outcome: result.outcome };
+    case 'validation':
+      return { success: false, last_error: result.message, outcome: result.outcome };
+  }
 }
 
 class AgentBridge {
@@ -229,57 +254,29 @@ class AgentBridge {
     const data = (write.project_data ?? {}) as Partial<Project> & { id?: number };
 
     if (write.action === 'create_project') {
-      if (!data.name || data.name.trim().length === 0) return { success: false, last_error: 'name required' };
-      // Re-activate an existing soft-deleted project with the same case-insensitive name.
-      const all = await db.projects.toArray();
-      const existingMatch = all.find(p => p.name.toLowerCase() === data.name!.toLowerCase());
-      if (existingMatch) {
-        await db.projects.update(existingMatch.id!, {
-          isActive: true,
-          color: data.color ?? existingMatch.color,
-          source: 'agent',
-          agent_write_id: write.id,
-          updatedAt: Date.now(),
-        });
-        return { success: true, newId: existingMatch.id };
-      }
-      const newId = await db.projects.add({
-        name: data.name.trim(),
-        color: data.color ?? 'slate',
-        isActive: true,
+      const result = await createProject({
+        name: data.name ?? '',
+        color: data.color,
         source: 'agent',
-        agent_write_id: write.id,
-        updatedAt: Date.now(),
-        createdAt: Date.now(),
-      } as Project);
-      return { success: true, newId: newId as number };
+        agentWriteId: write.id,
+        // A create_project inbox action is already an explicit request to make
+        // this logical project active, unlike the UI's pre-confirmation probe.
+        confirmRestore: true,
+      });
+      return projectResultToApplyWrite(result);
     }
 
     if (write.action === 'update_project') {
-      if (!data.id) return { success: false, last_error: 'project id missing' };
-      const existing = await db.projects.get(data.id);
-      if (!existing) return { success: false, last_error: 'project not found' };
-      await db.projects.update(data.id, {
-        ...data,
-        source: existing.source,
-        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-        updatedAt: Date.now(),
+      const result = await updateProject({
+        id: data.id ?? 0,
+        name: data.name,
+        color: data.color,
       });
-      return { success: true };
+      return projectResultToApplyWrite(result);
     }
 
-    // delete_project: soft delete (isActive: false). Existing worklogs pointing
-    // at the project are not remapped; ProjectPicker already filters inactive.
-    if (!data.id) return { success: false, last_error: 'project id missing' };
-    const existing = await db.projects.get(data.id);
-    if (!existing) return { success: false, last_error: 'project not found' };
-    await db.projects.update(data.id, {
-      isActive: false,
-      source: existing.source,
-      agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-      updatedAt: Date.now(),
-    });
-    return { success: true };
+    const result = await archiveProject({ id: data.id ?? 0 });
+    return projectResultToApplyWrite(result);
   }
 
   // Settings keys the agent is allowed to delete. gemini_model is intentionally
