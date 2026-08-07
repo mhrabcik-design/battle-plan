@@ -2,7 +2,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { driveUnavailableHealth, emptySuggestionsHealth, taskBackupHealth } from './driveSyncDiagnostics.ts';
+import {
+    driveUnavailableHealth,
+    emptySuggestionsHealth,
+    GOOGLE_DRIVE_RECONSENT_MESSAGE,
+    isDriveScopeError,
+    taskBackupHealth,
+} from './driveSyncDiagnostics.ts';
+
+test('Drive scope diagnostics centralize permission detection and recovery guidance', () => {
+    assert.equal(isDriveScopeError('403 Forbidden'), true);
+    assert.equal(isDriveScopeError(new Error('PERMISSION_DENIED')), true);
+    assert.equal(isDriveScopeError('Insufficient Authentication Scopes'), true);
+    assert.equal(isDriveScopeError('500 Internal Server Error'), false);
+    assert.match(GOOGLE_DRIVE_RECONSENT_MESSAGE, /myaccount\.google\.com\/permissions/);
+});
 
 test('driveUnavailableHealth keeps auth-unavailable idle and Drive failures actionable', () => {
     assert.deepEqual(

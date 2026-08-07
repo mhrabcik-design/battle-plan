@@ -1,13 +1,13 @@
 import { db, type Task } from '../db';
 import {
     fetchWithTimeout,
-    getErrorMessage,
     getRetryDelay,
     isAbortError,
     isRetryableFetchError,
     prepareGeminiAudio,
     sleep,
 } from './audioAiPipeline';
+import { getErrorMessage } from '../utils/errors.ts';
 import { getSystemPrompt } from './semanticEngine.ts';
 import { buildAppContext } from './appContext.ts';
 export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';

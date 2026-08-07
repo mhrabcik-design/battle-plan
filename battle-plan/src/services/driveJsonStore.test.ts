@@ -248,6 +248,43 @@ test('U4: expired token (state REFRESH_PENDING), refresh succeeds — getAccessT
     assert.equal(refreshCalls, 1, 'trySilentRefresh must be invoked exactly once when state is REFRESH_PENDING');
 });
 
+test('concurrent Drive initialization shares one silent refresh flight', async () => {
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
+            },
+        },
+    }, { bp_folder_id: 'folder-existing' });
+
+    setGoogleServiceState({
+        accessToken: 'expired-token',
+        expiresAt: Date.now() - 5 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+
+    const svc = googleService as unknown as GoogleServiceInternalState;
+    let refreshCalls = 0;
+    let releaseRefresh!: () => void;
+    const refreshPending = new Promise<void>((resolve) => {
+        releaseRefresh = resolve;
+    });
+    svc.trySilentRefresh = async function (this: GoogleServiceInternalState) {
+        refreshCalls++;
+        await refreshPending;
+        this.accessToken = 'refreshed-live-token';
+        this.expiresAt = Date.now() + 60 * 60 * 1000;
+        return true;
+    };
+
+    const initResults = [new DriveJsonStore().init(), new DriveJsonStore().init()];
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseRefresh();
+
+    assert.deepEqual(await Promise.all(initResults), [true, true]);
+    assert.equal(refreshCalls, 1, 'Drive consumers must share googleService.runRefresh()');
+});
+
 test('U4: expired token, refresh fails — init returns false (graceful failure)', async () => {
     installDriveGlobals({
         drive: {

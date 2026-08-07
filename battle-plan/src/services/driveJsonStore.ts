@@ -1,9 +1,4 @@
-type AuthModule = typeof import('./googleService.ts');
-let authModulePromise: Promise<AuthModule> | null = null;
-function loadAuthModule(): Promise<AuthModule> {
-    if (!authModulePromise) authModulePromise = import('./googleService.ts');
-    return authModulePromise;
-}
+import { AuthUnavailableError, googleService } from './googleService.ts';
 
 const DEFAULT_FOLDER_NAME = 'Anu-BattlePlan';
 const DEFAULT_FOLDER_CACHE_KEY = 'bp_folder_id';
@@ -153,7 +148,6 @@ export class DriveJsonStore {
             return this.lastStatusValue;
         }
 
-        const { AuthUnavailableError } = await loadAuthModule();
         try {
             await this.getAccessToken();
         } catch (e) {
@@ -301,10 +295,9 @@ export class DriveJsonStore {
     }
 
     private async getAccessToken(): Promise<string> {
-        const { AuthUnavailableError, googleService } = await loadAuthModule();
         const state = googleService.getAuthState();
         if (state === 'REFRESH_PENDING') {
-            const refreshed = await googleService.trySilentRefresh();
+            const refreshed = await googleService.runRefresh();
             if (!refreshed) {
                 throw new AuthUnavailableError('Přihlášení vypršelo, obnovte prosím autorizaci.');
             }

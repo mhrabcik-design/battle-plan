@@ -2,12 +2,12 @@
 import { db, type Project } from '../db.ts';
 import {
     fetchWithTimeout,
-    getErrorMessage,
     getRetryDelay,
     isRetryableFetchError,
     prepareGeminiAudio,
     sleep,
 } from './audioAiPipeline.ts';
+import { getErrorMessage } from '../utils/errors.ts';
 import {
     calculatePersonHours,
     createWorkLogProposal,

@@ -15,7 +15,7 @@ import { googleService } from './services/googleService';
 import { taskDriveBackup } from './services/taskDriveBackup';
 import { mergeLocalToCloud } from './services/workLogsSync';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList, GoogleTaskRaw } from './types';
-import { hasUsableAuth as checkUsableAuth } from './types';
+import { hasUsableAuth as checkUsableAuth, isAuthUnavailable } from './types';
 import { Sidebar } from './components/Sidebar';
 import { syncIconFor } from './components/syncIcon';
 import { TaskCard } from './components/TaskCard';
@@ -39,6 +39,7 @@ import {
   getUrgencyColor
 } from './utils/calendarUtils';
 import { buildInfo } from './utils/buildInfo';
+import { getErrorMessage } from './utils/errors';
 
 const AVAILABLE_MODELS = AVAILABLE_GEMINI_MODELS;
 
@@ -57,8 +58,6 @@ const CALENDAR_HOURS = Array.from({ length: 13 }, (_, i) => i + 7);
 const TASK_GRID_VIEW_MODES: ViewMode[] = ['battle', 'tasks', 'meetings', 'thoughts'];
 const TASK_QUERY_VIEW_MODES: ViewMode[] = [...TASK_GRID_VIEW_MODES, 'week'];
 const EMPTY_TASKS: Task[] = [];
-
-const formatError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 function App() {
   const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
@@ -90,7 +89,6 @@ function App() {
   const addLog = useCallback((message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
     setDebugLogs(prev => [{ t: time, m: message, type }, ...prev].slice(0, 50));
-    console.log(`[sync-debug] ${Date.now()} [addLog] [${type.toUpperCase()}] ${message}`);
   }, []);
 
   useEffect(() => {
@@ -145,7 +143,7 @@ function App() {
   const isAiActive = !!apiKey && isOnline;
 const hasUsableAuth = checkUsableAuth(googleAuth);
 const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
-    if (googleAuth.state === 'OFFLINE_AUTH' || googleAuth.state === 'SIGNED_OUT') {
+    if (isAuthUnavailable(googleAuth.state)) {
         return 'failed';
     }
     const healthValues = Object.values(syncHealth);
@@ -207,7 +205,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         updateSyncHealth('google', {
           state: 'error',
           detail: 'Google inicializace selhala',
-          lastError: formatError(e),
+          lastError: getErrorMessage(e),
         });
       }
     };
@@ -216,13 +214,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     const handleAuthChange = (e: Event) => {
       const detail = (e as CustomEvent<GoogleAuthStatus | null>).detail;
       const authState = detail ?? { state: 'SIGNED_OUT', accessToken: null };
-      const isUsable = authState.state === 'SIGNED_IN' || authState.state === 'REFRESH_PENDING';
-      console.log('[sync-debug]', Date.now(), 'handleAuthChange', {
-        state: authState.state,
-        token: authState.accessToken ? String(authState.accessToken).slice(0, 8) + '…' : null,
-        isUsable,
-        prevGoogleAuth: googleAuth.state,
-      });
+      const isUsable = checkUsableAuth(authState);
       setGoogleAuth(authState);
       updateSyncHealth('google', {
         state: isUsable ? 'ok' : 'idle',
@@ -392,7 +384,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         updateSyncHealth('tasks', {
           state: 'error',
           detail: 'Automatická záloha na Disk selhala',
-          lastError: formatError(e),
+          lastError: getErrorMessage(e),
         });
       }
     }, 10000);
@@ -425,7 +417,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         updateSyncHealth('worklogs', {
           state: 'error',
           detail: 'WorkLogs záloha na Disk selhala',
-          lastError: formatError(e),
+          lastError: getErrorMessage(e),
         });
       }
     }, 10000);
@@ -891,7 +883,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                         silenceThreshold: -45,
                         silenceDuration: 5000 // Longer for main mic as it might be dictating longer thoughts
                       }).catch((err) => {
-                        addLog(`Mikrofon: ${formatError(err)}`, 'error');
+                        addLog(`Mikrofon: ${getErrorMessage(err)}`, 'error');
                       });
                     }}
                     disabled={floatingMicDisabled}

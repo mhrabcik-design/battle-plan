@@ -5,11 +5,15 @@ import { mergeCloudToLocal, mergeLocalToCloud, type MergeResult, workLogsSync } 
 import { taskDriveBackup } from '../services/taskDriveBackup';
 import { getMissingWorkLogsFileStatus, hasLocalWorkLogsData } from '../utils/workLogsSyncStatus';
 import type { GoogleAuthStatus, GoogleTaskList } from '../types';
-import { hasUsableAuth } from '../types';
+import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
-import { driveUnavailableHealth, taskBackupHealth } from '../utils/driveSyncDiagnostics';
-
-const formatError = (error: unknown): string => error instanceof Error ? error.message : String(error);
+import {
+  driveUnavailableHealth,
+  GOOGLE_DRIVE_RECONSENT_MESSAGE,
+  isDriveScopeError,
+  taskBackupHealth,
+} from '../utils/driveSyncDiagnostics';
+import { getErrorMessage } from '../utils/errors';
 
 interface UseDriveSyncOrchestrationArgs {
   googleAuth: GoogleAuthStatus;
@@ -37,11 +41,6 @@ export function useDriveSyncOrchestration({
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
 
   useEffect(() => {
-    console.log('[sync-debug]', Date.now(), 'orchestration useEffect', {
-      hasUsableAuthValue,
-      googleAuthState: googleAuth.state,
-      googleAuthToken: googleAuth.accessToken ? String(googleAuth.accessToken).slice(0, 8) + '…' : null,
-    });
     if (!hasUsableAuthValue) {
       queueMicrotask(() => {
         updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
@@ -54,7 +53,7 @@ export function useDriveSyncOrchestration({
       try {
         const status = googleService.getAuthStatus();
         if (status.state === 'REFRESH_PENDING') {
-          const success = await googleService.trySilentRefresh();
+          const success = await googleService.runRefresh();
           if (success) {
             setGoogleAuth(googleService.getAuthStatus());
           }
@@ -72,29 +71,18 @@ export function useDriveSyncOrchestration({
           console.error('Google Tasks list fetch failed', e);
           setGoogleTaskLists([]);
         }
-        const authBeforeLoad = googleService.getAuthStatus();
-        console.log('[sync-debug]', Date.now(), 'before taskDriveBackup.loadDetailed', { state: authBeforeLoad.state, token: authBeforeLoad.accessToken ? String(authBeforeLoad.accessToken).slice(0, 8) + '…' : null });
         const taskBackup = await taskDriveBackup.loadDetailed();
         const authAfterLoad = googleService.getAuthStatus();
-        console.log('[sync-debug]', Date.now(), 'after taskDriveBackup.loadDetailed', {
-          kind: taskBackup.kind,
-          state: authAfterLoad.state,
-          token: authAfterLoad.accessToken ? String(authAfterLoad.accessToken).slice(0, 8) + '…' : null,
-        });
-        if (authAfterLoad.state === 'OFFLINE_AUTH' || authAfterLoad.state === 'SIGNED_OUT') {
-            console.log('[sync-debug]', Date.now(), 'aborting checkSync — auth unavailable after loadDetailed', { state: authAfterLoad.state });
-            return;
+        if (isAuthUnavailable(authAfterLoad.state)) {
+          return;
         }
         if (taskBackup.kind === 'store-unavailable' || taskBackup.kind === 'error' || taskBackup.kind === 'missing-file') {
           updateSyncHealth('tasks', taskBackupHealth(taskBackup));
           const recoverable = taskBackup.kind === 'error'
-            ? /403|PERMISSION_DENIED|Insufficient Authentication Scopes/.test(taskBackup.message)
+            ? isDriveScopeError(taskBackup.message)
             : taskBackup.kind === 'store-unavailable' && taskBackup.status.code === 'auth-unavailable';
           if (recoverable) {
-            addLog(
-              "Drive odmítl požadavek: scope tvořiho Google účtu neobsahuje aktuální scopes aplikace. Jdi na https://myaccount.google.com/permissions, odeber 'Battle Plan', a přihlaš se znovu.",
-              'error'
-            );
+            addLog(GOOGLE_DRIVE_RECONSENT_MESSAGE, 'error');
           }
         } else {
           const payload = taskBackup.payload;
@@ -152,21 +140,18 @@ export function useDriveSyncOrchestration({
           // into the local DB is still valid, but the UI must reflect the
           // current auth reality, not a stale success snapshot.
           const authBeforeTasksOk = googleService.getAuthStatus();
-          if (authBeforeTasksOk.state !== 'OFFLINE_AUTH' && authBeforeTasksOk.state !== 'SIGNED_OUT') {
+          if (!isAuthUnavailable(authBeforeTasksOk.state)) {
             updateSyncHealth('tasks', {
               state: 'ok',
               detail: 'Drive data načtena',
               lastSuccess: now,
               lastError: null,
             });
-          } else {
-            console.log('[sync-debug]', Date.now(), 'skipping tasks=ok update — auth flipped mid-merge', { state: authBeforeTasksOk.state });
           }
         }
         const authAfterTasks = googleService.getAuthStatus();
-        if (authAfterTasks.state === 'OFFLINE_AUTH' || authAfterTasks.state === 'SIGNED_OUT') {
-            console.log('[sync-debug]', Date.now(), 'aborting checkSync before workLogsSync.init — auth unavailable', { state: authAfterTasks.state });
-            return;
+        if (isAuthUnavailable(authAfterTasks.state)) {
+          return;
         }
         await workLogsSync.init();
         if (workLogsSync.initialized) {
@@ -230,7 +215,7 @@ export function useDriveSyncOrchestration({
         }
       } catch (e) {
         console.error("Auto-sync check failed", e);
-        const message = formatError(e);
+        const message = getErrorMessage(e);
         updateSyncHealth('tasks', {
           state: 'error',
           detail: 'Automatická synchronizace selhala',

@@ -145,8 +145,7 @@ class GoogleService {
                     client_id: CLIENT_ID,
                     scope: SCOPES,
                     callback: this.handleTokenResponse,
-                    error_callback: (err: unknown) => {
-                        console.log('[sync-debug]', Date.now(), 'init tokenClient GIS error_callback', err);
+                    error_callback: () => {
                         this.markAuthUnavailable();
                     },
                 });
@@ -315,12 +314,6 @@ class GoogleService {
     }
 
     private markAuthUnavailable(): void {
-        const stack = (new Error('markAuthUnavailable called from').stack ?? '').split('\n').slice(1, 6).join('\n');
-        console.log('[sync-debug]', Date.now(), 'markAuthUnavailable', {
-          prevState: this.getAuthState(),
-          prevToken: this.accessToken ? String(this.accessToken).slice(0, 8) + '…' : null,
-          stack,
-        });
         // INTENTIONAL ASYMMETRY: null the in-memory accessToken + gapi client so
         // the rest of the app sees OFFLINE_AUTH immediately, but KEEP the
         // localStorage['google_access_token'] entry. The next signIn() can
@@ -381,11 +374,6 @@ class GoogleService {
     signIn(): Promise<void> {
         // U5: single-flight. A double-click on 'Sign in' does not produce two
         // GIS prompts; the second call awaits the in-flight promise.
-        console.log('[sync-debug]', Date.now(), 'signIn called', {
-          signInInFlightAlreadySet: !!this.signInInFlight,
-          userEmail: this.userEmail,
-          hasTokenClient: !!this.tokenClient,
-        });
         if (this.signInInFlight) return this.signInInFlight;
         const promise = (async () => {
             // Always force the user-visible request itself through the consent
@@ -402,12 +390,10 @@ class GoogleService {
                 prompt: 'consent',
                 include_granted_scopes: false,
                 callback: this.handleTokenResponse,
-                error_callback: (err: unknown) => {
-                    console.log('[sync-debug]', Date.now(), 'signIn GIS error_callback', err);
+                error_callback: () => {
                     this.markAuthUnavailable();
                 },
             });
-            console.log('[sync-debug]', Date.now(), 'signIn: about to call requestAccessToken on consentClient with prompt=consent');
             consentClient.requestAccessToken({
                 prompt: 'consent',
                 scope: SCOPES,

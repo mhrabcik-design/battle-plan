@@ -21,6 +21,10 @@ export function hasUsableAuth(auth: GoogleAuthStatus): boolean {
     return auth.state === 'SIGNED_IN' || auth.state === 'REFRESH_PENDING';
 }
 
+export function isAuthUnavailable(state: GoogleAuthState): boolean {
+    return state === 'OFFLINE_AUTH' || state === 'SIGNED_OUT';
+}
+
 export interface GoogleTaskList {
     id: string;
     title?: string;
