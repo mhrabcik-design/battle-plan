@@ -4,9 +4,10 @@ import { type WorkLog, type Project } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
 import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
 import {
-    addWorkLogsWithActiveProjects,
+    addWorkLogWithActiveProject,
     ProjectUnavailableError,
 } from '../../services/workLogPersistence';
+import { getErrorMessage } from '../../utils/errors';
 
 interface WorkLogFormProps {
     onSaved?: (log: WorkLog) => void;
@@ -41,7 +42,7 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
         try {
             const now = Date.now();
             const syncId = createWorkLogSyncId();
-            const saved = (await addWorkLogsWithActiveProjects([{
+            const saved = await addWorkLogWithActiveProject({
                 syncId,
                 date,
                 projectId: project.id!,
@@ -52,7 +53,7 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
                 source: 'manual',
                 createdAt: now,
                 updatedAt: now,
-            }]))[0]!;
+            });
             onSaved?.(saved);
             // Reset (kromě data a projektu — typicky zůstávají)
             setPeople('');
@@ -61,7 +62,7 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
         } catch (e) {
             setError(e instanceof ProjectUnavailableError
                 ? 'Vybraný projekt už není aktivní. Vyberte nebo obnovte aktivní projekt.'
-                : `Uložení selhalo: ${e instanceof Error ? e.message : String(e)}`);
+                : `Uložení selhalo: ${getErrorMessage(e)}`);
         } finally {
             setSaving(false);
         }

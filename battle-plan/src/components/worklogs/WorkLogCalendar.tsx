@@ -3,20 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { type WorkLog, type Project, type ProjectColor } from '../../db';
 import { currentMonthKey, monthKeyToDate, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
+import { PROJECT_COLOR_DOT } from '../../utils/projectColors';
 import { WorkLogCard } from './WorkLogCard';
 
 interface WorkLogCalendarProps {
     logs: WorkLog[];
     projects: Project[];
 }
-
-const COLOR_DOT: Record<ProjectColor, string> = {
-    slate: 'bg-slate-400',
-    indigo: 'bg-indigo-400',
-    emerald: 'bg-emerald-400',
-    amber: 'bg-amber-400',
-    rose: 'bg-rose-400',
-};
 
 const isoDate = (year: number, month0: number, day: number): string => {
     return `${year}-${String(month0 + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -183,7 +176,7 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
                                                 <span
                                                     key={p.name}
                                                     title={p.name}
-                                                    className={`w-2 h-2 rounded-full ${COLOR_DOT[p.color] ?? COLOR_DOT.slate}`}
+                                                    className={`w-2 h-2 rounded-full ${PROJECT_COLOR_DOT[p.color] ?? PROJECT_COLOR_DOT.slate}`}
                                                 />
                                             ))}
                                             {moreCount > 0 && (
@@ -204,7 +197,7 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
                     <span className="text-slate-500 uppercase tracking-widest font-black">Projekty:</span>
                     {projects.filter((p) => p.isActive).map((p) => (
                         <span key={p.id} className="flex items-center gap-1.5">
-                            <span className={`w-2.5 h-2.5 rounded-full ${COLOR_DOT[p.color]}`} />
+                            <span className={`w-2.5 h-2.5 rounded-full ${PROJECT_COLOR_DOT[p.color]}`} />
                             <span className="text-slate-300">{p.name}</span>
                         </span>
                     ))}

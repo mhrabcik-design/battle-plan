@@ -4,19 +4,12 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Check, Plus, X } from 'lucide-react';
 import { db, type Project, type ProjectColor } from '../../db';
 import { createProject, type ProjectCatalogResult } from '../../services/projectCatalog';
+import { PROJECT_COLOR_OPTIONS } from '../../utils/projectColors';
 
 interface ProjectPickerProps {
     selectedProjectId: number | null;
     onSelect: (project: Project) => void;
 }
-
-const COLOR_PRESETS: { value: ProjectColor; label: string; bg: string; ring: string }[] = [
-    { value: 'slate', label: 'Šedá', bg: 'bg-slate-500/30 border-slate-400/40', ring: 'ring-slate-400' },
-    { value: 'indigo', label: 'Indigo', bg: 'bg-indigo-500/30 border-indigo-400/40', ring: 'ring-indigo-400' },
-    { value: 'emerald', label: 'Smaragdová', bg: 'bg-emerald-500/30 border-emerald-400/40', ring: 'ring-emerald-400' },
-    { value: 'amber', label: 'Jantarová', bg: 'bg-amber-500/30 border-amber-400/40', ring: 'ring-amber-400' },
-    { value: 'rose', label: 'Růžová', bg: 'bg-rose-500/30 border-rose-400/40', ring: 'ring-rose-400' },
-];
 
 function resultMessage(result: ProjectCatalogResult): string {
     if (result.outcome === 'duplicate') return `Projekt „${result.project.name}“ už existuje. Vyber ho ze seznamu.`;
@@ -97,7 +90,7 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
             >
                 {selected ? (
                     <span className="flex min-w-0 items-center gap-2">
-                        <span className={`h-3 w-3 shrink-0 rounded-full ${COLOR_PRESETS.find((color) => color.value === selected.color)?.bg.split(' ')[0]}`} />
+                        <span className={`h-3 w-3 shrink-0 rounded-full ${PROJECT_COLOR_OPTIONS.find((color) => color.value === selected.color)?.bg.split(' ')[0]}`} />
                         <span className="truncate text-sm font-bold text-white">{selected.name}</span>
                     </span>
                 ) : <span className="text-sm font-bold uppercase tracking-widest text-slate-500">— Vyberte projekt —</span>}
@@ -125,7 +118,7 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
                                         onClick={() => { onSelect(project); setOpen(false); }}
                                         className={`flex w-full items-center gap-2 px-4 py-3 text-left transition-all hover:bg-slate-800/60 ${project.id === selectedProjectId ? 'bg-indigo-600/10' : ''}`}
                                     >
-                                        <span className={`h-3 w-3 shrink-0 rounded-full ${COLOR_PRESETS.find((color) => color.value === project.color)?.bg.split(' ')[0]}`} />
+                                        <span className={`h-3 w-3 shrink-0 rounded-full ${PROJECT_COLOR_OPTIONS.find((color) => color.value === project.color)?.bg.split(' ')[0]}`} />
                                         <span className="min-w-0 flex-1 truncate text-sm text-white">{project.name}</span>
                                         {project.id === selectedProjectId && <Check className="h-3.5 w-3.5 text-indigo-400" />}
                                     </button>
@@ -160,7 +153,7 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
                                 <fieldset className="space-y-1.5">
                                     <legend className="text-xs font-black uppercase tracking-widest text-slate-500">Barva</legend>
                                     <div className="flex gap-2">
-                                        {COLOR_PRESETS.map((color) => (
+                                        {PROJECT_COLOR_OPTIONS.map((color) => (
                                             <button
                                                 key={color.value}
                                                 type="button"

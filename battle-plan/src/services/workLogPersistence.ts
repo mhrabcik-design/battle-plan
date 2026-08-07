@@ -19,18 +19,25 @@ export class ProjectUnavailableError extends Error {
     }
 }
 
+export function isMatchingActiveProject(
+    project: Project | undefined,
+    selection: WorkLogProjectSelection,
+): project is Project & { id: number } {
+    return project?.id === selection.id
+        && project.isActive
+        && normalizeProjectName(project.name) === normalizeProjectName(selection.name);
+}
+
 async function requireActiveProject(
     projectId: number,
     snapshottedName?: string,
 ): Promise<Project & { id: number }> {
     const project = await db.projects.get(projectId);
-    const nameMatches = snapshottedName === undefined
-        || normalizeProjectName(project?.name ?? '') === normalizeProjectName(snapshottedName);
-
-    if (!project || project.id == null || !project.isActive || !nameMatches) {
+    const selection = { id: projectId, name: snapshottedName ?? project?.name ?? '' };
+    if (!isMatchingActiveProject(project, selection)) {
         throw new ProjectUnavailableError();
     }
-    return project as Project & { id: number };
+    return project;
 }
 
 /**
@@ -59,6 +66,11 @@ export async function addWorkLogsWithActiveProjects(
 
         return saved;
     });
+}
+
+export async function addWorkLogWithActiveProject(draft: NewWorkLogDraft): Promise<WorkLog> {
+    const [saved] = await addWorkLogsWithActiveProjects([draft]);
+    return saved!;
 }
 
 interface UpdateWorkLogInput {

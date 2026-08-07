@@ -6,6 +6,7 @@ import { ProjectPicker } from './ProjectPicker';
 import { findProjectByName, type ExtractedWorkLog, type ExtractedWorkLogBatch } from '../../services/workLogExtractor';
 import { derivePersonHourMetadata, getWorkLogRowIssues, parseDecimalHours } from '../../utils/workLogBatch';
 import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
+import { getErrorMessage } from '../../utils/errors';
 import {
     addWorkLogsWithActiveProjects,
     ProjectUnavailableError,
@@ -49,11 +50,10 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
         (async () => {
             const projects = await db.projects.toArray();
             if (cancelled) return;
-            const activeProjects = projects.filter((p) => p.isActive);
             setEntries((prev) =>
                 prev.map((entry) => {
                     if (entry.project || !entry.projectName) return entry;
-                    const project = findProjectByName(entry.projectName, activeProjects);
+                    const project = findProjectByName(entry.projectName, projects);
                     return project ? { ...entry, project } : entry;
                 }),
             );
@@ -140,7 +140,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
         } catch (error) {
             setSaveError(error instanceof ProjectUnavailableError
                 ? 'Některý vybraný projekt už není aktivní. Opravte projekt; žádný řádek nebyl uložen.'
-                : `Uložení selhalo: ${error instanceof Error ? error.message : String(error)}`);
+                : `Uložení selhalo: ${getErrorMessage(error)}`);
         } finally {
             setSaving(false);
         }

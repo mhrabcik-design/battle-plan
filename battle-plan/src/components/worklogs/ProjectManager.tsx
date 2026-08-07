@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Archive, FolderKanban, Plus, RotateCcw } from 'lucide-react';
 import { db, type Project, type ProjectColor } from '../../db';
@@ -9,22 +9,7 @@ import {
     updateProject,
     type ProjectCatalogResult,
 } from '../../services/projectCatalog';
-
-const COLOR_OPTIONS: { value: ProjectColor; label: string }[] = [
-    { value: 'slate', label: 'Šedá' },
-    { value: 'indigo', label: 'Indigo' },
-    { value: 'emerald', label: 'Smaragdová' },
-    { value: 'amber', label: 'Jantarová' },
-    { value: 'rose', label: 'Růžová' },
-];
-
-const COLOR_DOT: Record<ProjectColor, string> = {
-    slate: 'bg-slate-400',
-    indigo: 'bg-indigo-400',
-    emerald: 'bg-emerald-400',
-    amber: 'bg-amber-400',
-    rose: 'bg-rose-400',
-};
+import { PROJECT_COLOR_DOT, PROJECT_COLOR_OPTIONS } from '../../utils/projectColors';
 
 interface ProjectManagerProps {
     onMessage?: (message: string, type?: 'info' | 'error') => void;
@@ -38,10 +23,14 @@ function resultError(result: ProjectCatalogResult): string {
 }
 
 export function ProjectManager({ onMessage }: ProjectManagerProps) {
-    const projects = useLiveQuery(() => db.projects.toArray(), []) ?? [];
-    const sortedProjects = [...projects].sort((a, b) => a.name.localeCompare(b.name, 'cs'));
-    const activeProjects = sortedProjects.filter((project) => project.isActive);
-    const archivedProjects = sortedProjects.filter((project) => !project.isActive);
+    const projects = useLiveQuery(() => db.projects.toArray(), []);
+    const { activeProjects, archivedProjects } = useMemo(() => {
+        const sorted = [...(projects ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'cs'));
+        return {
+            activeProjects: sorted.filter((project) => project.isActive),
+            archivedProjects: sorted.filter((project) => !project.isActive),
+        };
+    }, [projects]);
     const [name, setName] = useState('');
     const [color, setColor] = useState<ProjectColor>('indigo');
     const [pendingRestore, setPendingRestore] = useState<Project | null>(null);
@@ -133,9 +122,9 @@ export function ProjectManager({ onMessage }: ProjectManagerProps) {
             className="flex min-w-0 flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3 sm:flex-row sm:items-center"
         >
             <div className="flex min-w-0 flex-1 items-center gap-2">
-                <span className={`h-3 w-3 shrink-0 rounded-full ${COLOR_DOT[project.color]}`} aria-hidden="true" />
+                <span className={`h-3 w-3 shrink-0 rounded-full ${PROJECT_COLOR_DOT[project.color]}`} aria-hidden="true" />
                 <span className="truncate text-sm font-bold text-white">{project.name}</span>
-                <span className="sr-only">Barva: {COLOR_OPTIONS.find((item) => item.value === project.color)?.label}</span>
+                <span className="sr-only">Barva: {PROJECT_COLOR_OPTIONS.find((item) => item.value === project.color)?.label}</span>
             </div>
             <div className="flex w-full items-center gap-2 sm:w-auto">
                 <label className="sr-only" htmlFor={`project-color-${project.id}`}>Barva projektu {project.name}</label>
@@ -146,7 +135,7 @@ export function ProjectManager({ onMessage }: ProjectManagerProps) {
                     disabled={busyId === project.id}
                     className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs font-bold text-slate-200 outline-none focus:border-indigo-500 sm:w-32"
                 >
-                    {COLOR_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    {PROJECT_COLOR_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
                 {archived ? (
                     <button
@@ -199,7 +188,7 @@ export function ProjectManager({ onMessage }: ProjectManagerProps) {
                         onChange={(event) => setColor(event.target.value as ProjectColor)}
                         className="w-full rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 text-sm font-bold text-slate-200 outline-none focus:border-indigo-500"
                     >
-                        {COLOR_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        {PROJECT_COLOR_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                 </label>
                 <button

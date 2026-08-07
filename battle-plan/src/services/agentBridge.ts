@@ -10,7 +10,7 @@ import {
   type ProjectCatalogResult,
 } from './projectCatalog.ts';
 import {
-  addWorkLogsWithActiveProjects,
+  addWorkLogWithActiveProject,
   ProjectUnavailableError,
   type NewWorkLogDraft,
 } from './workLogPersistence.ts';
@@ -243,7 +243,7 @@ class AgentBridge {
       };
       let saved: WorkLog;
       try {
-        saved = (await addWorkLogsWithActiveProjects([draft]))[0]!;
+        saved = await addWorkLogWithActiveProject(draft);
       } catch (error) {
         if (error instanceof ProjectUnavailableError) {
           return { success: false, last_error: error.message };

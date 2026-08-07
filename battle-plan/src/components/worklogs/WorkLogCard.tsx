@@ -11,9 +11,13 @@ import {
 } from '../../utils/workLogBatch';
 import { normalizeProjectName } from '../../services/projectCatalog';
 import {
+    isMatchingActiveProject,
     ProjectUnavailableError,
     updateWorkLogWithProjectSelection,
+    type WorkLogEditableChanges,
+    type WorkLogProjectSelection,
 } from '../../services/workLogPersistence';
+import { getErrorMessage } from '../../utils/errors';
 
 interface WorkLogCardProps {
     log: WorkLog;
@@ -39,14 +43,13 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
         && project.id === log.projectId
         && normalizeProjectName(project.name) === normalizeProjectName(log.projectName);
     const assignmentChanged = project != null && !selectedMatchesOriginal;
-    const currentSelection = project ?? { id: log.projectId, name: log.projectName };
+    const currentSelection: WorkLogProjectSelection = project?.id == null
+        ? { id: log.projectId, name: log.projectName }
+        : { id: project.id, name: project.name };
     const activeSelection = useLiveQuery(async () => {
         if (!editing || currentSelection.id == null) return null;
         const stored = await db.projects.get(currentSelection.id);
-        return stored?.isActive
-            && normalizeProjectName(stored.name) === normalizeProjectName(currentSelection.name)
-            ? stored
-            : null;
+        return isMatchingActiveProject(stored, currentSelection) ? stored : null;
     }, [editing, currentSelection.id, currentSelection.name]);
 
     const showPersonHourEditor = log.hours > 24 || log.hoursPerPerson != null || hoursPerPerson !== '';
@@ -120,7 +123,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
             return;
         }
 
-        const updates: Partial<WorkLog> = {
+        const updates: WorkLogEditableChanges = {
             date,
             people: people.trim(),
             hours: saveHours,
@@ -143,7 +146,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
         } catch (saveError) {
             setError(saveError instanceof ProjectUnavailableError
                 ? 'Vybraný projekt už není aktivní. Historické přiřazení zůstalo beze změny.'
-                : `Uložení selhalo: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
+                : `Uložení selhalo: ${getErrorMessage(saveError)}`);
         } finally {
             setSaving(false);
         }

@@ -1,6 +1,5 @@
 import { db, type Project, type ProjectColor } from '../db.ts';
-
-const PROJECT_COLORS: readonly ProjectColor[] = ['slate', 'indigo', 'emerald', 'amber', 'rose'];
+import { PROJECT_COLOR_VALUES } from '../utils/projectColors.ts';
 
 type ProjectSource = NonNullable<Project['source']>;
 
@@ -41,7 +40,7 @@ export function normalizeProjectName(name: string): string {
 }
 
 function isProjectColor(value: unknown): value is ProjectColor {
-    return PROJECT_COLORS.includes(value as ProjectColor);
+    return PROJECT_COLOR_VALUES.includes(value as ProjectColor);
 }
 
 function validateId(id: number): string | null {
@@ -198,10 +197,3 @@ export async function archiveProject(input: ArchiveProjectInput): Promise<Projec
         return { outcome: 'archived', project };
     });
 }
-
-export const projectCatalog = {
-    createProject,
-    updateProject,
-    restoreProject,
-    archiveProject,
-};
