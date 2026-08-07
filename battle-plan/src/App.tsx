@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
@@ -22,12 +22,9 @@ import { TaskCard } from './components/TaskCard';
 import { FocusEditor } from './components/FocusEditor';
 import { SettingsModal } from './components/SettingsModal';
 import { OnboardingCard } from './components/OnboardingCard';
-import { AnuSelfDescription } from './components/AnuSelfDescription';
 import { SlashCommandPalette } from './components/SlashCommandPalette';
 import { dismissOnboarding, isOnboardingDismissed } from './services/onboarding';
 import { WeeklyCalendar } from './components/WeeklyCalendar';
-import { SuggestionsPage } from './pages/SuggestionsPage';
-import { WorkLogsPage } from './pages/WorkLogsPage';
 import type { WorkLogVoiceController } from './components/worklogs/WorkLogVoiceBar';
 import type { ExtractedWorkLogBatch } from './services/workLogExtractor';
 import { WorkLogVoiceConfirm } from './components/worklogs/WorkLogVoiceConfirm';
@@ -40,6 +37,10 @@ import {
 } from './utils/calendarUtils';
 import { buildInfo } from './utils/buildInfo';
 import { getErrorMessage } from './utils/errors';
+
+const SuggestionsPage = lazy(() => import('./pages/SuggestionsPage').then((module) => ({ default: module.SuggestionsPage })));
+const WorkLogsPage = lazy(() => import('./pages/WorkLogsPage').then((module) => ({ default: module.WorkLogsPage })));
+const DiagnosticsPage = lazy(() => import('./pages/DiagnosticsPage').then((module) => ({ default: module.DiagnosticsPage })));
 
 const AVAILABLE_MODELS = AVAILABLE_GEMINI_MODELS;
 
@@ -58,6 +59,12 @@ const CALENDAR_HOURS = Array.from({ length: 13 }, (_, i) => i + 7);
 const TASK_GRID_VIEW_MODES: ViewMode[] = ['battle', 'tasks', 'meetings', 'thoughts'];
 const TASK_QUERY_VIEW_MODES: ViewMode[] = [...TASK_GRID_VIEW_MODES, 'week'];
 const EMPTY_TASKS: Task[] = [];
+
+const pageFallback = (
+  <div className="p-12 text-center text-slate-600 text-xs font-black uppercase tracking-widest">
+    Načítám obrazovku…
+  </div>
+);
 
 function App() {
   const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
@@ -650,17 +657,18 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           {hasUsableAuth && showOnboarding && <OnboardingCard onDismiss={handleDismissOnboarding} />}
 
           {viewMode === 'suggestions' && (
-            <SuggestionsPage
-              googleAuth={googleAuth}
-              onAddLog={(msg, type) => addLog(msg, type)}
-            />
+            <Suspense fallback={pageFallback}>
+              <SuggestionsPage googleAuth={googleAuth} onAddLog={addLog} />
+            </Suspense>
           )}
 
           {viewMode === 'worklogs' && (
-            <WorkLogsPage
-              onAddLog={(msg, type) => addLog(msg, type)}
-              onVoiceControllerChange={setWorkLogVoiceController}
-            />
+            <Suspense fallback={pageFallback}>
+              <WorkLogsPage
+                onAddLog={addLog}
+                onVoiceControllerChange={setWorkLogVoiceController}
+              />
+            </Suspense>
           )}
 
           {viewMode === 'week' && (
@@ -676,91 +684,16 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           )}
 
           {viewMode === 'debug' && (
-            <div className="flex-1 flex flex-col gap-4 min-h-0">
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-black text-white uppercase tracking-widest">Diagnostika systému (v{buildInfo.version})</h2>
-                <button
-                  onClick={() => setDebugLogs([])}
-                  className="px-3 py-1 bg-slate-800 hover:bg-red-900/20 text-slate-400 hover:text-red-400 rounded-lg text-sm font-black uppercase transition-all"
-                >
-                  Smazat
-                </button>
-              </div>
-              <AnuSelfDescription />
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
-                  <h3 className="text-xs font-black text-slate-500 uppercase mb-3">Build a prostředí</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <span className="text-slate-500">Verze:</span> <span className="text-white">{buildInfo.version}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Kanál:</span> <span className="text-white">{buildInfo.channelLabel}</span>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <span className="text-slate-500">Origin:</span> <span className="text-white break-all">{buildInfo.origin}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Build:</span> <span className="text-white">{buildInfo.buildTime}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Commit:</span> <span className="text-white">{buildInfo.commit ? buildInfo.commit.slice(0, 12) : 'local'}</span>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <span className="text-slate-500">OAuth:</span> <span className="text-slate-300">{buildInfo.oauthOriginHint}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
-                  <h3 className="text-xs font-black text-slate-500 uppercase mb-3">Sync stav</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {Object.entries(syncHealth).map(([key, item]) => {
-                      const tone = item.state === 'ok' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                        : item.state === 'error' ? 'text-red-400 bg-red-500/10 border-red-500/20'
-                          : item.state === 'stale' ? 'text-amber-300 bg-amber-500/10 border-amber-500/20'
-                            : 'text-slate-400 bg-slate-900/50 border-slate-700/50';
-                      return (
-                        <div key={key} className={`p-3 rounded-xl border ${tone}`}>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-black uppercase tracking-widest">{item.label}</span>
-                            <span className="text-[10px] font-black uppercase">{item.state}</span>
-                          </div>
-                          <p className="mt-1 text-[11px] text-slate-300">{item.detail}</p>
-                          {item.lastSuccess && <p className="mt-1 text-[10px] text-slate-500">OK: {item.lastSuccess}</p>}
-                          {item.lastError && <p className="mt-1 text-[10px] text-red-300 break-all">Chyba: {item.lastError}</p>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-              <div className="flex-1 bg-slate-900/50 rounded-2xl border border-slate-800 overflow-y-auto p-4 font-mono text-xs space-y-1">
-                {debugLogs.length === 0 ? (
-                  <div className="text-slate-600 italic">Žádné logy k dispozici...</div>
-                ) : (
-                  debugLogs.map((log, i) => (
-                    <div key={i} className={`flex gap-3 ${log.type === 'error' ? 'text-red-400 bg-red-400/5' : 'text-slate-400'} py-1 px-2 rounded`}>
-                      <span className="opacity-50 shrink-0">[{log.t}]</span>
-                      <span className="break-all">{log.m}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="p-4 bg-slate-800/30 rounded-2xl border border-slate-800/50">
-                <h3 className="text-xs font-black text-slate-500 uppercase mb-2">Aktivní Konfigurace</h3>
-                <div className="grid grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <span className="text-slate-500">Model:</span> <span className="text-white">{selectedModel}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">API Stav:</span> <span className={isAiActive ? 'text-emerald-400' : 'text-red-400'}>{isAiActive ? 'Aktivní' : 'Chybí klíč/Offline'}</span>
-                  </div>
-                  <div className="col-span-2">
-                    <span className="text-slate-500">Klíč:</span> <span className="text-white">...{apiKey.slice(-6)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <Suspense fallback={pageFallback}>
+              <DiagnosticsPage
+                syncHealth={syncHealth}
+                logs={debugLogs}
+                selectedModel={selectedModel}
+                apiKey={apiKey}
+                isAiActive={isAiActive}
+                onClearLogs={() => setDebugLogs([])}
+              />
+            </Suspense>
           )}
 
 

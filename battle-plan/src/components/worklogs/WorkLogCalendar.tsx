@@ -40,7 +40,7 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
 
     // Projekty → barva (lookup)
     const projectColors = useMemo(() => {
-        const m = new Map<number, string>();
+        const m = new Map<number, ProjectColor>();
         for (const p of projects) m.set(p.id!, p.color);
         return m;
     }, [projects]);
@@ -157,7 +157,7 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
                                     color: projectColors.get(l.projectId) ?? 'slate',
                                 })).map((p) => JSON.stringify(p))
                             )
-                        ).map((s) => JSON.parse(s)).slice(0, 3);
+                        ).map((serialized): { name: string; color: ProjectColor } => JSON.parse(serialized)).slice(0, 3);
                         const moreCount = new Set(dayLogs.map((l) => l.projectName)).size - dayProjects.length;
 
                         return (
