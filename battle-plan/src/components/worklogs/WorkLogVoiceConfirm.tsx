@@ -14,7 +14,6 @@ interface WorkLogVoiceConfirmProps {
 }
 
 export type WorkLogVoiceConfirmResult = {
-    ok: true;
     workLog: WorkLog;
     workLogs: WorkLog[];
 };
@@ -132,7 +131,6 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
             });
 
             onConfirmed({
-                ok: true,
                 workLog: saved[0],
                 workLogs: saved,
             });

@@ -12,7 +12,7 @@ interface DiagnosticsPageProps {
   syncHealth: Record<string, SyncHealth>;
   logs: DiagnosticLog[];
   selectedModel: string;
-  apiKey: string;
+  apiKeySuffix: string;
   isAiActive: boolean;
   onClearLogs: () => void;
 }
@@ -21,7 +21,7 @@ export function DiagnosticsPage({
   syncHealth,
   logs,
   selectedModel,
-  apiKey,
+  apiKeySuffix,
   isAiActive,
   onClearLogs,
 }: DiagnosticsPageProps) {
@@ -112,7 +112,7 @@ export function DiagnosticsPage({
             </span>
           </div>
           <div className="col-span-2">
-            <span className="text-slate-500">Klíč:</span> <span className="text-white">...{apiKey.slice(-6)}</span>
+            <span className="text-slate-500">Klíč:</span> <span className="text-white">...{apiKeySuffix}</span>
           </div>
         </div>
       </div>

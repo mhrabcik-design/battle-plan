@@ -1,4 +1,5 @@
 import { AuthUnavailableError, googleService } from './googleService.ts';
+import { isAuthUnavailable } from '../types.ts';
 
 const DEFAULT_FOLDER_NAME = 'Anu-BattlePlan';
 const DEFAULT_FOLDER_CACHE_KEY = 'bp_folder_id';
@@ -301,7 +302,7 @@ export class DriveJsonStore {
             if (!refreshed) {
                 throw new AuthUnavailableError('Přihlášení vypršelo, obnovte prosím autorizaci.');
             }
-        } else if (state === 'OFFLINE_AUTH' || state === 'SIGNED_OUT') {
+        } else if (isAuthUnavailable(state)) {
             throw new AuthUnavailableError('Pro přístup na Drive je nutné přihlášení.');
         }
         const accessToken = googleService.getAuthStatus().accessToken;

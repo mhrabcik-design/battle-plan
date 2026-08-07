@@ -47,8 +47,10 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         onAddLog('SuggestionsSync: BP složka nenalezena. Otevři BP app a nech poprvé synchronizovat.', 'error');
         return;
       }
-      const sugs = await suggestionsSync.fetchSuggestions();
-      const replies = await suggestionsSync.fetchReplies();
+      const [sugs, replies] = await Promise.all([
+        suggestionsSync.fetchSuggestions(),
+        suggestionsSync.fetchReplies(),
+      ]);
       const replyMap = groupSuggestionReplies(sugs.map((suggestion) => suggestion.id), replies);
       setSuggestions(sugs);
       setRepliesBySuggestion(replyMap);

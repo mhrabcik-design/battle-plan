@@ -13,7 +13,7 @@ export function groupSuggestionReplies(
     }
 
     for (const [suggestionId, values] of Object.entries(grouped)) {
-        grouped[suggestionId] = [...values].sort((a, b) => a.created_at - b.created_at);
+        grouped[suggestionId] = values.sort((a, b) => a.created_at - b.created_at);
     }
 
     return grouped;

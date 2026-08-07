@@ -689,7 +689,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                 syncHealth={syncHealth}
                 logs={debugLogs}
                 selectedModel={selectedModel}
-                apiKey={apiKey}
+                apiKeySuffix={apiKey.slice(-6)}
                 isAiActive={isAiActive}
                 onClearLogs={() => setDebugLogs([])}
               />
@@ -736,10 +736,8 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
               <WorkLogVoiceConfirm
                 extracted={workLogExtracted}
                 onConfirmed={(result) => {
-                  if ('ok' in result && result.ok && 'workLogs' in result) {
-                    const totalHours = result.workLogs.reduce((sum, log) => sum + log.hours, 0);
-                    addLog(`Činnosti uloženy z hlasu: ${result.workLogs.length} záznamů (${totalHours.toFixed(2)}h)`, 'info');
-                  }
+                  const totalHours = result.workLogs.reduce((sum, log) => sum + log.hours, 0);
+                  addLog(`Činnosti uloženy z hlasu: ${result.workLogs.length} záznamů (${totalHours.toFixed(2)}h)`, 'info');
                   setWorkLogExtracted(null);
                 }}
                 onCancelled={() => {

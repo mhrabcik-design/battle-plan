@@ -20,10 +20,7 @@ import {
 /**
  * WorkLog extractor — z Gemini audio transkripce vytáhne strukturovaný WorkLog.
  *
- * Volá se z App.tsx, když `viewMode === 'worklogs'`. Vrací buď:
- *   - { workLog: {...} } při úspěchu (validní + projekt nalezen)
- *   - { needsProjectMatch: { ... } } když AI nenašel projekt v seznamu
- *   - { error: string } při chybě
+ * Převádí audio na dávku strukturovaných návrhů, které UI před uložením validuje a potvrdí.
  */
 
 export const WORKLOG_SYSTEM_PROMPT = `
@@ -303,7 +300,7 @@ export async function processWorkLogAudio(
             try {
                 parsed = JSON.parse(jsonMatch[0]);
             } catch (e) {
-                return { ok: false, error: `JSON parse fail: ${e instanceof Error ? e.message : String(e)}` };
+                return { ok: false, error: `JSON parse fail: ${getErrorMessage(e)}` };
             }
 
             return sanitizeExtractedWorkLog(parsed);
