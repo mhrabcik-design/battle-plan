@@ -97,11 +97,13 @@ The same principle applies to route changes and unmounts.
 - Treat `Cancel`, `Save`, navigation away, and unmount as lifecycle exits for voice flows, not just UI events.
 - When dismissing AI-generated proposals, clear both the rendered proposal state and the source state that produced it (`audioBlob`, processing guards, pending recorder state).
 - Keep task voice and WorkLog voice domain logic separate, but share low-level recorder cleanup guarantees in `useAudioRecorder`.
+- When the WorkLogs page loads lazily, derive microphone ownership from the selected WorkLogs route. Until its page-local controller registers, disable the shared microphone and fail closed instead of falling through to the general recorder.
 - Browser-test the whole terminal path for voice features: start recording, produce proposal, cancel, and confirm that no proposal reopens.
 - Bump the visible patch version for production fixes that users need to distinguish while testing on GitHub Pages, mobile, and desktop.
 
 ## Related Issues
 
 - Related pattern: `docs/solutions/design-patterns/worklog-batch-person-hour-extraction.md`
+- Lazy-page lifecycle pattern: `docs/solutions/architecture-patterns/lazy-page-lifecycle-boundaries.md`
 - PR: `https://github.com/mhrabcik-design/battle-plan/pull/10`
 - Production fix commit: `6870f64 fix(worklogs): dismiss cancelled voice proposals`
