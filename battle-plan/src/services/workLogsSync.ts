@@ -3,6 +3,7 @@ import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
 import { getWorkLogSyncKey } from '../utils/workLogSyncIdentity';
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 import { normalizeProjectName } from './projectCatalog';
+import { canonicalProject, reconcileProjectIdentities } from '../utils/projectIdentityReconciliation';
 
 /**
  * WorkLogsSync — Drive I/O pro `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
@@ -142,14 +143,13 @@ export interface MergeResult {
  *    - pokud je v local a cloud.updatedAt > local.updatedAt → put (aktualizuj)
  *    - jinak ponech local
  * 2. Pro každý cloud Project:
- *    - pokud není v local → add (a remapuj projectId v budoucnu — pro F6 necháme jak je)
+ *    - pokud není v local → add
  *    - pokud je v local a cloud.updatedAt > local.updatedAt → put
  * 3. Pro local WorkLogy/Projects, které nejsou v cloudu → ponecháme (merge je add/update only,
  *    delete nechá na userovi)
  *
- * DŮLEŽITÉ: při ukládání do cloudu se změny v projectId mohou rozjet (cloud Project může mít jiné ID).
- * Pro F6 to řešíme tak, že projectName je v WorkLogu denormalizovaný — UI zobrazuje projectName.
- * Později (F7+) můžeme dělat remap.
+ * Po merge se projekty sjednotí podle normalizovaného názvu a WorkLogy se přepojí
+ * na lokální kanonický projectId. Historický projectName zůstává zachovaný.
  */
 export async function mergeCloudToLocal(
     cloudWorkLogs: WorkLog[],
@@ -183,33 +183,6 @@ export async function mergeCloudToLocal(
             }
         }
 
-        // === WorkLogs ===
-        for (const cw of cloudWorkLogs) {
-            const key = getWorkLogSyncKey(cw);
-            const local = localWorkLogsByCompositeKey.get(key);
-            if (!local) {
-                // Cloud-only → přidej (s novým ID)
-                const withoutId = { ...cw };
-                delete withoutId.id;
-                await db.workLogs.add({
-                    ...withoutId,
-                    source: withoutId.source ?? 'voice',
-                    createdAt: withoutId.createdAt ?? Date.now(),
-                    updatedAt: withoutId.updatedAt ?? Date.now(),
-                });
-                result.workLogsAdded++;
-            } else if ((cw.updatedAt ?? 0) > (local.updatedAt ?? 0)) {
-                // Cloud novější → update (zachováme local id)
-                await db.workLogs.update(local.id!, {
-                    ...cw,
-                    id: local.id, // nepřepisujeme ID
-                    createdAt: local.createdAt, // createdAt je posvátné
-                    updatedAt: cw.updatedAt ?? Date.now(),
-                });
-                result.workLogsUpdated++;
-            }
-        }
-
         // === Projects ===
         for (const cp of cloudProjects) {
             const normalizedName = normalizeProjectName(cp.name);
@@ -226,8 +199,8 @@ export async function mergeCloudToLocal(
                 const id = await db.projects.add(project);
                 localProjectsByName.set(normalizedName, [{ ...project, id: id as number }]);
                 result.projectsAdded++;
-            } else if (matches.length === 1) {
-                const local = matches[0]!;
+            } else {
+                const local = canonicalProject(matches);
                 if ((cp.updatedAt ?? 0) <= (local.updatedAt ?? 0)) continue;
 
                 const changes: Partial<Project> = {
@@ -238,9 +211,51 @@ export async function mergeCloudToLocal(
                     // createdAt zachovej
                 };
                 await db.projects.update(local.id!, changes);
-                matches[0] = { ...local, ...changes };
+                const localIndex = matches.findIndex((project) => project.id === local.id);
+                matches[localIndex] = { ...local, ...changes };
                 result.projectsUpdated++;
             }
+        }
+
+        // === WorkLogs ===
+        // Cloud project IDs are device-local. Resolve each imported row through
+        // its normalized project snapshot before persisting it locally.
+        for (const cw of cloudWorkLogs) {
+            const key = getWorkLogSyncKey(cw);
+            const local = localWorkLogsByCompositeKey.get(key);
+            const localProject = localProjectsByName.get(normalizeProjectName(cw.projectName))?.[0];
+            if (!local) {
+                // Cloud-only → přidej (s novým ID)
+                const withoutId = { ...cw };
+                delete withoutId.id;
+                await db.workLogs.add({
+                    ...withoutId,
+                    projectId: localProject?.id ?? -1,
+                    source: withoutId.source ?? 'voice',
+                    createdAt: withoutId.createdAt ?? Date.now(),
+                    updatedAt: withoutId.updatedAt ?? Date.now(),
+                });
+                result.workLogsAdded++;
+            } else if ((cw.updatedAt ?? 0) > (local.updatedAt ?? 0)) {
+                // Cloud novější → update (zachováme local id)
+                await db.workLogs.update(local.id!, {
+                    ...cw,
+                    id: local.id, // nepřepisujeme ID
+                    projectId: localProject?.id ?? local.projectId,
+                    createdAt: local.createdAt, // createdAt je posvátné
+                    updatedAt: cw.updatedAt ?? Date.now(),
+                });
+                result.workLogsUpdated++;
+            }
+        }
+
+        const hasImportedChanges = result.workLogsAdded > 0
+            || result.workLogsUpdated > 0
+            || result.projectsAdded > 0
+            || result.projectsUpdated > 0;
+        if (hasImportedChanges) {
+            const reconciliation = await reconcileProjectIdentities(db.projects, db.workLogs);
+            result.projectsAdded += reconciliation.projectsCreated;
         }
     });
 

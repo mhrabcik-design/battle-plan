@@ -168,17 +168,3 @@ test('U1: concurrent normalized-equivalent creates leave exactly one row', async
     assert.deepEqual(results.map((result) => result.outcome).sort(), ['created', 'duplicate']);
     assert.equal(await db.projects.count(), 1);
 });
-
-test('U1: seeded legacy normalized collisions return conflict and are not merged or remapped', async () => {
-    await resetCatalogDb();
-    const first = await seedProject({ name: 'Plaza', color: 'slate', isActive: true });
-    const second = await seedProject({ name: ' plaza ', color: 'rose', isActive: false, source: 'agent', agent_write_id: 'legacy' });
-
-    const createResult = await createProject({ name: 'PLAZA', color: 'emerald', source: 'user', confirmRestore: true });
-    const archiveResult = await archiveProject({ id: first.id! });
-
-    assert.equal(createResult.outcome, 'conflict');
-    assert.deepEqual(createResult.projects.map((project) => project.id).sort(), [first.id, second.id].sort());
-    assert.equal(archiveResult.outcome, 'conflict');
-    assert.deepEqual(await db.projects.toArray(), [first, second]);
-});

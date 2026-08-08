@@ -128,7 +128,7 @@ test('Drive merge matches trim-equivalent project names through catalog normaliz
     });
 });
 
-test('Drive merge does not guess among multiple legacy normalized project matches', async () => {
+test('Drive merge reconciles legacy normalized project matches before applying cloud state', async () => {
     await resetDb();
     const firstId = await db.projects.add({
         name: 'Plaza', color: 'slate', isActive: true, createdAt: 10, updatedAt: 20,
@@ -147,12 +147,88 @@ test('Drive merge does not guess among multiple legacy normalized project matche
     }]);
 
     assert.equal(result.projectsAdded, 0);
-    assert.equal(result.projectsUpdated, 0);
-    assert.equal(await db.projects.count(), 2);
-    assert.equal((await db.projects.get(firstId))?.color, 'slate');
-    assert.equal((await db.projects.get(firstId))?.updatedAt, 20);
-    assert.equal((await db.projects.get(secondId))?.color, 'emerald');
-    assert.equal((await db.projects.get(secondId))?.updatedAt, 21);
+    assert.equal(result.projectsUpdated, 1);
+    assert.equal(await db.projects.count(), 1);
+    assert.deepEqual(await db.projects.get(firstId), {
+        id: firstId,
+        name: 'PLAZA',
+        color: 'rose',
+        isActive: true,
+        createdAt: 10,
+        updatedAt: 40,
+    });
+    assert.equal(await db.projects.get(secondId), undefined);
+});
+
+test('Drive merge turns repeated orphaned WorkLog names into one reusable project', async () => {
+    await resetDb();
+
+    const result = await mergeCloudToLocal([
+        {
+            id: 100,
+            syncId: 'kb-1',
+            date: '2026-08-01',
+            projectId: 998,
+            projectName: 'Komerční banka',
+            people: 'Martin',
+            hours: 2,
+            source: 'manual',
+            createdAt: 10,
+            updatedAt: 10,
+        },
+        {
+            id: 101,
+            syncId: 'kb-2',
+            date: '2026-08-02',
+            projectId: 999,
+            projectName: '  KOMERČNÍ BANKA ',
+            people: 'Martin',
+            hours: 3,
+            source: 'manual',
+            createdAt: 20,
+            updatedAt: 20,
+        },
+    ], []);
+
+    assert.equal(result.projectsAdded, 1);
+    const [project] = await db.projects.toArray();
+    assert.equal(project?.name, 'Komerční banka');
+    assert.deepEqual(
+        (await db.workLogs.orderBy('date').toArray()).map((workLog) => ({
+            projectId: workLog.projectId,
+            projectName: workLog.projectName,
+        })),
+        [
+            { projectId: project?.id, projectName: 'Komerční banka' },
+            { projectId: project?.id, projectName: '  KOMERČNÍ BANKA ' },
+        ],
+    );
+});
+
+test('Drive merge does not attach an imported orphan to an unrelated local project id', async () => {
+    await resetDb();
+    const unrelatedId = await db.projects.add({
+        name: 'Jiný projekt', color: 'rose', isActive: true, createdAt: 1, updatedAt: 1,
+    });
+
+    await mergeCloudToLocal([{
+        id: 100,
+        syncId: 'imported-orphan',
+        date: '2026-08-04',
+        projectId: unrelatedId,
+        projectName: 'Komerční banka',
+        people: 'Martin',
+        hours: 2,
+        source: 'manual',
+        createdAt: 10,
+        updatedAt: 10,
+    }], []);
+
+    const projects = await db.projects.toArray();
+    const importedProject = projects.find((project) => project.name === 'Komerční banka');
+    assert.ok(importedProject?.id);
+    assert.notEqual(importedProject.id, unrelatedId);
+    assert.equal((await db.workLogs.toArray())[0]?.projectId, importedProject.id);
 });
 
 test('Drive merge keeps normalized project buckets current within one cloud payload', async () => {
@@ -181,7 +257,7 @@ test('Drive merge keeps normalized project buckets current within one cloud payl
     assert.equal(result.projectsUpdated, 1);
     assert.equal(await db.projects.count(), 1);
     const [project] = await db.projects.toArray();
-    assert.equal(project?.name, ' plaza ');
+    assert.equal(project?.name, 'plaza');
     assert.equal(project?.color, 'rose');
     assert.equal(project?.isActive, false);
     assert.equal(project?.createdAt, 10);

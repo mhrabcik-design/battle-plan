@@ -404,30 +404,6 @@ test('U1: Agent Bridge returns duplicate for an active normalized match without 
     assert.deepEqual(await db.projects.toArray(), [{ ...original, id }]);
 });
 
-test('U1: Agent Bridge surfaces seeded legacy collisions as conflict without mutation', async () => {
-    await resetDb();
-    const first = await db.projects.add({
-        name: 'Plaza', color: 'slate', isActive: true, updatedAt: 20, createdAt: 10,
-    } as Project);
-    const second = await db.projects.add({
-        name: ' plaza ', color: 'rose', isActive: false, updatedAt: 40, createdAt: 30,
-    } as Project);
-    const before = await db.projects.toArray();
-
-    const result = await agentBridge.applyWrite({
-        id: 'agent-proj-conflict',
-        action: 'create_project',
-        project_data: { name: 'PLAZA', color: 'emerald' },
-        created_at: Date.now(),
-    });
-
-    assert.ok(first !== second);
-    assert.equal(result.success, false);
-    assert.equal(result.outcome, 'conflict');
-    assert.equal(result.last_error, 'project name conflict');
-    assert.deepEqual(await db.projects.toArray(), before);
-});
-
 test('U4: create_project rejects empty name with name required', async () => {
     seedSignedInStorage();
     setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
@@ -774,9 +750,9 @@ test('U7: agentInbox is a Dexie Table and recordings is no longer declared in th
     assert.ok(names.includes('settings'), 'settings must be present');
     // The full removal of the recordings table from the class and all
     // version().stores() chains is a release-rollout concern; the test
-    // pins the v9 endpoint (agentInbox + 4 other tables). Cleaning the
+    // pins the v10 endpoint (agentInbox + 4 other tables). Cleaning the
     // v1+v2 chains is a follow-up migration (no production data).
-    assert.equal(await db.verno, 9);
+    assert.equal(await db.verno, 10);
 });
 
 

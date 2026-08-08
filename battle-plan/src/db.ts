@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie';
+import { reconcileProjectIdentities } from './utils/projectIdentityReconciliation.ts';
 
 export interface SubTask {
     id: string;
@@ -95,8 +96,8 @@ export class BattlePlanDB extends Dexie {
     projects!: Table<Project>;
     agentInbox!: Table<AgentInboxRow>;
 
-    constructor() {
-        super('BattlePlanDB');
+    constructor(name = 'BattlePlanDB') {
+        super(name);
         this.version(1).stores({
             tasks: '++id, type, date, urgency, status, createdAt',
             recordings: '++id, analyzed, createdAt'
@@ -142,6 +143,42 @@ export class BattlePlanDB extends Dexie {
             workLogs: '++id, date, projectId, hours, createdAt',
             projects: '++id, name, isActive, createdAt',
             agentInbox: 'id, action, entity_type, applied_at, received_at'
+        });
+        // v10: one normalized project name is one durable identity. Repair
+        // legacy/device-local duplicates and attach orphaned WorkLogs to the
+        // reusable catalog row without deleting any work history.
+        this.version(10).stores({
+            tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+            settings: 'id',
+            workLogs: '++id, date, projectId, hours, createdAt',
+            projects: '++id, name, isActive, createdAt',
+            agentInbox: 'id, action, entity_type, applied_at, received_at'
+        }).upgrade(async (transaction) => {
+            const reconciliation = await reconcileProjectIdentities(
+                transaction.table<Project, number>('projects'),
+                transaction.table<WorkLog, number>('workLogs'),
+            );
+            if (reconciliation.projectIdRemaps.size === 0) return;
+
+            const inbox = transaction.table<AgentInboxRow, string>('agentInbox');
+            const pendingRows = (await inbox.toArray()).filter((row) => row.applied_at == null);
+            const migratedRows = pendingRows.flatMap((row) => {
+                if (!row.payload || typeof row.payload !== 'object') return [];
+                const payload = { ...row.payload } as Record<string, unknown>;
+                const field = row.entity_type === 'project' ? 'project_data' : 'worklog_data';
+                const entity = payload[field];
+                if (!entity || typeof entity !== 'object') return [];
+                const data = { ...entity } as Record<string, unknown>;
+                const idField = row.entity_type === 'project' ? 'id' : 'projectId';
+                const currentId = data[idField];
+                if (typeof currentId !== 'number') return [];
+                const projectId = reconciliation.projectIdRemaps.get(currentId);
+                if (projectId == null) return [];
+                data[idField] = projectId;
+                payload[field] = data;
+                return [{ ...row, payload }];
+            });
+            if (migratedRows.length > 0) await inbox.bulkPut(migratedRows);
         });
     }
 }

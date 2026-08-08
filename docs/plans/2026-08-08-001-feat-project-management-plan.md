@@ -10,6 +10,8 @@ execution: code
 
 # WorkLog Project Management - Plan
 
+> **Product amendment — 2026-08-08:** User validation established that repeated normalized names are always one project, including legacy “3 +1” WorkLog variants. The shipped follow-up supersedes the collision-preservation decisions below: Dexie v10 and Drive sync reconcile duplicate rows and relink WorkLogs to one catalog ID, while preserving each WorkLog's historical name snapshot. Calendar and table grouping use the same normalized identity.
+
 ## Goal Capsule
 
 - **Objective:** Add one durable local project catalog to WorkLogs so a project such as "Liberec Plaza Banka" is created once, managed centrally, and selected repeatedly while work continues. Existing Drive sync remains best-effort and name-matched across devices.

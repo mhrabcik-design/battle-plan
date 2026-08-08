@@ -1,5 +1,8 @@
 import { db, type Project, type ProjectColor } from '../db.ts';
 import { PROJECT_COLOR_VALUES } from '../utils/projectColors.ts';
+import { normalizeProjectName } from '../utils/projectIdentityReconciliation.ts';
+
+export { normalizeProjectName } from '../utils/projectIdentityReconciliation.ts';
 
 type ProjectSource = NonNullable<Project['source']>;
 
@@ -34,10 +37,6 @@ export type ProjectCatalogResult =
     | { outcome: 'archived-match' | 'duplicate'; project: Project }
     | { outcome: 'conflict'; projects: Project[] }
     | { outcome: 'validation'; message: string };
-
-export function normalizeProjectName(name: string): string {
-    return name.trim().toLowerCase();
-}
 
 function isProjectColor(value: unknown): value is ProjectColor {
     return PROJECT_COLOR_VALUES.includes(value as ProjectColor);
