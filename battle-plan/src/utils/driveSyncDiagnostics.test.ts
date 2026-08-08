@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+    autoSyncFailureHealth,
     driveUnavailableHealth,
     emptySuggestionsHealth,
     GOOGLE_DRIVE_RECONSENT_MESSAGE,
     isDriveScopeError,
     taskBackupHealth,
 } from './driveSyncDiagnostics.ts';
+import { ProjectIdentityConflictError } from './projectIdentityReconciliation.ts';
 
 test('Drive scope diagnostics centralize permission detection and recovery guidance', () => {
     assert.equal(isDriveScopeError('403 Forbidden'), true);
@@ -16,6 +18,19 @@ test('Drive scope diagnostics centralize permission detection and recovery guida
     assert.equal(isDriveScopeError('Insufficient Authentication Scopes'), true);
     assert.equal(isDriveScopeError('500 Internal Server Error'), false);
     assert.match(GOOGLE_DRIVE_RECONSENT_MESSAGE, /myaccount\.google\.com\/permissions/);
+});
+
+test('project identity conflicts are routed to WorkLogs sync health', () => {
+    const conflict = new ProjectIdentityConflictError('alias collision', ['plaza']);
+
+    assert.deepEqual(autoSyncFailureHealth(conflict), {
+        key: 'worklogs',
+        patch: {
+            state: 'error',
+            detail: 'Synchronizace WorkLogs narazila na konflikt identity projektů',
+            lastError: 'alias collision',
+        },
+    });
 });
 
 test('driveUnavailableHealth keeps auth-unavailable idle and Drive failures actionable', () => {

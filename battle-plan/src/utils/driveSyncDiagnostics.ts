@@ -1,6 +1,7 @@
 import type { DriveStoreStatus } from '../services/driveJsonStore';
 import type { TaskDriveBackupLoadResult } from '../services/taskDriveBackup';
 import type { SyncHealth } from '../hooks/useSyncDiagnostics';
+import { ProjectIdentityConflictError } from './projectIdentityReconciliation.ts';
 import { getErrorMessage } from './errors.ts';
 
 const DRIVE_SCOPE_ERROR_PATTERN = /403|PERMISSION_DENIED|Insufficient Authentication Scopes/i;
@@ -41,5 +42,30 @@ export function emptySuggestionsHealth(): Partial<SyncHealth> {
         state: 'ok',
         detail: 'Žádné návrhy na Drive zatím nejsou',
         lastError: null,
+    };
+}
+
+export function autoSyncFailureHealth(error: unknown): {
+    key: 'tasks' | 'worklogs';
+    patch: Partial<SyncHealth>;
+} {
+    const message = getErrorMessage(error);
+    if (error instanceof ProjectIdentityConflictError) {
+        return {
+            key: 'worklogs',
+            patch: {
+                state: 'error',
+                detail: 'Synchronizace WorkLogs narazila na konflikt identity projektů',
+                lastError: message,
+            },
+        };
+    }
+    return {
+        key: 'tasks',
+        patch: {
+            state: 'error',
+            detail: 'Automatická synchronizace selhala',
+            lastError: message,
+        },
     };
 }

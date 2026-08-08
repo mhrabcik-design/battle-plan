@@ -1,8 +1,16 @@
 import { db, type Project, type Setting, type WorkLog } from '../db.ts';
+import { normalizeProjectAliases } from '../utils/projectIdentityReconciliation.ts';
+
+interface AppContextProject {
+    id: number;
+    name: string;
+    aliases?: string[];
+    color: Project['color'];
+}
 
 export interface AppContext {
-    activeProjects: { id: number; name: string; color: Project['color'] }[];
-    archivedProjects: { id: number; name: string; color: Project['color'] }[];
+    activeProjects: AppContextProject[];
+    archivedProjects: AppContextProject[];
     todaysWorklogs: { id: number; projectName: string; hours: number }[];
     config: { model: string; uiScale: number; locale: string };
 }
@@ -19,20 +27,35 @@ function toIsoDate(d: Date): string {
     return `${y}-${m}-${day}`;
 }
 
-function pickActiveProjects(all: Project[]): { id: number; name: string; color: Project['color'] }[] {
+function toContextProject(project: Project): AppContextProject {
+    const aliases = normalizeProjectAliases(project.name, project.aliases);
+    return {
+        id: project.id!,
+        name: project.name,
+        ...(aliases.length > 0 ? { aliases } : {}),
+        color: project.color,
+    };
+}
+
+function pickActiveProjects(all: Project[]): AppContextProject[] {
     return all
         .filter((p) => p.isActive)
         .sort((a, b) => a.name.localeCompare(b.name, 'cs'))
         .slice(0, ACTIVE_PROJECTS_LIMIT)
-        .map((p) => ({ id: p.id!, name: p.name, color: p.color }));
+        .map(toContextProject);
 }
 
-function pickArchivedProjects(all: Project[]): { id: number; name: string; color: Project['color'] }[] {
+function pickArchivedProjects(all: Project[]): AppContextProject[] {
     return all
         .filter((p) => !p.isActive)
         .sort((a, b) => a.name.localeCompare(b.name, 'cs'))
         .slice(0, ACTIVE_PROJECTS_LIMIT)
-        .map((p) => ({ id: p.id!, name: p.name, color: p.color }));
+        .map(toContextProject);
+}
+
+function renderContextProject(project: AppContextProject): string {
+    const aliasText = project.aliases?.length ? `, aliasy=${project.aliases.join(', ')}` : '';
+    return `- ${project.name} (id=${project.id}, barva=${project.color}${aliasText})`;
 }
 
 function pickTodaysWorklogs(all: WorkLog[], today: string): { id: number; projectName: string; hours: number }[] {
@@ -70,7 +93,7 @@ export function renderAppContextSection(ctx: AppContext): string {
     if (ctx.activeProjects.length > 0) {
         sections.push('**Aktivní projekty:**');
         for (const p of ctx.activeProjects) {
-            sections.push(`- ${p.name} (id=${p.id}, barva=${p.color})`);
+            sections.push(renderContextProject(p));
         }
         if (ctx.activeProjects.length === ACTIVE_PROJECTS_LIMIT) {
             sections.push(`(+ další)`);
@@ -82,7 +105,7 @@ export function renderAppContextSection(ctx: AppContext): string {
     if (ctx.archivedProjects.length > 0) {
         sections.push('**Archivované projekty (nejsou platné pro nové WorkLogy):**');
         for (const p of ctx.archivedProjects) {
-            sections.push(`- ${p.name} (id=${p.id}, barva=${p.color})`);
+            sections.push(renderContextProject(p));
         }
         if (ctx.archivedProjects.length === ACTIVE_PROJECTS_LIMIT) {
             sections.push(`(+ další)`);

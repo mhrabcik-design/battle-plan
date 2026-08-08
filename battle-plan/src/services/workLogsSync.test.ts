@@ -2,8 +2,11 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { createServer } from 'vite';
-import type { BattlePlanDB } from '../db.ts';
-import type { mergeCloudToLocal as MergeCloudToLocal } from './workLogsSync.ts';
+import type { BattlePlanDB, Project } from '../db.ts';
+import type {
+    mergeCloudToLocal as MergeCloudToLocal,
+    mergeLocalToCloud as MergeLocalToCloud,
+} from './workLogsSync.ts';
 
 const storage = new Map<string, string>();
 (globalThis as unknown as { localStorage: Storage }).localStorage = {
@@ -26,8 +29,10 @@ const vite = await createServer({
     appType: 'custom',
 });
 const { db } = await vite.ssrLoadModule('/src/db.ts') as { db: BattlePlanDB };
-const { mergeCloudToLocal } = await vite.ssrLoadModule('/src/services/workLogsSync.ts') as {
+const { mergeCloudToLocal, mergeLocalToCloud, workLogsSync } = await vite.ssrLoadModule('/src/services/workLogsSync.ts') as {
     mergeCloudToLocal: typeof MergeCloudToLocal;
+    mergeLocalToCloud: typeof MergeLocalToCloud;
+    workLogsSync: unknown;
 };
 after(async () => vite.close());
 
@@ -291,4 +296,162 @@ test('overlapping Drive merges cannot create normalized project duplicates', asy
     const [project] = await db.projects.toArray();
     assert.equal(project?.color, 'rose');
     assert.equal(project?.updatedAt, 40);
+});
+
+test('Drive merge cannot resurrect a stale source owned as a survivor alias', async () => {
+    await resetDb();
+    const survivorId = await db.projects.add({
+        name: 'Komerční Banka',
+        aliases: ['Komerční banka Plaza'],
+        color: 'indigo',
+        isActive: true,
+        source: 'user',
+        createdAt: 10,
+        updatedAt: 100,
+    });
+
+    await mergeCloudToLocal([{
+        id: 500,
+        syncId: 'stale-plaza-log',
+        date: '2026-08-08',
+        projectId: 999,
+        projectName: 'Komerční banka Plaza',
+        people: 'Martin',
+        hours: 3,
+        source: 'manual',
+        createdAt: 20,
+        updatedAt: 20,
+    }], [{
+        id: 999,
+        name: 'Komerční banka Plaza',
+        aliases: ['KB Plaza', null, 42] as unknown as string[],
+        color: 'rose',
+        isActive: false,
+        source: 'agent',
+        createdAt: 5,
+        updatedAt: 999,
+    }]);
+
+    assert.deepEqual(await db.projects.toArray(), [{
+        id: survivorId,
+        name: 'Komerční Banka',
+        aliases: ['KB Plaza', 'Komerční banka Plaza'],
+        color: 'indigo',
+        isActive: true,
+        source: 'user',
+        createdAt: 10,
+        updatedAt: 1000,
+    }]);
+    const [imported] = await db.workLogs.toArray();
+    assert.equal(imported?.projectId, survivorId);
+    assert.equal(imported?.projectName, 'Komerční banka Plaza');
+});
+
+test('Drive alias convergence is independent of cloud project order and idempotent', async () => {
+    async function mergeOrder(projects: Project[]): Promise<Project[]> {
+        await resetDb();
+        await db.projects.add({
+            name: 'A', aliases: ['B'], color: 'indigo', isActive: true, createdAt: 1, updatedAt: 10,
+        });
+        await mergeCloudToLocal([], projects);
+        await mergeCloudToLocal([], [...projects].reverse());
+        return (await db.projects.toArray()).map((project) => ({ ...project, id: 0 }));
+    }
+
+    const cloudProjects: Project[] = [
+        { id: 900, name: 'B', aliases: ['C'], color: 'rose', isActive: true, createdAt: 2, updatedAt: 20 },
+        { id: 901, name: 'C', aliases: ['D'], color: 'slate', isActive: false, createdAt: 3, updatedAt: 30 },
+    ];
+    const forward = await mergeOrder(cloudProjects);
+    const reverse = await mergeOrder([...cloudProjects].reverse());
+
+    assert.deepEqual(forward, reverse);
+    assert.deepEqual(forward, [{
+        id: 0,
+        name: 'A', aliases: ['B', 'C', 'D'], color: 'indigo', isActive: true,
+        createdAt: 1, updatedAt: 31,
+    }]);
+});
+
+test('alias-only Drive convergence advances the project hash once', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({
+        name: 'A', aliases: ['B'], color: 'indigo', isActive: true,
+        createdAt: 1, updatedAt: 100,
+    });
+
+    await mergeCloudToLocal([], [{
+        id: 900, name: 'B', aliases: ['C'], color: 'rose', isActive: false,
+        createdAt: 2, updatedAt: 20,
+    }]);
+    const first = await db.projects.get(projectId);
+    assert.deepEqual(first?.aliases, ['B', 'C']);
+    assert.equal(first?.updatedAt, 101);
+
+    await mergeCloudToLocal([], [{
+        id: 900, name: 'B', aliases: ['C'], color: 'rose', isActive: false,
+        createdAt: 2, updatedAt: 20,
+    }]);
+    assert.deepEqual(await db.projects.get(projectId), first);
+});
+
+test('mergeLocalToCloud aborts without writing when the Drive pull fails', async () => {
+    await resetDb();
+    await db.projects.add({
+        name: 'Local only', color: 'indigo', isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    const sync = workLogsSync as {
+        isInitialized: boolean;
+        loadAllDetailed: () => Promise<unknown>;
+        saveAll: (payload: unknown) => Promise<number | null>;
+    };
+    const originalInitialized = sync.isInitialized;
+    const originalLoad = sync.loadAllDetailed;
+    const originalSave = sync.saveAll;
+    let saveCalls = 0;
+    try {
+        sync.isInitialized = true;
+        sync.loadAllDetailed = async () => ({
+            kind: 'error', message: 'temporary Drive read failure',
+            data: { workLogs: [], projects: [], timestamp: 0 },
+        });
+        sync.saveAll = async () => {
+            saveCalls += 1;
+            return 123;
+        };
+
+        assert.equal(await mergeLocalToCloud(), false);
+        assert.equal(saveCalls, 0);
+    } finally {
+        sync.isInitialized = originalInitialized;
+        sync.loadAllDetailed = originalLoad;
+        sync.saveAll = originalSave;
+    }
+});
+
+test('Drive identity conflict rejects atomically before importing projects or WorkLogs', async () => {
+    await resetDb();
+    await db.projects.add({
+        name: 'A', aliases: ['Shared'], color: 'indigo', isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    const beforeProjects = await db.projects.toArray();
+
+    await assert.rejects(mergeCloudToLocal([{
+        id: 99, syncId: 'must-not-import', date: '2026-08-08', projectId: 99,
+        projectName: 'B', people: 'Martin', hours: 1, source: 'manual', createdAt: 5, updatedAt: 5,
+    }], [{
+        id: 99, name: 'B', aliases: ['shared'], color: 'rose', isActive: true,
+        createdAt: 2, updatedAt: 2,
+    }]));
+
+    assert.deepEqual(await db.projects.toArray(), beforeProjects);
+    assert.equal(await db.workLogs.count(), 0);
+
+    await resetDb();
+    const cyclePayload: Project[] = [
+        { id: 1, name: 'A', aliases: ['B'], color: 'indigo', isActive: true, createdAt: 1, updatedAt: 1 },
+        { id: 2, name: 'B', aliases: ['A'], color: 'rose', isActive: true, createdAt: 2, updatedAt: 2 },
+    ];
+    await assert.rejects(mergeCloudToLocal([], cyclePayload));
+    assert.equal(await db.projects.count(), 0);
 });

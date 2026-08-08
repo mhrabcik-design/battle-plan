@@ -7,7 +7,9 @@ A durable work assignment that is created once and reused across WorkLogs for as
 
 Only active projects are available for new WorkLogs. Archived projects keep their identity and remain visible through historical WorkLogs.
 
-One normalized project name means one project identity, even when older records differ only by spaces, letter case, local numeric ID, or color. Database upgrades and Drive merges reconcile those variants to one catalog row while WorkLogs retain their historical name snapshot.
+Canonical names and aliases share one project identity namespace. Normalization reconciles safe spacing and letter-case variants automatically; a user can explicitly merge semantically equivalent but differently named rows by selecting a source and the active survivor.
+
+Absorbed and previous names remain on the survivor as synchronized alias tombstones. They prevent an old Drive payload or later create/rename from recreating the removed identity. WorkLogs move to the survivor through `projectId`, but retain their historical `projectName` snapshot; reports group by the resolved canonical project. Ambiguous alias ownership fails closed, and semantic merge remains a human-only action.
 
 ### WorkLog
 A record of completed work on a project, distinct from a task or meeting because it represents labor that can be reported by date, project, people, and hours.

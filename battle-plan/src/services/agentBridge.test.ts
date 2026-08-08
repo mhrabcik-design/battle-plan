@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import type { Project, Setting, WorkLog } from '../db.ts';
+import type { AgentWriteProjectData } from './agentBridge.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -84,6 +85,13 @@ const gapiMock: {
 const { googleService } = await import('./googleService.ts');
 const { agentBridge, shouldAcknowledgeApplyWrite } = await import('./agentBridge.ts');
 const { db } = await import('../db.ts');
+
+const agentProjectDataContract: AgentWriteProjectData = {
+    name: 'Agent project',
+    // @ts-expect-error aliases are identity tombstones controlled only by human merge/catalog flows
+    aliases: ['Forbidden alias'],
+};
+void agentProjectDataContract;
 
 type GoogleServiceInternalState = {
     accessToken: string | null;
@@ -402,6 +410,158 @@ test('U1: Agent Bridge returns duplicate for an active normalized match without 
     assert.equal(shouldAcknowledgeApplyWrite(result), true);
     assert.equal(result.last_error, 'project already exists');
     assert.deepEqual(await db.projects.toArray(), [{ ...original, id }]);
+});
+
+test('manual-merge aliases make Agent Bridge project creates terminal duplicate or archived-match outcomes', async () => {
+    await resetDb();
+    const activeId = await db.projects.add({
+        name: 'Komerční Banka', aliases: ['Komerční banka Plaza'], color: 'amber',
+        isActive: true, updatedAt: 20, createdAt: 10,
+    } as Project);
+
+    const duplicate = await agentBridge.applyWrite({
+        id: 'agent-project-alias-active',
+        action: 'create_project',
+        project_data: { name: ' komerční BANKA plaza ' },
+        created_at: Date.now(),
+    });
+    assert.equal(duplicate.success, false);
+    assert.equal(duplicate.disposition, 'terminal');
+    assert.equal(duplicate.outcome, 'duplicate');
+    assert.equal(await db.projects.count(), 1);
+
+    await db.projects.update(activeId, { isActive: false });
+    const archivedMatch = await agentBridge.applyWrite({
+        id: 'agent-project-alias-archived',
+        action: 'create_project',
+        project_data: { name: 'Komerční banka Plaza' },
+        created_at: Date.now(),
+    });
+    assert.equal(archivedMatch.success, false);
+    assert.equal(archivedMatch.disposition, 'terminal');
+    assert.equal(archivedMatch.outcome, 'archived-match');
+    assert.equal((await db.projects.get(activeId))!.isActive, false);
+});
+
+test('manual-merge alias blocks Agent Bridge rename without a partial project write', async () => {
+    await resetDb();
+    const survivorId = await db.projects.add({
+        name: 'Komerční Banka', aliases: ['Komerční banka Plaza'], color: 'amber',
+        isActive: true, updatedAt: 20, createdAt: 10,
+    } as Project);
+    const other: Project = {
+        name: 'Jiný projekt', color: 'rose', isActive: true, updatedAt: 30, createdAt: 30,
+    };
+    const otherId = await db.projects.add(other);
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-project-alias-rename',
+        action: 'update_project',
+        project_data: { id: otherId, name: 'Komerční banka Plaza', color: 'indigo' },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.disposition, 'terminal');
+    assert.equal(result.outcome, 'duplicate');
+    assert.deepEqual(await db.projects.get(otherId), { ...other, id: otherId });
+    assert.equal((await db.projects.get(survivorId))!.name, 'Komerční Banka');
+});
+
+test('pending project action for an absorbed source id ends terminally without redirecting to survivor', async () => {
+    await resetDb();
+    const survivor: Project = {
+        name: 'Komerční Banka', aliases: ['Komerční banka Plaza'], color: 'amber',
+        isActive: true, updatedAt: 20, createdAt: 10,
+    };
+    const survivorId = await db.projects.add(survivor);
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-stale-source-project',
+        action: 'delete_project',
+        project_data: { id: survivorId + 999 },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.disposition, 'terminal');
+    assert.equal(result.last_error, 'project not found');
+    assert.deepEqual(await db.projects.get(survivorId), { ...survivor, id: survivorId });
+});
+
+test('Agent Bridge WorkLog with absorbed alias and removed source id resolves to active survivor', async () => {
+    await resetDb();
+    const survivorId = await db.projects.add({
+        name: 'Komerční Banka', aliases: ['Komerční banka Plaza'], color: 'amber',
+        isActive: true, updatedAt: 20, createdAt: 10,
+    } as Project);
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-stale-source-worklog',
+        action: 'create_worklog',
+        worklog_data: {
+            projectId: survivorId + 999,
+            projectName: 'Komerční banka Plaza',
+            date: '2026-08-08',
+            hours: 4,
+            people: 'Martin',
+        },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, true);
+    const stored = await db.workLogs.get(result.newId!);
+    assert.equal(stored!.projectId, survivorId);
+    assert.equal(stored!.projectName, 'Komerční Banka');
+});
+
+test('Agent Bridge update with an absorbed source id preserves the historical project snapshot', async () => {
+    await resetDb();
+    const survivorId = await db.projects.add({
+        name: 'Komerční Banka', aliases: ['Komerční banka Plaza'], color: 'amber',
+        isActive: true, updatedAt: 20, createdAt: 10,
+    } as Project);
+    const workLogId = await db.workLogs.add({
+        syncId: 'historical-alias-update', date: '2026-08-08', projectId: survivorId,
+        projectName: 'Komerční banka Plaza', people: 'Martin', hours: 4,
+        source: 'manual', updatedAt: 30, createdAt: 30,
+    });
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-update-stale-source',
+        action: 'update_worklog',
+        worklog_data: {
+            id: workLogId,
+            projectId: survivorId + 999,
+            projectName: 'Komerční banka Plaza',
+            description: 'Updated after merge',
+        },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, true);
+    const stored = await db.workLogs.get(workLogId);
+    assert.equal(stored!.projectId, survivorId);
+    assert.equal(stored!.projectName, 'Komerční banka Plaza');
+    assert.equal(stored!.description, 'Updated after merge');
+});
+
+test('Agent Bridge rejects project aliases instead of mutating identity metadata', async () => {
+    await resetDb();
+    const result = await agentBridge.applyWrite({
+        id: 'agent-project-alias-write',
+        action: 'create_project',
+        project_data: {
+            name: 'Agent project',
+            aliases: ['Injected alias'],
+        } as unknown as AgentWriteProjectData,
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.disposition, 'terminal');
+    assert.equal(result.last_error, 'project aliases are not agent-writable');
+    assert.equal(await db.projects.count(), 0);
 });
 
 test('U4: create_project rejects empty name with name required', async () => {

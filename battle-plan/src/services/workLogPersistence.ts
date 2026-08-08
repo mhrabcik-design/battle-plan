@@ -1,5 +1,10 @@
 import { db, type Project, type WorkLog } from '../db.ts';
 import { normalizeProjectName } from './projectCatalog.ts';
+import {
+    buildProjectIdentityIndex,
+    projectIdentityNames,
+    resolveProjectIdentityFromIndex,
+} from '../utils/projectIdentityReconciliation.ts';
 
 export type NewWorkLogDraft = Omit<WorkLog, 'id' | 'projectName'> & {
     projectName?: string;
@@ -25,7 +30,24 @@ export function isMatchingActiveProject(
 ): project is Project & { id: number } {
     return project?.id === selection.id
         && project.isActive
-        && normalizeProjectName(project.name) === normalizeProjectName(selection.name);
+        && projectIdentityNames(project).some(
+            (name) => normalizeProjectName(name) === normalizeProjectName(selection.name),
+        );
+}
+
+function activeProjectFromCatalog(
+    project: Project | undefined,
+    selection: WorkLogProjectSelection,
+    identityIndex?: Map<string, Project[]>,
+): Project & { id: number } {
+    if (isMatchingActiveProject(project, selection)) return project;
+    if (!project && selection.name && identityIndex) {
+        const identity = resolveProjectIdentityFromIndex(identityIndex, selection.name);
+        if (identity.outcome === 'resolved' && identity.project.id != null && identity.project.isActive) {
+            return identity.project as Project & { id: number };
+        }
+    }
+    throw new ProjectUnavailableError();
 }
 
 async function requireActiveProject(
@@ -34,10 +56,16 @@ async function requireActiveProject(
 ): Promise<Project & { id: number }> {
     const project = await db.projects.get(projectId);
     const selection = { id: projectId, name: snapshottedName ?? project?.name ?? '' };
-    if (!isMatchingActiveProject(project, selection)) {
-        throw new ProjectUnavailableError();
-    }
-    return project;
+    if (project) return activeProjectFromCatalog(project, selection);
+
+    // A manual merge removes the absorbed local id. Pending portable writes
+    // may still carry that stale id, so only a missing id may fall back to an
+    // unambiguous canonical/alias lookup. An id that now belongs to another
+    // project remains a hard mismatch and cannot be silently redirected.
+    const identityIndex = snapshottedName
+        ? buildProjectIdentityIndex(await db.projects.toArray())
+        : undefined;
+    return activeProjectFromCatalog(project, selection, identityIndex);
 }
 
 /**
@@ -48,10 +76,20 @@ export async function addWorkLogsWithActiveProjects(
     drafts: readonly NewWorkLogDraft[],
 ): Promise<WorkLog[]> {
     return db.transaction('rw', [db.projects, db.workLogs], async () => {
-        const validated = await Promise.all(drafts.map(async (draft) => ({
-            draft,
-            project: await requireActiveProject(draft.projectId, draft.projectName),
-        })));
+        const projects = await db.projects.toArray();
+        const projectsById = new Map(projects.map((project) => [project.id, project]));
+        const identityIndex = buildProjectIdentityIndex(projects);
+        const validated = drafts.map((draft) => {
+            const project = projectsById.get(draft.projectId);
+            return {
+                draft,
+                project: activeProjectFromCatalog(
+                    project,
+                    { id: draft.projectId, name: draft.projectName ?? project?.name ?? '' },
+                    identityIndex,
+                ),
+            };
+        });
         const saved: WorkLog[] = [];
 
         for (const { draft, project } of validated) {
@@ -102,7 +140,12 @@ export async function updateWorkLogWithProjectSelection(
 
         if (selection && assignmentChanged) {
             const activeProject = await requireActiveProject(selection.id, selection.name);
-            assignment = { projectId: activeProject.id, projectName: activeProject.name };
+            // A pending portable update can still carry the removed source ID
+            // after a manual merge. If its alias resolves back to the WorkLog's
+            // existing survivor, retain the denormalized historical snapshot.
+            if (activeProject.id !== existing.projectId) {
+                assignment = { projectId: activeProject.id, projectName: activeProject.name };
+            }
         }
 
         const updated: WorkLog = {

@@ -8,12 +8,12 @@ import type { GoogleAuthStatus, GoogleTaskList } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
 import {
+  autoSyncFailureHealth,
   driveUnavailableHealth,
   GOOGLE_DRIVE_RECONSENT_MESSAGE,
   isDriveScopeError,
   taskBackupHealth,
 } from '../utils/driveSyncDiagnostics';
-import { getErrorMessage } from '../utils/errors';
 
 interface UseDriveSyncOrchestrationArgs {
   googleAuth: GoogleAuthStatus;
@@ -215,12 +215,8 @@ export function useDriveSyncOrchestration({
         }
       } catch (e) {
         console.error("Auto-sync check failed", e);
-        const message = getErrorMessage(e);
-        updateSyncHealth('tasks', {
-          state: 'error',
-          detail: 'Automatická synchronizace selhala',
-          lastError: message,
-        });
+        const failure = autoSyncFailureHealth(e);
+        updateSyncHealth(failure.key, failure.patch);
       }
     };
 
