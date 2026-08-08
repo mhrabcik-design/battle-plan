@@ -138,3 +138,27 @@ test('U3: edit changing assignment snapshots an active target inside the update 
     assert.equal(updated.projectName, activeTarget.name);
     assert.equal(updated.description, 'moved');
 });
+
+test('manual-merge alias keeps an unchanged historical assignment valid on edit', async () => {
+    await resetDb();
+    const survivor = await seedProject({
+        name: 'Komerční Banka',
+        aliases: ['Komerční banka Plaza'],
+        isActive: true,
+    });
+    const original = draft(survivor, {
+        projectName: 'Komerční banka Plaza',
+        description: 'before',
+    });
+    const id = await db.workLogs.add(original);
+
+    const updated = await updateWorkLogWithProjectSelection({
+        id: id as number,
+        selectedProject: { id: survivor.id!, name: 'Komerční banka Plaza' },
+        changes: { description: 'after', updatedAt: 50 },
+    });
+
+    assert.equal(updated.projectId, survivor.id);
+    assert.equal(updated.projectName, 'Komerční banka Plaza');
+    assert.equal(updated.description, 'after');
+});

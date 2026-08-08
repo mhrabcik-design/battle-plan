@@ -3,7 +3,14 @@ import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
 import { getWorkLogSyncKey } from '../utils/workLogSyncIdentity';
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 import { normalizeProjectName } from './projectCatalog';
-import { canonicalProject, reconcileProjectIdentities } from '../utils/projectIdentityReconciliation';
+import {
+    buildProjectIdentityIndex,
+    normalizeProjectAliases,
+    ProjectIdentityConflictError,
+    projectIdentityNames,
+    reconcileProjectIdentities,
+    resolveProjectIdentityFromIndex,
+} from '../utils/projectIdentityReconciliation';
 
 /**
  * WorkLogsSync — Drive I/O pro `work_logs_data.json` ve složce `/Anu-BattlePlan/`.
@@ -164,66 +171,118 @@ export async function mergeCloudToLocal(
         projectsRemoved: 0,
     };
 
-    const localWorkLogs = await db.workLogs.toArray();
-    const localWorkLogsByCompositeKey = new Map<string, WorkLog>();
-    for (const wl of localWorkLogs) {
-        const key = getWorkLogSyncKey(wl);
-        localWorkLogsByCompositeKey.set(key, wl);
-    }
-
     await db.transaction('rw', [db.workLogs, db.projects], async () => {
-        const localProjectsByName = new Map<string, Project[]>();
-        for (const project of await db.projects.toArray()) {
-            const normalizedName = normalizeProjectName(project.name);
-            const matches = localProjectsByName.get(normalizedName);
-            if (matches) {
-                matches.push(project);
-            } else {
-                localProjectsByName.set(normalizedName, [project]);
-            }
-        }
+        const initialReconciliation = await reconcileProjectIdentities(db.projects, db.workLogs);
+        result.projectsRemoved += initialReconciliation.projectsMerged;
+        let localProjects = await db.projects.toArray();
+        let identityIndex = buildProjectIdentityIndex(localProjects);
+        let projectsChanged = false;
 
         // === Projects ===
-        for (const cp of cloudProjects) {
+        const projectsInStableOrder = [...cloudProjects].sort((left, right) => {
+            const nameOrder = normalizeProjectName(left.name).localeCompare(normalizeProjectName(right.name));
+            if (nameOrder !== 0) return nameOrder;
+            if ((left.updatedAt ?? 0) !== (right.updatedAt ?? 0)) {
+                return (left.updatedAt ?? 0) - (right.updatedAt ?? 0);
+            }
+            return (left.createdAt ?? 0) - (right.createdAt ?? 0);
+        });
+        for (const cp of projectsInStableOrder) {
             const normalizedName = normalizeProjectName(cp.name);
-            const matches = localProjectsByName.get(normalizedName) ?? [];
-            if (matches.length === 0) {
+            const identity = resolveProjectIdentityFromIndex(identityIndex, cp.name);
+            if (identity.outcome === 'conflict') {
+                throw new ProjectIdentityConflictError(
+                    `cloud project ${normalizedName} has conflicting local owners`,
+                    [normalizedName],
+                );
+            }
+            if (identity.outcome === 'missing') {
                 const withoutId = { ...cp };
                 delete withoutId.id;
+                const aliases = normalizeProjectAliases(withoutId.name, withoutId.aliases);
                 const project: Project = {
                     ...withoutId,
+                    ...(aliases.length > 0 || withoutId.aliases !== undefined ? { aliases } : {}),
                     isActive: withoutId.isActive ?? true,
                     createdAt: withoutId.createdAt ?? Date.now(),
                     updatedAt: withoutId.updatedAt ?? Date.now(),
                 };
                 const id = await db.projects.add(project);
-                localProjectsByName.set(normalizedName, [{ ...project, id: id as number }]);
+                localProjects.push({ ...project, id: id as number });
+                identityIndex = buildProjectIdentityIndex(localProjects);
+                projectsChanged = true;
                 result.projectsAdded++;
             } else {
-                const local = canonicalProject(matches);
-                if ((cp.updatedAt ?? 0) <= (local.updatedAt ?? 0)) continue;
-
+                const local = identity.project;
+                const matchedCanonical = normalizeProjectName(local.name) === normalizedName;
+                if (!matchedCanonical && projectIdentityNames(cp).some(
+                    (name) => normalizeProjectName(name) === normalizeProjectName(local.name),
+                )) {
+                    throw new ProjectIdentityConflictError(
+                        `cloud project ${normalizedName} creates an alias cycle`,
+                        [normalizedName, normalizeProjectName(local.name)],
+                    );
+                }
+                const cloudIsNewer = matchedCanonical && (cp.updatedAt ?? 0) > (local.updatedAt ?? 0);
+                const nextName = cloudIsNewer ? cp.name : local.name;
+                const aliases = normalizeProjectAliases(nextName, [
+                    ...projectIdentityNames(local),
+                    ...projectIdentityNames(cp),
+                ]);
                 const changes: Partial<Project> = {
-                    name: cp.name,
-                    color: cp.color,
-                    isActive: cp.isActive,
-                    updatedAt: cp.updatedAt ?? Date.now(),
-                    // createdAt zachovej
+                    ...(cloudIsNewer ? {
+                        name: cp.name,
+                        color: cp.color,
+                        isActive: cp.isActive,
+                        updatedAt: cp.updatedAt ?? Date.now(),
+                    } : {}),
+                    ...(aliases.length > 0 || local.aliases !== undefined || cp.aliases !== undefined
+                        ? { aliases }
+                        : {}),
                 };
+                const hasChanges = Object.entries(changes).some(([key, value]) => (
+                    JSON.stringify(local[key as keyof Project]) !== JSON.stringify(value)
+                ));
+                if (!hasChanges) continue;
                 await db.projects.update(local.id!, changes);
-                const localIndex = matches.findIndex((project) => project.id === local.id);
-                matches[localIndex] = { ...local, ...changes };
+                localProjects = localProjects.map((project) => (
+                    project.id === local.id ? { ...local, ...changes } : project
+                ));
+                identityIndex = buildProjectIdentityIndex(localProjects);
+                projectsChanged = true;
                 result.projectsUpdated++;
             }
+        }
+
+        // Validate and collapse the complete identity graph before importing
+        // WorkLogs. Any cycle or competing alias ownership rejects the Dexie
+        // transaction, including the project writes above.
+        if (projectsChanged) {
+            const projectReconciliation = await reconcileProjectIdentities(db.projects, db.workLogs);
+            result.projectsRemoved += projectReconciliation.projectsMerged;
+            localProjects = await db.projects.toArray();
+            identityIndex = buildProjectIdentityIndex(localProjects);
+        }
+        const localWorkLogsByCompositeKey = new Map<string, WorkLog>();
+        for (const workLog of await db.workLogs.toArray()) {
+            localWorkLogsByCompositeKey.set(getWorkLogSyncKey(workLog), workLog);
         }
 
         // === WorkLogs ===
         // Cloud project IDs are device-local. Resolve each imported row through
         // its normalized project snapshot before persisting it locally.
+        let needsOrphanReconciliation = false;
         for (const cw of cloudWorkLogs) {
             const key = getWorkLogSyncKey(cw);
             const local = localWorkLogsByCompositeKey.get(key);
-            const localProject = localProjectsByName.get(normalizeProjectName(cw.projectName))?.[0];
+            const identity = resolveProjectIdentityFromIndex(identityIndex, cw.projectName);
+            if (identity.outcome === 'conflict') {
+                // Reconciliation above normally makes this unreachable, but
+                // retaining the guard prevents first-match attachment if a
+                // malformed payload ever bypasses the graph validation.
+                throw new Error(`conflicting project identity: ${normalizeProjectName(cw.projectName)}`);
+            }
+            const localProject = identity.outcome === 'resolved' ? identity.project : undefined;
             if (!local) {
                 // Cloud-only → přidej (s novým ID)
                 const withoutId = { ...cw };
@@ -235,6 +294,7 @@ export async function mergeCloudToLocal(
                     createdAt: withoutId.createdAt ?? Date.now(),
                     updatedAt: withoutId.updatedAt ?? Date.now(),
                 });
+                needsOrphanReconciliation ||= localProject === undefined;
                 result.workLogsAdded++;
             } else if ((cw.updatedAt ?? 0) > (local.updatedAt ?? 0)) {
                 // Cloud novější → update (zachováme local id)
@@ -245,17 +305,17 @@ export async function mergeCloudToLocal(
                     createdAt: local.createdAt, // createdAt je posvátné
                     updatedAt: cw.updatedAt ?? Date.now(),
                 });
+                needsOrphanReconciliation ||= localProject === undefined;
                 result.workLogsUpdated++;
             }
         }
 
-        const hasImportedChanges = result.workLogsAdded > 0
-            || result.workLogsUpdated > 0
-            || result.projectsAdded > 0
-            || result.projectsUpdated > 0;
-        if (hasImportedChanges) {
+        // Create reusable catalog rows only for true orphans. Alias snapshots
+        // have already resolved to their survivor and retain their display text.
+        if (needsOrphanReconciliation) {
             const reconciliation = await reconcileProjectIdentities(db.projects, db.workLogs);
             result.projectsAdded += reconciliation.projectsCreated;
+            result.projectsRemoved += reconciliation.projectsMerged;
         }
     });
 

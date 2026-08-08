@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { db, type Project, type WorkLog } from '../db.ts';
-import { reconcileProjectIdentities } from './projectIdentityReconciliation.ts';
+import {
+    ProjectIdentityConflictError,
+    reconcileProjectIdentities,
+} from './projectIdentityReconciliation.ts';
 
 async function resetDb(): Promise<void> {
     await db.workLogs.clear();
@@ -123,4 +126,120 @@ test('a renamed historical snapshot keeps its existing project identity', async 
     assert.equal(await db.projects.count(), 1);
     assert.equal((await db.workLogs.get(workLogId))?.projectId, projectId);
     assert.equal((await db.workLogs.get(workLogId))?.projectName, 'Původní název');
+});
+
+test('an absorbed canonical project collapses into its alias owner without replacing survivor metadata', async () => {
+    await resetDb();
+    const survivorId = await db.projects.add({
+        name: 'Komerční Banka',
+        aliases: ['  KOMERČNÍ banka Plaza ', 'KB Plaza'],
+        color: 'indigo',
+        isActive: true,
+        source: 'user',
+        createdAt: 10,
+        updatedAt: 100,
+    });
+    const staleSourceId = await db.projects.add({
+        name: 'Komerční banka Plaza',
+        aliases: ['KB LIBEREC', null, 42, ''] as unknown as string[],
+        color: 'rose',
+        isActive: false,
+        source: 'agent',
+        createdAt: 20,
+        updatedAt: 999,
+    });
+    const workLogId = await db.workLogs.add({
+        date: '2026-08-08', projectId: staleSourceId, projectName: 'Komerční banka Plaza',
+        people: 'Martin', hours: 2, source: 'manual', createdAt: 30, updatedAt: 30,
+    });
+
+    const result = await db.transaction('rw', [db.projects, db.workLogs], () => (
+        reconcileProjectIdentities(db.projects, db.workLogs)
+    ));
+
+    assert.equal(result.projectsMerged, 1);
+    assert.equal(result.workLogsRelinked, 1);
+    assert.deepEqual(await db.projects.get(survivorId), {
+        id: survivorId,
+        name: 'Komerční Banka',
+        aliases: ['KB LIBEREC', 'KB Plaza', 'Komerční banka Plaza'],
+        color: 'indigo',
+        isActive: true,
+        source: 'user',
+        createdAt: 10,
+        updatedAt: 100,
+    });
+    assert.equal(await db.projects.get(staleSourceId), undefined);
+    assert.deepEqual(await db.workLogs.get(workLogId), {
+        id: workLogId,
+        date: '2026-08-08', projectId: survivorId, projectName: 'Komerční banka Plaza',
+        people: 'Martin', hours: 2, source: 'manual', createdAt: 30, updatedAt: 30,
+    });
+});
+
+test('acyclic alias chains collapse deterministically and are idempotent', async () => {
+    await resetDb();
+    const rootId = await db.projects.add({
+        name: 'A', aliases: ['B'], color: 'indigo', isActive: true, createdAt: 1, updatedAt: 10,
+    });
+    const middleId = await db.projects.add({
+        name: 'B', aliases: ['C'], color: 'rose', isActive: true, createdAt: 2, updatedAt: 20,
+    });
+    const leafId = await db.projects.add({
+        name: 'C', aliases: ['D'], color: 'slate', isActive: false, createdAt: 3, updatedAt: 30,
+    });
+
+    const first = await db.transaction('rw', [db.projects, db.workLogs], () => (
+        reconcileProjectIdentities(db.projects, db.workLogs)
+    ));
+    const afterFirst = await db.projects.toArray();
+    const second = await db.transaction('rw', [db.projects, db.workLogs], () => (
+        reconcileProjectIdentities(db.projects, db.workLogs)
+    ));
+
+    assert.deepEqual(first.projectIdRemaps, new Map([[middleId, rootId], [leafId, rootId]]));
+    assert.equal(first.projectsMerged, 2);
+    assert.deepEqual(afterFirst, [{
+        id: rootId,
+        name: 'A',
+        aliases: ['B', 'C', 'D'],
+        color: 'indigo',
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 10,
+    }]);
+    assert.equal(second.projectsMerged, 0);
+    assert.deepEqual(await db.projects.toArray(), afterFirst);
+});
+
+test('cyclic or competing alias ownership fails closed without partial writes', async () => {
+    await resetDb();
+    await db.projects.bulkAdd([
+        { name: 'A', aliases: ['B'], color: 'indigo', isActive: true, createdAt: 1, updatedAt: 1 },
+        { name: 'B', aliases: ['A'], color: 'rose', isActive: true, createdAt: 2, updatedAt: 2 },
+    ]);
+    const beforeCycle = await db.projects.toArray();
+
+    await assert.rejects(
+        db.transaction('rw', [db.projects, db.workLogs], () => (
+            reconcileProjectIdentities(db.projects, db.workLogs)
+        )),
+        ProjectIdentityConflictError,
+    );
+    assert.deepEqual(await db.projects.toArray(), beforeCycle);
+
+    await resetDb();
+    await db.projects.bulkAdd([
+        { name: 'A', aliases: ['Shared'], color: 'indigo', isActive: true, createdAt: 1, updatedAt: 1 },
+        { name: 'B', aliases: [' shared '], color: 'rose', isActive: true, createdAt: 2, updatedAt: 2 },
+    ]);
+    const beforeCompetition = await db.projects.toArray();
+
+    await assert.rejects(
+        db.transaction('rw', [db.projects, db.workLogs], () => (
+            reconcileProjectIdentities(db.projects, db.workLogs)
+        )),
+        ProjectIdentityConflictError,
+    );
+    assert.deepEqual(await db.projects.toArray(), beforeCompetition);
 });

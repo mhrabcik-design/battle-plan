@@ -47,6 +47,7 @@ export type ProjectColor = 'slate' | 'indigo' | 'emerald' | 'amber' | 'rose';
 export interface Project {
     id?: number;
     name: string;       // unikátní (case-insensitive), např. "KB Plaza Liberec"
+    aliases?: string[]; // dřívější/sloučené názvy; sdílí unikátní namespace s name
     color: ProjectColor;
     isActive: boolean;  // soft-delete — staré projekty se v pickeru nezobrazí, ale WorkLog záznamy zůstanou
     source?: 'user' | 'agent';

@@ -341,8 +341,9 @@ class AgentBridge {
         source: 'agent',
         agentWriteId: write.id,
         // A create_project inbox action is already an explicit request to make
-        // this logical project active, unlike the UI's pre-confirmation probe.
-        confirmRestore: true,
+        // a canonical project active. An absorbed alias remains a protected
+        // identity and requires the ordinary explicit restore flow.
+        confirmRestore: 'canonical-only',
       });
       return projectResultToApplyWrite(result);
     }
