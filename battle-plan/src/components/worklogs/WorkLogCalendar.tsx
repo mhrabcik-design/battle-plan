@@ -242,7 +242,7 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
                                     </div>
                                 ) : (
                                     selectedLogs.map((log) => (
-                                        <WorkLogCard key={log.id} log={log} />
+                                        <WorkLogCard key={log.id} log={log} projectIndex={projectIndex} />
                                     ))
                                 )}
                             </div>

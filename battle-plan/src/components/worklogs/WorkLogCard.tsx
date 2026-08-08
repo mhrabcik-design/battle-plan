@@ -18,14 +18,20 @@ import {
     type WorkLogProjectSelection,
 } from '../../services/workLogPersistence';
 import { getErrorMessage } from '../../utils/errors';
+import { PROJECT_COLOR_DOT } from '../../utils/projectColors';
+import {
+    resolveWorkLogProjectDisplay,
+    type WorkLogProjectIndex,
+} from '../../utils/workLogProjectGrouping';
 
 interface WorkLogCardProps {
     log: WorkLog;
+    projectIndex: WorkLogProjectIndex;
     onDeleted?: (id: number) => void;
     onUpdated?: (log: WorkLog) => void;
 }
 
-export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
+export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLogCardProps) {
     const [editing, setEditing] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -38,6 +44,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
     const [description, setDescription] = useState(log.description ?? '');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const projectDisplay = resolveWorkLogProjectDisplay(log, projectIndex);
 
     const selectedMatchesOriginal = project != null
         && project.id === log.projectId
@@ -255,9 +262,9 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1.5">
-                            <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-slate-400" />
+                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${PROJECT_COLOR_DOT[projectDisplay.color]}`} />
                             <span className="text-xs font-black text-white uppercase tracking-tight truncate">
-                                {log.projectName}
+                                {projectDisplay.name}
                             </span>
                             <span className="text-xs text-slate-500 ml-auto whitespace-nowrap">
                                 {new Date(log.date).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short' })}

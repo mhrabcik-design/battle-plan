@@ -9,6 +9,7 @@ import { WorkLogCalendar } from '../components/worklogs/WorkLogCalendar';
 import { WorkLogVoiceBar, type WorkLogVoiceController } from '../components/worklogs/WorkLogVoiceBar';
 import { ProjectManager } from '../components/worklogs/ProjectManager';
 import { filterWorkLogsForPrace } from '../utils/workLogFilter';
+import { createWorkLogProjectIndex } from '../utils/workLogProjectGrouping';
 
 interface WorkLogsPageProps {
     onAddLog?: (message: string, type?: 'info' | 'error') => void;
@@ -27,7 +28,12 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
 
     const projects = useLiveQuery(async () => {
         return await db.projects.toArray();
-    }, []) ?? [];
+    }, []);
+
+    const projectIndex = useMemo(
+        () => projects === undefined ? null : createWorkLogProjectIndex(projects),
+        [projects],
+    );
 
     const { workLogs: effectiveLogs, hiddenCount } = useMemo(
         () => filterWorkLogsForPrace(logs ?? []),
@@ -154,32 +160,46 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
             )}
 
             {/* Pohled */}
-            {view === 'cards' && (
-                effectiveLogs.length === 0 ? (
-                    <div className="p-16 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
-                        <Briefcase className="w-12 h-12 text-slate-800 mx-auto mb-4" />
-                        <p className="text-slate-500 font-bold uppercase text-xs tracking-widest mb-2">
-                            Zatím žádné záznamy
-                        </p>
-                        <p className="text-slate-600 text-xs">
-                            Přidej první činnost tlačítkem nahoře, nebo nadikuj večer co jsi dělal.
-                        </p>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {effectiveLogs.map((log) => (
-                            <WorkLogCard key={log.id} log={log} />
-                        ))}
-                    </div>
-                )
-            )}
+            {logs === undefined || projects === undefined || projectIndex === null ? (
+                <div
+                    role="status"
+                    className="p-10 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800"
+                >
+                    <Briefcase className="w-8 h-8 text-slate-700 mx-auto mb-3 animate-pulse" />
+                    <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">
+                        Načítám záznamy a projekty…
+                    </p>
+                </div>
+            ) : (
+                <>
+                    {view === 'cards' && (
+                        effectiveLogs.length === 0 ? (
+                            <div className="p-16 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
+                                <Briefcase className="w-12 h-12 text-slate-800 mx-auto mb-4" />
+                                <p className="text-slate-500 font-bold uppercase text-xs tracking-widest mb-2">
+                                    Zatím žádné záznamy
+                                </p>
+                                <p className="text-slate-600 text-xs">
+                                    Přidej první činnost tlačítkem nahoře, nebo nadikuj večer co jsi dělal.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {effectiveLogs.map((log) => (
+                                    <WorkLogCard key={log.id} log={log} projectIndex={projectIndex} />
+                                ))}
+                            </div>
+                        )
+                    )}
 
-            {view === 'calendar' && (
-                <WorkLogCalendar logs={effectiveLogs} projects={projects} />
-            )}
+                    {view === 'calendar' && (
+                        <WorkLogCalendar logs={effectiveLogs} projects={projects} />
+                    )}
 
-            {view === 'table' && (
-                <WorkLogTable logs={effectiveLogs} projects={projects} />
+                    {view === 'table' && (
+                        <WorkLogTable logs={effectiveLogs} projects={projects} />
+                    )}
+                </>
             )}
         </div>
     );
