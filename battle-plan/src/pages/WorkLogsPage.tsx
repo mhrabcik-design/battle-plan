@@ -179,7 +179,7 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
             )}
 
             {view === 'table' && (
-                <WorkLogTable logs={effectiveLogs} />
+                <WorkLogTable logs={effectiveLogs} projects={projects} />
             )}
         </div>
     );

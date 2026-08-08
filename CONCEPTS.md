@@ -7,6 +7,8 @@ A durable work assignment that is created once and reused across WorkLogs for as
 
 Only active projects are available for new WorkLogs. Archived projects keep their identity and remain visible through historical WorkLogs.
 
+One normalized project name means one project identity, even when older records differ only by spaces, letter case, local numeric ID, or color. Database upgrades and Drive merges reconcile those variants to one catalog row while WorkLogs retain their historical name snapshot.
+
 ### WorkLog
 A record of completed work on a project, distinct from a task or meeting because it represents labor that can be reported by date, project, people, and hours.
 

@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { type WorkLog, type Project, type ProjectColor } from '../../db';
+import { type WorkLog, type Project } from '../../db';
 import { currentMonthKey, monthKeyToDate, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
 import { PROJECT_COLOR_DOT } from '../../utils/projectColors';
+import { createWorkLogProjectIndex, groupWorkLogsByProject } from '../../utils/workLogProjectGrouping';
 import { WorkLogCard } from './WorkLogCard';
 
 interface WorkLogCalendarProps {
@@ -30,13 +31,14 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
         }
         return map;
     }, [logs]);
-
-    // Projekty → barva (lookup)
-    const projectColors = useMemo(() => {
-        const m = new Map<number, ProjectColor>();
-        for (const p of projects) m.set(p.id!, p.color);
-        return m;
-    }, [projects]);
+    const projectIndex = useMemo(() => createWorkLogProjectIndex(projects), [projects]);
+    const projectGroupsByDate = useMemo(
+        () => new Map(Array.from(logsByDate, ([date, dayLogs]) => [
+            date,
+            groupWorkLogsByProject(dayLogs, projectIndex),
+        ])),
+        [logsByDate, projectIndex],
+    );
 
     // Vygeneruj buňky kalendáře (7×N)
     const monthDate = monthKeyToDate(monthKey);
@@ -143,15 +145,9 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
                         const dayHours = dayLogs.reduce((s, l) => s + l.hours, 0);
                         const isToday = cell.dateKey === todayKey;
                         // Unikátní projekty v tomto dni (max 3 barvy)
-                        const dayProjects = Array.from(
-                            new Set(
-                                dayLogs.map((l) => ({
-                                    name: l.projectName,
-                                    color: projectColors.get(l.projectId) ?? 'slate',
-                                })).map((p) => JSON.stringify(p))
-                            )
-                        ).map((serialized): { name: string; color: ProjectColor } => JSON.parse(serialized)).slice(0, 3);
-                        const moreCount = new Set(dayLogs.map((l) => l.projectName)).size - dayProjects.length;
+                        const allDayProjects = projectGroupsByDate.get(cell.dateKey!) ?? [];
+                        const dayProjects = allDayProjects.slice(0, 3);
+                        const moreCount = allDayProjects.length - dayProjects.length;
 
                         return (
                             <button

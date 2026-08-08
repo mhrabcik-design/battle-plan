@@ -10,7 +10,7 @@ applies_when:
   - "A durable entity is selected repeatedly by new records"
   - "Archived entities must remain readable in historical records"
   - "UI and agent callers must share lifecycle and validation rules"
-tags: [worklogs, projects, dexie, transactions, archive, reactive-ui]
+tags: [worklogs, projects, dexie, transactions, migration, archive, reactive-ui]
 ---
 
 # Durable WorkLog project catalog
@@ -25,20 +25,21 @@ A project such as “Liberec Plaza Banka” needs a longer lifetime than one Wor
 
 Treat the project catalog as one domain boundary, not as picker state.
 
-- Normalize names in one place and make lookup plus mutation one transaction. The catalog service returns explicit outcomes for create, duplicate, archived match, restore, conflict, and validation instead of making callers infer what happened (`battle-plan/src/services/projectCatalog.ts:83`).
+- Normalize names in one place and make lookup plus mutation one transaction. One normalized name is one domain identity, including legacy rows that differ only by spacing, case, local ID, or color (`battle-plan/src/utils/projectIdentityReconciliation.ts`).
 - Use soft archival. New records can select only active projects, while existing WorkLogs keep their snapshotted project name. The durable Project and WorkLog fields are defined separately (`battle-plan/src/db.ts:46`, `battle-plan/src/db.ts:58`).
 - Make UI consumers reactive to persisted state. The management surface and picker observe the project table, so create, archive, restore, and color changes appear without remounting (`battle-plan/src/components/worklogs/ProjectManager.tsx:27`, `battle-plan/src/components/worklogs/ProjectPicker.tsx:33`). Restore confirmations bind to the captured project ID, not a second name lookup.
 - Validate the project in the same transaction that writes a new WorkLog. Batch voice input validates every project before adding any row, so one stale selection aborts the whole batch (`battle-plan/src/services/workLogPersistence.ts:47`).
 - Preserve an unchanged historical assignment during edit. Require an active project only when the assignment changes (`battle-plan/src/services/workLogPersistence.ts:86`). Agent updates use this same boundary and preserve the WorkLog sync identity.
-- Use the catalog's normalization rule when merging synced projects. Keep collision buckets rather than one arbitrary row, and never guess when legacy data contains multiple normalized matches (`battle-plan/src/services/workLogsSync.ts:176`).
+- Reconcile legacy collisions atomically. Prefer an active row, then the newest row, relink matching WorkLogs to that ID, and remove redundant catalog rows. The v10 Dexie upgrade repairs existing devices, and Drive sync repeats the invariant for imported data (`battle-plan/src/db.ts`, `battle-plan/src/services/workLogsSync.ts`).
+- Group reports through the same normalized identity. Calendar dots and table totals must not use raw `projectName` or a name-plus-color pair as their uniqueness key (`battle-plan/src/utils/workLogProjectGrouping.ts`).
 
-An archived normalized-name match is not silently treated as a new project. Human-facing creation asks for confirmation before restoring the original row. An explicit Agent Bridge create action already carries that intent. If old data contains multiple normalized matches, the catalog reports a conflict and does not guess, merge identities, or rewrite WorkLogs.
+An archived normalized-name match is not silently treated as a new project. Human-facing creation asks for confirmation before restoring the original row. An explicit Agent Bridge create action already carries that intent. Legacy duplicates are data corruption, not distinct projects, so the v10 upgrade repairs them once and Drive sync repairs identities after imported changes. Normal catalog mutations can then stay proportional to the small project table.
 
 ## Why This Matters
 
 Keeping lifecycle logic in one transaction boundary prevents two callers from creating normalized duplicates and closes the gap where a project could be archived between validation and WorkLog persistence. Explicit outcomes also keep UI feedback and Agent Bridge behavior aligned. Deterministic Agent Bridge rejections are terminal acknowledgements; only transient storage or transport failures should be retried.
 
-The denormalized project name on each WorkLog is intentional historical data. It keeps reports readable when a project is archived, missing, or imported from another device whose numeric project ID collides with a different local row. Numeric IDs are therefore not sufficient to identify an imported selection; the stored name must agree too.
+The denormalized project name on each WorkLog is intentional historical data. Reconciliation changes the catalog ID but preserves that snapshot. Reports normalize the snapshot only for grouping and use the canonical catalog row for the displayed name and color. Numeric IDs remain device-local and are not sufficient for cross-device matching.
 
 ## When to Apply
 

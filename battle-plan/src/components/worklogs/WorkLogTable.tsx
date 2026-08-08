@@ -1,39 +1,35 @@
-import { useState, useMemo } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { type WorkLog } from '../../db';
+import { type Project, type WorkLog } from '../../db';
 import { currentMonthKey, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
+import {
+    createWorkLogProjectIndex,
+    groupWorkLogsByProject,
+    type WorkLogProjectIndex,
+} from '../../utils/workLogProjectGrouping';
 
 interface WorkLogTableProps {
     logs: WorkLog[];
+    projects: Project[];
 }
 
 const dateInMonth = (date: string, monthKey: string): boolean => date.startsWith(monthKey);
 
 /** Agreguje workLogy podle data, pak podle projektu v rámci dne. */
-function aggregateByDay(logs: WorkLog[]) {
-    // dayKey → projectName → { hours, people set, count }
-    const days = new Map<string, Map<string, { hours: number; people: string[]; count: number }>>();
+function aggregateByDay(logs: WorkLog[], projectIndex: WorkLogProjectIndex) {
+    const logsByDay = new Map<string, WorkLog[]>();
     for (const l of logs) {
-        if (!days.has(l.date)) days.set(l.date, new Map());
-        const dayMap = days.get(l.date)!;
-        if (!dayMap.has(l.projectName)) {
-            dayMap.set(l.projectName, { hours: 0, people: [], count: 0 });
-        }
-        const cell = dayMap.get(l.projectName)!;
-        cell.hours += l.hours;
-        cell.count += 1;
-        if (l.people) {
-            // sjednotit jména (split čárkou, trim, dedup)
-            const incoming = l.people.split(',').map((s) => s.trim()).filter(Boolean);
-            for (const name of incoming) {
-                if (!cell.people.includes(name)) cell.people.push(name);
-            }
-        }
+        const day = logsByDay.get(l.date);
+        if (day) day.push(l);
+        else logsByDay.set(l.date, [l]);
     }
-    return days;
+    return new Map(Array.from(logsByDay, ([date, dayLogs]) => [
+        date,
+        groupWorkLogsByProject(dayLogs, projectIndex).sort((a, b) => b.hours - a.hours),
+    ]));
 }
 
-export function WorkLogTable({ logs }: WorkLogTableProps) {
+export function WorkLogTable({ logs, projects }: WorkLogTableProps) {
     const [monthKey, setMonthKey] = useState(currentMonthKey(0));
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -44,7 +40,8 @@ export function WorkLogTable({ logs }: WorkLogTableProps) {
     );
 
     // Agregace den → projekt
-    const daysMap = useMemo(() => aggregateByDay(monthLogs), [monthLogs]);
+    const projectIndex = useMemo(() => createWorkLogProjectIndex(projects), [projects]);
+    const daysMap = useMemo(() => aggregateByDay(monthLogs, projectIndex), [monthLogs, projectIndex]);
 
     // Dny v daném měsíci seřazené
     const sortedDays = useMemo(() => {
@@ -59,12 +56,8 @@ export function WorkLogTable({ logs }: WorkLogTableProps) {
 
     // Součty za projekt (v rámci měsíce) — pro patičku
     const projectTotals = useMemo(() => {
-        const totals = new Map<string, number>();
-        for (const l of monthLogs) {
-            totals.set(l.projectName, (totals.get(l.projectName) ?? 0) + l.hours);
-        }
-        return Array.from(totals.entries()).sort(([, a], [, b]) => b - a);
-    }, [monthLogs]);
+        return groupWorkLogsByProject(monthLogs, projectIndex).sort((left, right) => right.hours - left.hours);
+    }, [monthLogs, projectIndex]);
 
     const toggleExpand = (day: string) => {
         setExpanded((prev) => {
@@ -141,14 +134,12 @@ export function WorkLogTable({ logs }: WorkLogTableProps) {
                                     </td>
                                 </tr>
                             ) : (
-                                sortedDays.map(([date, projectsMap]) => {
+                                sortedDays.map(([date, projectGroups]) => {
                                     const isExpanded = expanded.has(date);
-                                    const dayTotal = Array.from(projectsMap.values()).reduce((s, c) => s + c.hours, 0);
-                                    const projects = Array.from(projectsMap.entries()).sort(([, a], [, b]) => b.hours - a.hours);
+                                    const dayTotal = projectGroups.reduce((sum, group) => sum + group.hours, 0);
                                     return (
-                                        <>
+                                        <Fragment key={date}>
                                             <tr
-                                                key={date}
                                                 className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer"
                                                 onClick={() => toggleExpand(date)}
                                             >
@@ -157,12 +148,12 @@ export function WorkLogTable({ logs }: WorkLogTableProps) {
                                                 </td>
                                                 <td className="px-4 py-3">
                                                     <span className="text-slate-400 text-xs uppercase tracking-widest">
-                                                        {projects.length} {projects.length === 1 ? 'projekt' : projects.length < 5 ? 'projekty' : 'projektů'}
+                                                        {projectGroups.length} {projectGroups.length === 1 ? 'projekt' : projectGroups.length < 5 ? 'projekty' : 'projektů'}
                                                     </span>
                                                 </td>
                                                 <td className="px-4 py-3 text-slate-500 text-xs">
                                                     {/* souhrn lidí za den */}
-                                                    {Array.from(new Set(projects.flatMap(([, c]) => c.people))).join(', ') || '—'}
+                                                    {Array.from(new Set(projectGroups.flatMap((group) => group.people))).join(', ') || '—'}
                                                 </td>
                                                 <td className="px-4 py-3 text-right font-black text-white">
                                                     {dayTotal.toFixed(2)}
@@ -171,27 +162,27 @@ export function WorkLogTable({ logs }: WorkLogTableProps) {
                                                     {isExpanded ? '▼' : '▶'}
                                                 </td>
                                             </tr>
-                                            {isExpanded && projects.map(([projectName, cell]) => (
-                                                <tr key={`${date}-${projectName}`} className="bg-slate-950/40 border-b border-slate-800/30">
+                                            {isExpanded && projectGroups.map((group) => (
+                                                <tr key={`${date}-${group.key}`} className="bg-slate-950/40 border-b border-slate-800/30">
                                                     <td className="px-4 py-2"></td>
                                                     <td className="px-4 py-2">
                                                         <span className="flex items-center gap-2">
                                                             <span className="w-2 h-2 rounded-full bg-slate-400" />
-                                                            <span className="text-white text-xs font-bold">{projectName}</span>
+                                                            <span className="text-white text-xs font-bold">{group.name}</span>
                                                         </span>
                                                     </td>
                                                     <td className="px-4 py-2 text-slate-400 text-xs">
-                                                        {cell.people.join(', ') || '—'}
+                                                        {group.people.join(', ') || '—'}
                                                     </td>
                                                     <td className="px-4 py-2 text-right text-white font-bold">
-                                                        {cell.hours.toFixed(2)}
+                                                        {group.hours.toFixed(2)}
                                                     </td>
                                                     <td className="px-4 py-2 text-right text-slate-600 text-[10px] uppercase tracking-widest">
-                                                        {cell.count}× záznam
+                                                        {group.count}× záznam
                                                     </td>
                                                 </tr>
                                             ))}
-                                        </>
+                                        </Fragment>
                                     );
                                 })
                             )}
@@ -208,13 +199,13 @@ export function WorkLogTable({ logs }: WorkLogTableProps) {
                                     </td>
                                     <td></td>
                                 </tr>
-                                {projectTotals.map(([name, hours]) => (
-                                    <tr key={`total-${name}`} className="border-t border-slate-800/40">
+                                {projectTotals.map((group) => (
+                                    <tr key={`total-${group.key}`} className="border-t border-slate-800/40">
                                         <td colSpan={3} className="px-4 py-1.5 text-xs text-slate-400 pl-8">
-                                            ↳ {name}
+                                            ↳ {group.name}
                                         </td>
                                         <td className="px-4 py-1.5 text-right text-slate-300 text-xs font-bold">
-                                            {hours.toFixed(2)}
+                                            {group.hours.toFixed(2)}
                                         </td>
                                         <td></td>
                                     </tr>
