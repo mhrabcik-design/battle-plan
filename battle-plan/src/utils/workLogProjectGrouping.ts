@@ -20,6 +20,11 @@ export interface WorkLogProjectIndex {
     byId: Map<number, Project>;
 }
 
+export interface WorkLogProjectDisplay {
+    name: string;
+    color: ProjectColor;
+}
+
 export function createWorkLogProjectIndex(projects: Project[] = []): WorkLogProjectIndex {
     const catalogGroups = new Map<string, Project[]>();
     for (const project of projects) {
@@ -48,6 +53,33 @@ export function createWorkLogProjectIndex(projects: Project[] = []): WorkLogProj
     return { byName, byId };
 }
 
+function sameCanonicalProject(left: Project, right: Project): boolean {
+    if (left === right) return true;
+    return left.id != null && right.id != null && left.id === right.id;
+}
+
+function resolveWorkLogProject(workLog: WorkLog, projectIndex: WorkLogProjectIndex): Project | undefined {
+    const projectByName = projectIndex.byName.get(normalizeProjectName(workLog.projectName));
+    if (!projectByName) return undefined;
+
+    const projectById = projectIndex.byId.get(workLog.projectId);
+    if (projectById && sameCanonicalProject(projectById, projectByName)) return projectById;
+
+    // Project IDs are device-local. A mismatched or stale ID may therefore
+    // resolve only through the globally unambiguous stored snapshot identity.
+    return projectByName;
+}
+
+export function resolveWorkLogProjectDisplay(
+    workLog: WorkLog,
+    projectIndex: WorkLogProjectIndex,
+): WorkLogProjectDisplay {
+    const project = resolveWorkLogProject(workLog, projectIndex);
+    return project
+        ? { name: project.name.trim(), color: project.color }
+        : { name: workLog.projectName.trim(), color: 'slate' };
+}
+
 export function groupWorkLogsByProject(
     workLogs: WorkLog[],
     projectsOrIndex: Project[] | WorkLogProjectIndex = [],
@@ -58,8 +90,9 @@ export function groupWorkLogsByProject(
     const grouped = new Map<string, Omit<WorkLogProjectGroup, 'people'> & { peopleSet: Set<string> }>();
 
     for (const workLog of workLogs) {
-        const normalizedName = normalizeProjectName(workLog.projectName);
-        const project = projectIndex.byId.get(workLog.projectId) ?? projectIndex.byName.get(normalizedName);
+        const display = resolveWorkLogProjectDisplay(workLog, projectIndex);
+        const normalizedName = normalizeProjectName(display.name);
+        const project = projectIndex.byName.get(normalizedName);
         const key = project?.id != null
             ? `project-id:${project.id}`
             : normalizedName || `project-id:${workLog.projectId}`;
@@ -67,8 +100,8 @@ export function groupWorkLogsByProject(
         if (!group) {
             group = {
                 key,
-                name: project?.name.trim() || workLog.projectName.trim(),
-                color: project?.color ?? 'slate',
+                name: display.name,
+                color: display.color,
                 hours: 0,
                 count: 0,
                 peopleSet: new Set(),
