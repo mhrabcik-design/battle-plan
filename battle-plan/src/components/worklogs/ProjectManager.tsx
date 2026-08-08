@@ -56,7 +56,7 @@ export function ProjectManager({ onMessage }: ProjectManagerProps) {
     const [mergeError, setMergeError] = useState<string | null>(null);
     const [mergeBusy, setMergeBusy] = useState(false);
     const mergeBusyRef = useRef(false);
-    const mergeCancelRef = useRef<HTMLButtonElement>(null);
+    const mergePreviewHeadingRef = useRef<HTMLHeadingElement>(null);
 
     const selectedSourceId = mergeSourceId ? Number(mergeSourceId) : undefined;
     const selectedSurvivorId = mergeSurvivorId ? Number(mergeSurvivorId) : undefined;
@@ -151,7 +151,7 @@ export function ProjectManager({ onMessage }: ProjectManagerProps) {
                 return;
             }
             setMergePreview(result.preview);
-            requestAnimationFrame(() => mergeCancelRef.current?.focus());
+            requestAnimationFrame(() => mergePreviewHeadingRef.current?.focus());
         } catch {
             setMergePreview(null);
             setMergeError(MERGE_FAILURE_MESSAGE);
@@ -510,9 +510,18 @@ export function ProjectManager({ onMessage }: ProjectManagerProps) {
                     <div
                         role="region"
                         aria-labelledby="project-merge-preview-title"
+                        aria-live="polite"
+                        aria-atomic="true"
                         className="mt-4 rounded-xl border border-amber-500/35 bg-amber-500/10 p-4"
                     >
-                        <h5 id="project-merge-preview-title" className="text-sm font-black text-amber-100">Zkontroluj směr sloučení</h5>
+                        <h5
+                            ref={mergePreviewHeadingRef}
+                            id="project-merge-preview-title"
+                            tabIndex={-1}
+                            className="text-sm font-black text-amber-100 outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+                        >
+                            Zkontroluj směr sloučení
+                        </h5>
 
                         <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-stretch">
                             <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-950/50 p-3">
@@ -564,7 +573,6 @@ export function ProjectManager({ onMessage }: ProjectManagerProps) {
 
                         <div className="mt-4 grid gap-2 sm:flex sm:justify-end">
                             <button
-                                ref={mergeCancelRef}
                                 type="button"
                                 onClick={clearMergePreview}
                                 disabled={mergeBusy}

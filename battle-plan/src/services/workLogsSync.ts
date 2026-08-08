@@ -229,14 +229,25 @@ export async function mergeCloudToLocal(
                     ...projectIdentityNames(local),
                     ...projectIdentityNames(cp),
                 ]);
+                const shouldPersistAliases = aliases.length > 0
+                    || local.aliases !== undefined
+                    || cp.aliases !== undefined;
+                const aliasesChanged = shouldPersistAliases
+                    && JSON.stringify(local.aliases) !== JSON.stringify(aliases);
                 const changes: Partial<Project> = {
                     ...(cloudIsNewer ? {
                         name: cp.name,
                         color: cp.color,
                         isActive: cp.isActive,
                         updatedAt: cp.updatedAt ?? Date.now(),
+                    } : aliasesChanged ? {
+                        // Alias-only convergence must change App.tsx's live
+                        // project hash so the union is published back to Drive.
+                        // Use a deterministic logical timestamp so repeating
+                        // the same payload becomes byte-stable.
+                        updatedAt: Math.max(local.updatedAt ?? 0, cp.updatedAt ?? 0) + 1,
                     } : {}),
-                    ...(aliases.length > 0 || local.aliases !== undefined || cp.aliases !== undefined
+                    ...(shouldPersistAliases
                         ? { aliases }
                         : {}),
                 };
@@ -331,9 +342,12 @@ export async function mergeLocalToCloud(): Promise<boolean> {
         await workLogsSync.init();
         if (!workLogsSync.initialized) return false;
     }
-    const cloud = await workLogsSync.loadAll();
-    if (cloud.timestamp > 0) {
-        await mergeCloudToLocal(cloud.workLogs, cloud.projects);
+    const cloudResult = await workLogsSync.loadAllDetailed();
+    if (cloudResult.kind === 'store-unavailable' || cloudResult.kind === 'error') {
+        return false;
+    }
+    if (cloudResult.kind === 'loaded' && cloudResult.data.timestamp > 0) {
+        await mergeCloudToLocal(cloudResult.data.workLogs, cloudResult.data.projects);
     }
     const allWorkLogs = await db.workLogs.toArray();
     const allProjects = await db.projects.toArray();

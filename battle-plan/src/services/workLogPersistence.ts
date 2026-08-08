@@ -140,7 +140,12 @@ export async function updateWorkLogWithProjectSelection(
 
         if (selection && assignmentChanged) {
             const activeProject = await requireActiveProject(selection.id, selection.name);
-            assignment = { projectId: activeProject.id, projectName: activeProject.name };
+            // A pending portable update can still carry the removed source ID
+            // after a manual merge. If its alias resolves back to the WorkLog's
+            // existing survivor, retain the denormalized historical snapshot.
+            if (activeProject.id !== existing.projectId) {
+                assignment = { projectId: activeProject.id, projectName: activeProject.name };
+            }
         }
 
         const updated: WorkLog = {

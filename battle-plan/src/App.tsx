@@ -403,10 +403,32 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   useEffect(() => {
     if (!hasUsableAuth || workLogsDataHash === 0) return;
 
-    const timer = setTimeout(async () => {
+    let disposed = false;
+    let pending = true;
+    let inFlight = false;
+    let retryAttempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const schedule = (delay: number) => {
+      if (disposed || !pending) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void runBackup(), delay);
+    };
+
+    const scheduleRetry = () => {
+      retryAttempt += 1;
+      const delay = Math.min(30_000 * (2 ** (retryAttempt - 1)), 5 * 60_000);
+      schedule(delay);
+    };
+
+    const runBackup = async () => {
+      if (disposed || !pending || inFlight) return;
+      inFlight = true;
       try {
         const ok = await mergeLocalToCloud();
+        if (disposed) return;
         if (ok) {
+          pending = false;
           updateSyncHealth('worklogs', {
             state: 'ok',
             detail: 'WorkLogs záloha na Disk úspěšná',
@@ -419,18 +441,39 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
             state: 'stale',
             detail: 'WorkLogs záloha nebyla provedena',
           });
+          scheduleRetry();
         }
       } catch (e) {
+        if (disposed) return;
         console.error('WorkLogs auto-backup failed', e);
         updateSyncHealth('worklogs', {
           state: 'error',
           detail: 'WorkLogs záloha na Disk selhala',
           lastError: getErrorMessage(e),
         });
+        scheduleRetry();
+      } finally {
+        inFlight = false;
       }
-    }, 10000);
+    };
 
-    return () => clearTimeout(timer);
+    const retryPendingBackup = () => {
+      if (!pending || inFlight) return;
+      retryAttempt = 0;
+      if (timer) clearTimeout(timer);
+      void runBackup();
+    };
+
+    schedule(10_000);
+    window.addEventListener('online', retryPendingBackup);
+    window.addEventListener('focus', retryPendingBackup);
+
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('online', retryPendingBackup);
+      window.removeEventListener('focus', retryPendingBackup);
+    };
   }, [workLogsDataHash, hasUsableAuth, addLog, updateSyncHealth]);
 
   useEffect(() => {

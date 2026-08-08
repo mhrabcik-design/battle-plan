@@ -35,7 +35,10 @@ export type AgentWriteAction =
 
 export type AgentWriteTaskData = Partial<Task> & { id?: number };
 export type AgentWriteWorklogData = Partial<Omit<WorkLog, 'id' | 'source' | 'agent_write_id' | 'updatedAt' | 'createdAt'>> & { id?: number };
-export type AgentWriteProjectData = Partial<Omit<Project, 'id' | 'source' | 'agent_write_id' | 'updatedAt' | 'createdAt'>> & { id?: number };
+export type AgentWriteProjectData = Partial<Omit<
+  Project,
+  'id' | 'aliases' | 'source' | 'agent_write_id' | 'updatedAt' | 'createdAt'
+>> & { id?: number };
 export type AgentWriteSettingsData = { id: string; value?: string };
 
 export interface AgentWrite {
@@ -333,6 +336,9 @@ class AgentBridge {
     write: AgentWrite
   ): Promise<ApplyWriteResult> {
     const data = (write.project_data ?? {}) as Partial<Project> & { id?: number };
+    if (Object.prototype.hasOwnProperty.call(data, 'aliases')) {
+      return terminalWrite('project aliases are not agent-writable');
+    }
 
     if (write.action === 'create_project') {
       const result = await createProject({
