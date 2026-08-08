@@ -1,9 +1,8 @@
 import { Fragment, useState, useMemo } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { type Project, type WorkLog } from '../../db';
+import { type WorkLog } from '../../db';
 import { currentMonthKey, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
 import {
-    createWorkLogProjectIndex,
     groupWorkLogsByProject,
     type WorkLogProjectIndex,
 } from '../../utils/workLogProjectGrouping';
@@ -11,7 +10,7 @@ import { PROJECT_COLOR_DOT } from '../../utils/projectColors';
 
 interface WorkLogTableProps {
     logs: WorkLog[];
-    projects: Project[];
+    projectIndex: WorkLogProjectIndex;
 }
 
 const dateInMonth = (date: string, monthKey: string): boolean => date.startsWith(monthKey);
@@ -30,7 +29,7 @@ function aggregateByDay(logs: WorkLog[], projectIndex: WorkLogProjectIndex) {
     ]));
 }
 
-export function WorkLogTable({ logs, projects }: WorkLogTableProps) {
+export function WorkLogTable({ logs, projectIndex }: WorkLogTableProps) {
     const [monthKey, setMonthKey] = useState(currentMonthKey(0));
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -41,7 +40,6 @@ export function WorkLogTable({ logs, projects }: WorkLogTableProps) {
     );
 
     // Agregace den → projekt
-    const projectIndex = useMemo(() => createWorkLogProjectIndex(projects), [projects]);
     const daysMap = useMemo(() => aggregateByDay(monthLogs, projectIndex), [monthLogs, projectIndex]);
 
     // Dny v daném měsíci seřazené

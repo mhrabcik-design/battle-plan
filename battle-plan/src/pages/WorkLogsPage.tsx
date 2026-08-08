@@ -31,7 +31,7 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
     }, []);
 
     const projectIndex = useMemo(
-        () => projects === undefined ? null : createWorkLogProjectIndex(projects),
+        () => createWorkLogProjectIndex(projects ?? []),
         [projects],
     );
 
@@ -160,7 +160,7 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
             )}
 
             {/* Pohled */}
-            {logs === undefined || projects === undefined || projectIndex === null ? (
+            {logs === undefined || projects === undefined ? (
                 <div
                     role="status"
                     className="p-10 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800"
@@ -193,11 +193,11 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
                     )}
 
                     {view === 'calendar' && (
-                        <WorkLogCalendar logs={effectiveLogs} projects={projects} />
+                        <WorkLogCalendar logs={effectiveLogs} projects={projects} projectIndex={projectIndex} />
                     )}
 
                     {view === 'table' && (
-                        <WorkLogTable logs={effectiveLogs} projects={projects} />
+                        <WorkLogTable logs={effectiveLogs} projectIndex={projectIndex} />
                     )}
                 </>
             )}
