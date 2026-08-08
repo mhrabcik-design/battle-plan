@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Trash2, Edit3, Save, X } from 'lucide-react';
 import { db, type WorkLog, type Project } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
@@ -8,6 +9,15 @@ import {
     getWorkLogRowIssues,
     parseDecimalHours,
 } from '../../utils/workLogBatch';
+import { normalizeProjectName } from '../../services/projectCatalog';
+import {
+    isMatchingActiveProject,
+    ProjectUnavailableError,
+    updateWorkLogWithProjectSelection,
+    type WorkLogEditableChanges,
+    type WorkLogProjectSelection,
+} from '../../services/workLogPersistence';
+import { getErrorMessage } from '../../utils/errors';
 
 interface WorkLogCardProps {
     log: WorkLog;
@@ -26,6 +36,21 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
     const [hours, setHours] = useState(String(log.hours));
     const [hoursPerPerson, setHoursPerPerson] = useState(log.hoursPerPerson == null ? '' : String(log.hoursPerPerson));
     const [description, setDescription] = useState(log.description ?? '');
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const selectedMatchesOriginal = project != null
+        && project.id === log.projectId
+        && normalizeProjectName(project.name) === normalizeProjectName(log.projectName);
+    const assignmentChanged = project != null && !selectedMatchesOriginal;
+    const currentSelection: WorkLogProjectSelection = project?.id == null
+        ? { id: log.projectId, name: log.projectName }
+        : { id: project.id, name: project.name };
+    const activeSelection = useLiveQuery(async () => {
+        if (!editing || currentSelection.id == null) return null;
+        const stored = await db.projects.get(currentSelection.id);
+        return isMatchingActiveProject(stored, currentSelection) ? stored : null;
+    }, [editing, currentSelection.id, currentSelection.name]);
 
     const showPersonHourEditor = log.hours > 24 || log.hoursPerPerson != null || hoursPerPerson !== '';
 
@@ -36,6 +61,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
         setHours(String(log.hours));
         setHoursPerPerson(log.hoursPerPerson == null ? '' : String(log.hoursPerPerson));
         setDescription(log.description ?? '');
+        setError(null);
         setEditing(true);
     };
 
@@ -97,14 +123,7 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
             return;
         }
 
-        // Načti projekt pokud ho máme
-        let proj = project;
-        if (!proj) {
-            const stored = await db.projects.get(log.projectId);
-            if (stored) proj = stored;
-        }
-
-        const updates: Partial<WorkLog> = {
+        const updates: WorkLogEditableChanges = {
             date,
             people: people.trim(),
             hours: saveHours,
@@ -114,13 +133,23 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
             description: description.trim() || undefined,
             updatedAt: Date.now(),
         };
-        if (proj && proj.id !== log.projectId) {
-            updates.projectId = proj.id!;
-            updates.projectName = proj.name;
+        setSaving(true);
+        setError(null);
+        try {
+            const updated = await updateWorkLogWithProjectSelection({
+                id: log.id,
+                selectedProject: project?.id == null ? null : { id: project.id, name: project.name },
+                changes: updates,
+            });
+            setEditing(false);
+            onUpdated?.(updated);
+        } catch (saveError) {
+            setError(saveError instanceof ProjectUnavailableError
+                ? 'Vybraný projekt už není aktivní. Historické přiřazení zůstalo beze změny.'
+                : `Uložení selhalo: ${getErrorMessage(saveError)}`);
+        } finally {
+            setSaving(false);
         }
-        await db.workLogs.update(log.id, updates);
-        setEditing(false);
-        onUpdated?.({ ...log, ...updates });
     };
 
     return (
@@ -174,9 +203,22 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                     <div className="space-y-1.5">
                         <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Projekt</label>
                         <ProjectPicker
-                            selectedProjectId={project?.id ?? log.projectId}
-                            onSelect={(p) => setProject(p)}
+                            selectedProjectId={activeSelection?.id ?? null}
+                            onSelect={(selected) => {
+                                setProject(selected);
+                                setError(null);
+                            }}
                         />
+                        {activeSelection === null && !assignmentChanged && (
+                            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                                Ponecháno historické přiřazení: {log.projectName}
+                            </div>
+                        )}
+                        {activeSelection === null && assignmentChanged && (
+                            <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                                Vybraný projekt už není aktivní: {project.name}
+                            </div>
+                        )}
                     </div>
                     <textarea
                         value={description}
@@ -185,6 +227,11 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                         className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white resize-none"
                     />
                     <div className="flex justify-end gap-2">
+                        {error && (
+                            <div role="alert" className="mr-auto text-xs text-red-400">
+                                {error}
+                            </div>
+                        )}
                         <button
                             type="button"
                             onClick={() => setEditing(false)}
@@ -196,10 +243,11 @@ export function WorkLogCard({ log, onDeleted, onUpdated }: WorkLogCardProps) {
                         <button
                             type="button"
                             onClick={handleSave}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black uppercase tracking-widest rounded-lg"
+                            disabled={saving}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-black uppercase tracking-widest rounded-lg"
                         >
                             <Save className="w-3.5 h-3.5" />
-                            Uložit
+                            {saving ? 'Ukládám…' : 'Uložit'}
                         </button>
                     </div>
                 </div>

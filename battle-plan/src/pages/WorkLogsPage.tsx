@@ -7,6 +7,7 @@ import { WorkLogCard } from '../components/worklogs/WorkLogCard';
 import { WorkLogTable } from '../components/worklogs/WorkLogTable';
 import { WorkLogCalendar } from '../components/worklogs/WorkLogCalendar';
 import { WorkLogVoiceBar, type WorkLogVoiceController } from '../components/worklogs/WorkLogVoiceBar';
+import { ProjectManager } from '../components/worklogs/ProjectManager';
 import { filterWorkLogsForPrace } from '../utils/workLogFilter';
 
 interface WorkLogsPageProps {
@@ -141,6 +142,8 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
                     </button>
                 </div>
             </div>
+
+            <ProjectManager onMessage={onAddLog} />
 
             {/* Formulář */}
             {showForm && (

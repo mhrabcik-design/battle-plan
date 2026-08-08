@@ -1,123 +1,139 @@
-import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, X, Check, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Check, Plus, X } from 'lucide-react';
 import { db, type Project, type ProjectColor } from '../../db';
+import { createProject, restoreProject, type ProjectCatalogResult } from '../../services/projectCatalog';
+import { PROJECT_COLOR_OPTIONS } from '../../utils/projectColors';
 
 interface ProjectPickerProps {
     selectedProjectId: number | null;
     onSelect: (project: Project) => void;
 }
 
-const COLOR_PRESETS: { value: ProjectColor; label: string; bg: string; ring: string }[] = [
-    { value: 'slate', label: 'Šedá', bg: 'bg-slate-500/30 border-slate-400/40', ring: 'ring-slate-400' },
-    { value: 'indigo', label: 'Indigo', bg: 'bg-indigo-500/30 border-indigo-400/40', ring: 'ring-indigo-400' },
-    { value: 'emerald', label: 'Emerald', bg: 'bg-emerald-500/30 border-emerald-400/40', ring: 'ring-emerald-400' },
-    { value: 'amber', label: 'Amber', bg: 'bg-amber-500/30 border-amber-400/40', ring: 'ring-amber-400' },
-    { value: 'rose', label: 'Rose', bg: 'bg-rose-500/30 border-rose-400/40', ring: 'ring-rose-400' },
-];
+function resultMessage(result: ProjectCatalogResult): string {
+    if (result.outcome === 'duplicate') return `Projekt „${result.project.name}“ už existuje. Vyber ho ze seznamu.`;
+    if (result.outcome === 'conflict') return 'Existuje více starších projektů se stejným názvem. Použij správu projektů.';
+    if (result.outcome === 'validation') return result.message;
+    return 'Projekt se nepodařilo založit.';
+}
+
+const CATALOG_FAILURE_MESSAGE = 'Projekt se nepodařilo uložit. Zkuste to znovu.';
 
 export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProps) {
     const [open, setOpen] = useState(false);
-    const [projects, setProjects] = useState<Project[]>([]);
     const [showNew, setShowNew] = useState(false);
     const [newName, setNewName] = useState('');
     const [newColor, setNewColor] = useState<ProjectColor>('indigo');
-    const [dupWarning, setDupWarning] = useState<string | null>(null);
+    const [message, setMessage] = useState<string | null>(null);
+    const [pendingRestore, setPendingRestore] = useState<Project | null>(null);
+    const [busy, setBusy] = useState(false);
+    const busyRef = useRef(false);
     const ref = useRef<HTMLDivElement>(null);
-
-    const loadProjects = async () => {
-        // Dexie neumí indexovat boolean — ruční filtr
+    const projects = useLiveQuery(async () => {
         const all = await db.projects.toArray();
-        setProjects(all.filter((p) => p.isActive).sort((a, b) => a.name.localeCompare(b.name, 'cs')));
-    };
+        return all.filter((project) => project.isActive).sort((a, b) => a.name.localeCompare(b.name, 'cs'));
+    }, []) ?? [];
 
-    useEffect(() => {
-        // Init happens on the first user click; avoid touching Dexie before that
-        queueMicrotask(() => {
-            loadProjects();
-        });
-    }, []);
-
-    // Zavři dropdown při kliknutí mimo
     useEffect(() => {
         if (!open) return;
-        const onClickOutside = (e: MouseEvent) => {
-            if (ref.current && !ref.current.contains(e.target as Node)) {
-                setOpen(false);
-            }
+        const onClickOutside = (event: MouseEvent) => {
+            if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
         };
         document.addEventListener('mousedown', onClickOutside);
         return () => document.removeEventListener('mousedown', onClickOutside);
     }, [open]);
 
-    const selected = projects.find((p) => p.id === selectedProjectId) ?? null;
+    const selected = projects.find((project) => project.id === selectedProjectId) ?? null;
 
-    const handleCreate = async () => {
-        const trimmed = newName.trim();
-        if (!trimmed) return;
-
-        // Case-insensitive duplicate check
-        const dup = projects.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
-        if (dup) {
-            setDupWarning(`Projekt „${dup.name}" už existuje. Vyber ho ze seznamu nebo zadej jiný název.`);
-            return;
-        }
-
-        const now = Date.now();
-        const newId = await db.projects.add({
-            name: trimmed,
-            color: newColor,
-            isActive: true,
-            createdAt: now,
-            updatedAt: now,
-        });
-        const created: Project = {
-            id: newId as number,
-            name: trimmed,
-            color: newColor,
-            isActive: true,
-            createdAt: now,
-            updatedAt: now,
-        };
-        await loadProjects();
-        onSelect(created);
+    const resetCreate = () => {
         setNewName('');
         setNewColor('indigo');
         setShowNew(false);
-        setOpen(false);
-        setDupWarning(null);
+        setPendingRestore(null);
+        setMessage(null);
     };
 
-    // Soft-delete the project. Local-only; the next Drive sync propagates
-    // isActive: false to other devices through mergeCloudToLocal. Worklogs
-    // pointing at the project are NOT remapped (ProjectPicker filters out
-    // inactive projects, so the worklog row's projectId becomes orphaned
-    // but is still displayable through the historical view).
-    const handleDelete = async (project: Project) => {
-        if (!project.id) return;
-        if (!window.confirm(`Smazat projekt „${project.name}"?`)) return;
-        await db.projects.update(project.id, { isActive: false, updatedAt: Date.now() });
-        if (selectedProjectId === project.id) onSelect({ ...project, id: 0 } as Project);
-        await loadProjects();
+    const beginCatalogRequest = () => {
+        if (busyRef.current) return false;
+        busyRef.current = true;
+        setBusy(true);
+        return true;
+    };
+
+    const endCatalogRequest = () => {
+        busyRef.current = false;
+        setBusy(false);
+    };
+
+    const handleCreate = async () => {
+        if (!newName.trim() || !beginCatalogRequest()) return;
+        setMessage(null);
+        try {
+            const result = await createProject({
+                name: newName,
+                color: newColor,
+                source: 'user',
+            });
+            if (result.outcome === 'archived-match') {
+                setPendingRestore(result.project);
+                setMessage(`Projekt „${result.project.name}“ je archivovaný.`);
+                return;
+            }
+            if (result.outcome === 'created' || result.outcome === 'restored') {
+                onSelect(result.project);
+                resetCreate();
+                setOpen(false);
+                return;
+            }
+            setMessage(resultMessage(result));
+        } catch {
+            setMessage(CATALOG_FAILURE_MESSAGE);
+        } finally {
+            endCatalogRequest();
+        }
+    };
+
+    const handlePendingRestore = async () => {
+        const project = pendingRestore;
+        if (!project?.id || !beginCatalogRequest()) return;
+        setMessage(null);
+        try {
+            const result = await restoreProject({
+                id: project.id,
+                color: newColor,
+                source: 'user',
+            });
+            if (result.outcome === 'restored') {
+                onSelect(result.project);
+                resetCreate();
+                setOpen(false);
+                return;
+            }
+            setMessage(resultMessage(result));
+        } catch {
+            setMessage(CATALOG_FAILURE_MESSAGE);
+        } finally {
+            endCatalogRequest();
+        }
     };
 
     return (
         <div ref={ref} className="relative w-full">
-            {/* Trigger */}
             <button
                 type="button"
-                onClick={() => setOpen((o) => !o)}
-                className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-slate-900/60 border border-slate-800 rounded-xl text-left hover:border-slate-700 transition-all"
+                onClick={() => setOpen((value) => !value)}
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-left transition-all hover:border-slate-700"
             >
                 {selected ? (
-                    <span className="flex items-center gap-2 min-w-0">
-                        <span className={`w-3 h-3 rounded-full shrink-0 ${COLOR_PRESETS.find((c) => c.value === selected.color)?.bg.split(' ')[0]}`} />
-                        <span className="text-sm font-bold text-white truncate">{selected.name}</span>
+                    <span className="flex min-w-0 items-center gap-2">
+                        <span className={`h-3 w-3 shrink-0 rounded-full ${PROJECT_COLOR_OPTIONS.find((color) => color.value === selected.color)?.bg.split(' ')[0]}`} />
+                        <span className="truncate text-sm font-bold text-white">{selected.name}</span>
                     </span>
-                ) : (
-                    <span className="text-sm font-bold text-slate-500 uppercase tracking-widest">— Vyberte projekt —</span>
-                )}
-                <span className="text-slate-500 text-xs">▼</span>
+                ) : <span className="text-sm font-bold uppercase tracking-widest text-slate-500">— Vyberte projekt —</span>}
+                <span className="text-xs text-slate-500">▼</span>
             </button>
 
             <AnimatePresence>
@@ -126,116 +142,75 @@ export function ProjectPicker({ selectedProjectId, onSelect }: ProjectPickerProp
                         initial={{ opacity: 0, y: -4 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -4 }}
-                        className="absolute z-50 left-0 right-0 mt-2 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden"
+                        className="absolute left-0 right-0 z-50 mt-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl"
                     >
                         {!showNew ? (
-                            <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                            <div className="custom-scrollbar max-h-64 overflow-y-auto" role="listbox" aria-label="Aktivní projekty">
                                 {projects.length === 0 ? (
-                                    <div className="p-4 text-xs text-slate-500 uppercase tracking-widest text-center">
-                                        Žádné projekty
-                                    </div>
-                                ) : (
-                                    projects.map((p) => (
-                                        <div
-                                            key={p.id}
-                                            className={`w-full flex items-center gap-1 px-2 py-1.5 hover:bg-slate-800/60 transition-all ${
-                                                p.id === selectedProjectId ? 'bg-indigo-600/10' : ''
-                                            }`}
-                                        >
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    onSelect(p);
-                                                    setOpen(false);
-                                                }}
-                                                className="flex-1 flex items-center gap-2 min-w-0 text-left"
-                                            >
-                                                <span className={`w-3 h-3 rounded-full shrink-0 ${COLOR_PRESETS.find((c) => c.value === p.color)?.bg.split(' ')[0]}`} />
-                                                <span className="text-sm text-white truncate flex-1 text-left">{p.name}</span>
-                                                {p.id === selectedProjectId && <Check className="w-3.5 h-3.5 text-indigo-400" />}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                aria-label={`Smazat projekt ${p.name}`}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleDelete(p);
-                                                }}
-                                                className="text-slate-500 hover:text-red-400 p-1"
-                                            >
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
-                                        </div>
-                                    ))
-                                )}
+                                    <div className="p-4 text-center text-xs uppercase tracking-widest text-slate-500">Žádné aktivní projekty</div>
+                                ) : projects.map((project) => (
+                                    <button
+                                        key={project.id}
+                                        type="button"
+                                        role="option"
+                                        aria-selected={project.id === selectedProjectId}
+                                        onClick={() => { onSelect(project); setOpen(false); }}
+                                        className={`flex w-full items-center gap-2 px-4 py-3 text-left transition-all hover:bg-slate-800/60 ${project.id === selectedProjectId ? 'bg-indigo-600/10' : ''}`}
+                                    >
+                                        <span className={`h-3 w-3 shrink-0 rounded-full ${PROJECT_COLOR_OPTIONS.find((color) => color.value === project.color)?.bg.split(' ')[0]}`} />
+                                        <span className="min-w-0 flex-1 truncate text-sm text-white">{project.name}</span>
+                                        {project.id === selectedProjectId && <Check className="h-3.5 w-3.5 text-indigo-400" />}
+                                    </button>
+                                ))}
                                 <button
                                     type="button"
-                                    onClick={() => setShowNew(true)}
-                                    className="w-full flex items-center gap-2 px-4 py-3 border-t border-slate-800 text-indigo-400 hover:bg-slate-800/40 transition-all"
+                                    onClick={() => { setShowNew(true); setMessage(null); }}
+                                    className="flex w-full items-center gap-2 border-t border-slate-800 px-4 py-3 text-indigo-400 transition-all hover:bg-slate-800/40"
                                 >
-                                    <Plus className="w-4 h-4" />
-                                    <span className="text-sm font-black uppercase tracking-widest">+ Nový projekt</span>
+                                    <Plus className="h-4 w-4" />
+                                    <span className="text-sm font-black uppercase tracking-widest">Nový projekt</span>
                                 </button>
                             </div>
                         ) : (
-                            <div className="p-4 space-y-3">
+                            <div className="space-y-3 p-4">
                                 <div className="flex items-center justify-between">
-                                    <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Nový projekt</span>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setShowNew(false);
-                                            setDupWarning(null);
-                                            setNewName('');
-                                        }}
-                                        className="text-slate-500 hover:text-white"
-                                    >
-                                        <X className="w-4 h-4" />
-                                    </button>
+                                    <span className="text-xs font-black uppercase tracking-widest text-slate-400">Nový projekt</span>
+                                    <button type="button" aria-label="Zavřít založení projektu" onClick={resetCreate} disabled={busy} className="text-slate-500 hover:text-white disabled:opacity-50"><X className="h-4 w-4" /></button>
                                 </div>
-                                <input
-                                    type="text"
-                                    value={newName}
-                                    onChange={(e) => {
-                                        setNewName(e.target.value);
-                                        setDupWarning(null);
-                                    }}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') handleCreate();
-                                    }}
-                                    placeholder="Název projektu (např. KB Plaza)"
-                                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white placeholder-slate-600 focus:border-indigo-500 outline-none"
-                                    autoFocus
-                                />
-                                {dupWarning && (
-                                    <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-                                        {dupWarning}
-                                    </div>
-                                )}
-                                <div className="space-y-1.5">
-                                    <span className="text-xs font-black text-slate-500 uppercase tracking-widest">Barva</span>
+                                <label>
+                                    <span className="sr-only">Název nového projektu</span>
+                                    <input
+                                        value={newName}
+                                        onChange={(event) => { setNewName(event.target.value); setPendingRestore(null); setMessage(null); }}
+                                        onKeyDown={(event) => { if (event.key === 'Enter') void handleCreate(); }}
+                                        disabled={busy}
+                                        placeholder="Název projektu (např. KB Plaza)"
+                                        className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-600 focus:border-indigo-500 disabled:opacity-50"
+                                        autoFocus
+                                    />
+                                </label>
+                                {message && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{message}</div>}
+                                <fieldset className="space-y-1.5">
+                                    <legend className="text-xs font-black uppercase tracking-widest text-slate-500">Barva</legend>
                                     <div className="flex gap-2">
-                                        {COLOR_PRESETS.map((c) => (
+                                        {PROJECT_COLOR_OPTIONS.map((color) => (
                                             <button
-                                                key={c.value}
+                                                key={color.value}
                                                 type="button"
-                                                onClick={() => setNewColor(c.value)}
-                                                title={c.label}
-                                                className={`w-9 h-9 rounded-lg border-2 transition-all ${c.bg} ${
-                                                    newColor === c.value ? `ring-2 ${c.ring} scale-110` : 'opacity-60 hover:opacity-100'
-                                                }`}
+                                                onClick={() => setNewColor(color.value)}
+                                                disabled={busy}
+                                                aria-label={`Barva ${color.label}`}
+                                                aria-pressed={newColor === color.value}
+                                                className={`h-9 w-9 rounded-lg border-2 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${color.bg} ${newColor === color.value ? `scale-110 ring-2 ${color.ring}` : 'opacity-60 hover:opacity-100'}`}
                                             />
                                         ))}
                                     </div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={handleCreate}
-                                    disabled={!newName.trim()}
-                                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-black uppercase tracking-widest rounded-lg transition-all"
-                                >
-                                    Vytvořit projekt
-                                </button>
+                                </fieldset>
+                                {pendingRestore ? (
+                                    <button type="button" onClick={() => void handlePendingRestore()} disabled={busy} className="w-full rounded-lg bg-amber-500/20 py-2 text-sm font-black uppercase tracking-widest text-amber-200 hover:bg-amber-500/30 disabled:opacity-50">Obnovit původní projekt</button>
+                                ) : (
+                                    <button type="button" onClick={() => void handleCreate()} disabled={!newName.trim() || busy} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-black uppercase tracking-widest text-white hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600">Vytvořit projekt</button>
+                                )}
                             </div>
                         )}
                     </motion.div>

@@ -1,8 +1,13 @@
 import { useState } from 'react';
 import { Save, X, Plus } from 'lucide-react';
-import { db, type WorkLog, type Project } from '../../db';
+import { type WorkLog, type Project } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
 import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
+import {
+    addWorkLogWithActiveProject,
+    ProjectUnavailableError,
+} from '../../services/workLogPersistence';
+import { getErrorMessage } from '../../utils/errors';
 
 interface WorkLogFormProps {
     onSaved?: (log: WorkLog) => void;
@@ -37,7 +42,7 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
         try {
             const now = Date.now();
             const syncId = createWorkLogSyncId();
-            const id = await db.workLogs.add({
+            const saved = await addWorkLogWithActiveProject({
                 syncId,
                 date,
                 projectId: project.id!,
@@ -49,26 +54,15 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
                 createdAt: now,
                 updatedAt: now,
             });
-            const saved: WorkLog = {
-                id: id as number,
-                syncId,
-                date,
-                projectId: project.id!,
-                projectName: project.name,
-                people: people.trim(),
-                hours: hoursNum,
-                description: description.trim() || undefined,
-                source: 'manual',
-                createdAt: now,
-                updatedAt: now,
-            };
             onSaved?.(saved);
             // Reset (kromě data a projektu — typicky zůstávají)
             setPeople('');
             setHours('');
             setDescription('');
         } catch (e) {
-            setError(`Uložení selhalo: ${e instanceof Error ? e.message : String(e)}`);
+            setError(e instanceof ProjectUnavailableError
+                ? 'Vybraný projekt už není aktivní. Vyberte nebo obnovte aktivní projekt.'
+                : `Uložení selhalo: ${getErrorMessage(e)}`);
         } finally {
             setSaving(false);
         }

@@ -9,7 +9,17 @@ import {
     hasExplainedPersonHours,
     previousWorkWeekDates,
 } from '../utils/workLogBatch.ts';
-import { sanitizeExtractedWorkLog } from './workLogExtractor.ts';
+import { findProjectByName, sanitizeExtractedWorkLog } from './workLogExtractor.ts';
+import type { Project } from '../db.ts';
+
+const project = (id: number, name: string, isActive = true): Project => ({
+    id,
+    name,
+    color: 'slate',
+    isActive,
+    createdAt: 1,
+    updatedAt: 1,
+});
 
 test('previousWorkWeekDates returns Monday through Friday for the prior week', () => {
     assert.deepEqual(
@@ -143,4 +153,23 @@ test('derivePersonHourMetadata clears stale metadata for normal totals', () => {
             calculationNote: undefined,
         },
     );
+});
+
+test('U3: exact and partial voice matching ignore archived projects', () => {
+    const projects = [
+        project(1, 'Plaza', false),
+        project(2, 'Plaza Banka', true),
+    ];
+
+    assert.equal(findProjectByName('Plaza', projects)?.id, 2);
+});
+
+test('U3: partial voice matching resolves only one normalized active candidate', () => {
+    const projects = [
+        project(1, 'Liberec Plaza Banka'),
+        project(2, 'Praha Plaza Office'),
+    ];
+
+    assert.equal(findProjectByName('Plaza', projects), null);
+    assert.equal(findProjectByName('Liberec', projects)?.id, 1);
 });

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { agentBridge } from '../services/agentBridge';
+import { agentBridge, shouldAcknowledgeApplyWrite } from '../services/agentBridge';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 
@@ -33,21 +33,34 @@ export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePoll
 
         addLog(`Anu: ${writes.length} nových zápisů ke zpracování`);
 
-        const applied: string[] = [];
+        const acknowledged: string[] = [];
+        let appliedCount = 0;
+        let terminalCount = 0;
         for (const w of writes) {
           if (cancelled) break;
           const result = await agentBridge.applyWrite(w);
+          if (shouldAcknowledgeApplyWrite(result)) {
+            acknowledged.push(w.id);
+          }
           if (result.success) {
-            applied.push(w.id);
+            appliedCount++;
             await agentBridge.recordInboxResult(w.id, true);
+          } else if (result.disposition === 'terminal') {
+            terminalCount++;
+            await agentBridge.recordInboxResult(w.id, true, result.last_error);
           } else {
             await agentBridge.recordInboxResult(w.id, false, result.last_error);
           }
         }
 
-        if (applied.length > 0 && !cancelled) {
-          await agentBridge.markApplied(applied);
-          addLog(`Anu: ${applied.length} zápisů úspěšně aplikováno`);
+        if (acknowledged.length > 0) {
+          await agentBridge.markApplied(acknowledged);
+        }
+        if (!cancelled && appliedCount > 0) {
+          addLog(`Anu: ${appliedCount} zápisů úspěšně aplikováno`);
+        }
+        if (!cancelled && terminalCount > 0) {
+          addLog(`Anu: ${terminalCount} neplatných zápisů odmítnuto`, 'error');
         }
       } catch (e) {
         console.error('Agent bridge failed', e);

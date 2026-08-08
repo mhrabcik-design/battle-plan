@@ -82,7 +82,7 @@ const gapiMock: {
 
 // Lazy imports so the mock globals are installed first.
 const { googleService } = await import('./googleService.ts');
-const { agentBridge } = await import('./agentBridge.ts');
+const { agentBridge, shouldAcknowledgeApplyWrite } = await import('./agentBridge.ts');
 const { db } = await import('../db.ts');
 
 type GoogleServiceInternalState = {
@@ -331,9 +331,25 @@ test('U4: create_worklog rejects inactive projectId with project-not-found', asy
     });
     assert.equal(result.success, false);
     assert.equal(result.last_error, 'project-not-found');
+    assert.equal(await db.workLogs.count(), 0, 'rejected agent write must not persist a partial WorkLog');
 });
 
-test('U4: create_project re-activates an existing soft-deleted project with the same name (case-insensitive)', async () => {
+test('U3: create_worklog rejects an unknown project atomically', async () => {
+    await resetDb();
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-wl-unknown',
+        action: 'create_worklog',
+        worklog_data: { projectId: 999_999, date: '2026-07-06', hours: 8, people: 'A' },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.last_error, 'project-not-found');
+    assert.equal(await db.workLogs.count(), 0);
+});
+
+test('U1: Agent Bridge create confirms a trimmed archived match and preserves its identity', async () => {
     seedSignedInStorage();
     setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
     (agentBridge as unknown as { drive: { init: () => Promise<boolean>; readJsonFile: () => Promise<{ fileId: string | null; data: unknown } | null>; writeJsonFile: () => Promise<string> } }).drive = {
@@ -342,21 +358,74 @@ test('U4: create_project re-activates an existing soft-deleted project with the 
         writeJsonFile: async () => 'fake-file-id',
     };
     await resetDb();
+    const createdAt = Date.now() - 10_000;
     const oldId = await db.projects.add({
-        name: 'Plaza', color: 'slate', isActive: false, updatedAt: Date.now(), createdAt: Date.now(),
+        name: 'Plaza', color: 'slate', isActive: false, source: 'user', updatedAt: createdAt, createdAt,
     } as Project);
 
     const result = await agentBridge.applyWrite({
         id: 'agent-proj-1',
         action: 'create_project',
-        project_data: { name: 'plaza', color: 'indigo' },
+        project_data: { name: '  plaza  ', color: 'indigo' },
         created_at: Date.now(),
     });
     assert.equal(result.success, true);
+    assert.equal(result.outcome, 'restored');
     assert.equal(result.newId, oldId, 'should re-activate the existing project, not create a new one');
+    assert.equal(await db.projects.count(), 1);
     const stored = await db.projects.get(oldId);
     assert.equal(stored!.isActive, true);
+    assert.equal(stored!.name, 'Plaza');
     assert.equal(stored!.color, 'indigo');
+    assert.equal(stored!.source, 'agent');
+    assert.equal(stored!.agent_write_id, 'agent-proj-1');
+    assert.equal(stored!.createdAt, createdAt);
+});
+
+test('U1: Agent Bridge returns duplicate for an active normalized match without writing', async () => {
+    await resetDb();
+    const original: Project = {
+        name: 'Plaza', color: 'slate', isActive: true, source: 'user', updatedAt: 20, createdAt: 10,
+    };
+    const id = await db.projects.add(original);
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-proj-duplicate',
+        action: 'create_project',
+        project_data: { name: ' PLAZA ', color: 'rose' },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.outcome, 'duplicate');
+    assert.equal(result.disposition, 'terminal');
+    assert.equal(shouldAcknowledgeApplyWrite(result), true);
+    assert.equal(result.last_error, 'project already exists');
+    assert.deepEqual(await db.projects.toArray(), [{ ...original, id }]);
+});
+
+test('U1: Agent Bridge surfaces seeded legacy collisions as conflict without mutation', async () => {
+    await resetDb();
+    const first = await db.projects.add({
+        name: 'Plaza', color: 'slate', isActive: true, updatedAt: 20, createdAt: 10,
+    } as Project);
+    const second = await db.projects.add({
+        name: ' plaza ', color: 'rose', isActive: false, updatedAt: 40, createdAt: 30,
+    } as Project);
+    const before = await db.projects.toArray();
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-proj-conflict',
+        action: 'create_project',
+        project_data: { name: 'PLAZA', color: 'emerald' },
+        created_at: Date.now(),
+    });
+
+    assert.ok(first !== second);
+    assert.equal(result.success, false);
+    assert.equal(result.outcome, 'conflict');
+    assert.equal(result.last_error, 'project name conflict');
+    assert.deepEqual(await db.projects.toArray(), before);
 });
 
 test('U4: create_project rejects empty name with name required', async () => {
@@ -486,9 +555,139 @@ test('U4: create_worklog lands in db.workLogs (NOT db.tasks)', async () => {
     const wl = await db.workLogs.get(result.newId!);
     assert.ok(wl);
     assert.equal((wl as WorkLog).source, 'agent');
+    assert.ok((wl as WorkLog).syncId, 'agent-created WorkLogs receive a stable sync identity');
+    assert.equal((wl as WorkLog).projectName, 'Plaza', 'the transaction snapshots the active catalog name');
     // Crucially: it must NOT be in db.tasks
     const taskWithSameId = await db.tasks.get(result.newId!);
     assert.equal(taskWithSameId, undefined, 'create_worklog must not write to db.tasks');
+});
+
+test('review: update_worklog preserves sync identity and atomically changes to an active project', async () => {
+    await resetDb();
+    const originalProjectId = await db.projects.add({
+        name: 'Plaza', color: 'slate', isActive: true, updatedAt: 10, createdAt: 10,
+    } as Project);
+    const targetProjectId = await db.projects.add({
+        name: 'Riverside', color: 'indigo', isActive: true, updatedAt: 20, createdAt: 20,
+    } as Project);
+    const workLogId = await db.workLogs.add({
+        syncId: 'stable-agent-sync', date: '2026-07-06', projectId: originalProjectId,
+        projectName: 'Plaza', people: 'A', hours: 4, source: 'agent',
+        agent_write_id: 'agent-create', updatedAt: 30, createdAt: 30,
+    });
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-update-active',
+        action: 'update_worklog',
+        worklog_data: {
+            id: workLogId,
+            syncId: 'attempted-replacement',
+            projectId: targetProjectId,
+            projectName: 'Riverside',
+            description: 'Updated safely',
+        },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, true);
+    const stored = await db.workLogs.get(workLogId);
+    assert.equal(stored!.syncId, 'stable-agent-sync');
+    assert.equal(stored!.projectId, targetProjectId);
+    assert.equal(stored!.projectName, 'Riverside');
+    assert.equal(stored!.description, 'Updated safely');
+    assert.equal(stored!.source, 'agent');
+    assert.equal(stored!.agent_write_id, 'agent-create');
+    assert.equal(stored!.createdAt, 30);
+});
+
+test('review: update_worklog rejects inactive reassignment without a partial write', async () => {
+    await resetDb();
+    const originalProjectId = await db.projects.add({
+        name: 'Plaza', color: 'slate', isActive: true, updatedAt: 10, createdAt: 10,
+    } as Project);
+    const archivedProjectId = await db.projects.add({
+        name: 'Archived', color: 'rose', isActive: false, updatedAt: 20, createdAt: 20,
+    } as Project);
+    const workLogId = await db.workLogs.add({
+        syncId: 'stable-agent-sync', date: '2026-07-06', projectId: originalProjectId,
+        projectName: 'Plaza', people: 'A', hours: 4, source: 'agent',
+        agent_write_id: 'agent-create', updatedAt: 30, createdAt: 30,
+    });
+    const before = await db.workLogs.get(workLogId);
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-update-archived',
+        action: 'update_worklog',
+        worklog_data: {
+            id: workLogId,
+            projectId: archivedProjectId,
+            projectName: 'Archived',
+            description: 'Must not persist',
+        },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.disposition, 'terminal');
+    assert.equal(result.last_error, 'project-not-found');
+    assert.deepEqual(await db.workLogs.get(workLogId), before);
+});
+
+test('review: update_worklog rejects an incomplete project pair', async () => {
+    await resetDb();
+    const result = await agentBridge.applyWrite({
+        id: 'agent-update-incomplete-project',
+        action: 'update_worklog',
+        worklog_data: { id: 1, projectId: 123 },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.disposition, 'terminal');
+    assert.equal(result.last_error, 'projectId and projectName required together');
+});
+
+test('review: update_worklog keeps an unchanged archived historical assignment editable', async () => {
+    await resetDb();
+    const archivedProjectId = await db.projects.add({
+        name: 'Archived', color: 'amber', isActive: false, updatedAt: 20, createdAt: 20,
+    } as Project);
+    const workLogId = await db.workLogs.add({
+        syncId: 'historical-sync', date: '2026-07-06', projectId: archivedProjectId,
+        projectName: 'Archived', people: 'A', hours: 4, source: 'manual',
+        updatedAt: 30, createdAt: 30,
+    });
+
+    const result = await agentBridge.applyWrite({
+        id: 'agent-update-history',
+        action: 'update_worklog',
+        worklog_data: {
+            id: workLogId,
+            projectId: archivedProjectId,
+            projectName: 'Archived',
+            description: 'Historical note',
+        },
+        created_at: Date.now(),
+    });
+
+    assert.equal(result.success, true);
+    const stored = await db.workLogs.get(workLogId);
+    assert.equal(stored!.projectId, archivedProjectId);
+    assert.equal(stored!.projectName, 'Archived');
+    assert.equal(stored!.description, 'Historical note');
+});
+
+test('review: polling acknowledges terminal outcomes but retries transient failures', () => {
+    assert.equal(shouldAcknowledgeApplyWrite({
+        success: false,
+        disposition: 'terminal',
+        last_error: 'name required',
+    }), true);
+    assert.equal(shouldAcknowledgeApplyWrite({
+        success: false,
+        disposition: 'retryable',
+        last_error: 'IndexedDB unavailable',
+    }), false);
 });
 
 test('U5: mirrorInbox is idempotent for re-reads of the same id', async () => {
@@ -520,6 +719,20 @@ test('U5: recordInboxResult stamps applied_at on success', async () => {
     assert.ok(row);
     assert.ok(row!.applied_at && row!.applied_at > 0);
     assert.equal(row!.last_error, undefined);
+});
+
+test('review: terminal rejection is acknowledged while retaining its diagnostic', async () => {
+    await resetDb();
+    await agentBridge.mirrorInbox([{
+        id: 'rec-terminal',
+        action: 'create_project' as const,
+        project_data: { name: '' },
+        created_at: Date.now(),
+    }]);
+    await agentBridge.recordInboxResult('rec-terminal', true, 'name required');
+    const row = await db.agentInbox.get('rec-terminal');
+    assert.ok(row!.applied_at && row!.applied_at > 0);
+    assert.equal(row!.last_error, 'name required');
 });
 
 test('U5: recordInboxResult stores last_error on failure', async () => {

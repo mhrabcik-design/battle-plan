@@ -6,6 +6,12 @@ import { ProjectPicker } from './ProjectPicker';
 import { findProjectByName, type ExtractedWorkLog, type ExtractedWorkLogBatch } from '../../services/workLogExtractor';
 import { derivePersonHourMetadata, getWorkLogRowIssues, parseDecimalHours } from '../../utils/workLogBatch';
 import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
+import { getErrorMessage } from '../../utils/errors';
+import {
+    addWorkLogsWithActiveProjects,
+    ProjectUnavailableError,
+    type NewWorkLogDraft,
+} from '../../services/workLogPersistence';
 
 interface WorkLogVoiceConfirmProps {
     extracted: ExtractedWorkLogBatch;
@@ -23,6 +29,8 @@ type EditableEntry = ExtractedWorkLog & {
     project: Project | null;
 };
 
+const PROJECT_CATALOG_LOAD_ERROR = 'Katalog projektů se nepodařilo načíst. Návrhy můžete dál upravit; před uložením zkuste projekty vybrat ručně.';
+
 export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: WorkLogVoiceConfirmProps) {
     const [entries, setEntries] = useState<EditableEntry[]>(
         extracted.entries.map((entry, index) => ({
@@ -32,6 +40,8 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
         })),
     );
     const [saving, setSaving] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
+    const [catalogLoadError, setCatalogLoadError] = useState<string | null>(null);
 
     const totalHours = useMemo(
         () => entries.reduce((sum, entry) => sum + parseDecimalHours(entry.hours), 0),
@@ -41,16 +51,19 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
     useEffect(() => {
         let cancelled = false;
         (async () => {
-            const projects = await db.projects.toArray();
-            if (cancelled) return;
-            const activeProjects = projects.filter((p) => p.isActive);
-            setEntries((prev) =>
-                prev.map((entry) => {
-                    if (entry.project || !entry.projectName) return entry;
-                    const project = findProjectByName(entry.projectName, activeProjects);
-                    return project ? { ...entry, project } : entry;
-                }),
-            );
+            try {
+                const projects = await db.projects.toArray();
+                if (cancelled) return;
+                setEntries((prev) =>
+                    prev.map((entry) => {
+                        if (entry.project || !entry.projectName) return entry;
+                        const project = findProjectByName(entry.projectName, projects);
+                        return project ? { ...entry, project } : entry;
+                    }),
+                );
+            } catch {
+                if (!cancelled) setCatalogLoadError(PROJECT_CATALOG_LOAD_ERROR);
+            }
         })();
         return () => {
             cancelled = true;
@@ -82,6 +95,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
     };
 
     const handleSave = async () => {
+        setSaveError(null);
         if (entries.length === 0) {
             alert('Není co uložit.');
             return;
@@ -104,11 +118,9 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
         const now = Date.now();
         const batchId = `voice-${now}`;
         try {
-            const saved: WorkLog[] = [];
-            await db.transaction('rw', db.workLogs, async () => {
-                for (const entry of entries) {
-                    const project = entry.project!;
-                    const workLog: Omit<WorkLog, 'id'> = {
+            const drafts: NewWorkLogDraft[] = entries.map((entry) => {
+                const project = entry.project!;
+                return {
                         syncId: createWorkLogSyncId(),
                         date: entry.date,
                         projectId: project.id!,
@@ -124,16 +136,18 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                         source: 'voice',
                         createdAt: now,
                         updatedAt: now,
-                    };
-                    const id = await db.workLogs.add(workLog);
-                    saved.push({ id: id as number, ...workLog });
-                }
+                };
             });
+            const saved = await addWorkLogsWithActiveProjects(drafts);
 
             onConfirmed({
-                workLog: saved[0],
+                workLog: saved[0]!,
                 workLogs: saved,
             });
+        } catch (error) {
+            setSaveError(error instanceof ProjectUnavailableError
+                ? 'Některý vybraný projekt už není aktivní. Opravte projekt; žádný řádek nebyl uložen.'
+                : `Uložení selhalo: ${getErrorMessage(error)}`);
         } finally {
             setSaving(false);
         }
@@ -186,6 +200,11 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                                     {extracted.confirmationReasons.map((reason) => <div key={reason}>{reason}</div>)}
                                     {extracted.assumptions.map((assumption) => <div key={assumption}>Předpoklad: {assumption}</div>)}
                                 </div>
+                            </div>
+                        )}
+                        {catalogLoadError && (
+                            <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                                {catalogLoadError}
                             </div>
                         )}
 
@@ -292,6 +311,11 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                                 </div>
                             )})}
                         </div>
+                        {saveError && (
+                            <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                                {saveError}
+                            </div>
+                        )}
                     </div>
 
                     <div className="p-5 border-t border-slate-800 flex justify-end gap-2">

@@ -2,6 +2,11 @@
 
 ## WorkLogs
 
+### Project
+A durable work assignment that is created once and reused across WorkLogs for as long as the work continues.
+
+Only active projects are available for new WorkLogs. Archived projects keep their identity and remain visible through historical WorkLogs.
+
 ### WorkLog
 A record of completed work on a project, distinct from a task or meeting because it represents labor that can be reported by date, project, people, and hours.
 
