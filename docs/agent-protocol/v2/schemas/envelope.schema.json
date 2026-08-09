@@ -11,7 +11,7 @@
   "properties": {
     "protocol_version": { "const": "2.0.0" },
     "message_type": {
-      "enum": ["hello", "capability", "command", "result", "event-batch", "snapshot", "proposal", "response"]
+      "enum": ["hello", "capability", "command", "result", "event-batch", "snapshot", "proposal", "response", "drive-receipt"]
     },
     "message_id": { "$ref": "#/$defs/uuid" },
     "workspace_id": { "$ref": "#/$defs/uuid" },

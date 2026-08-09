@@ -12,3 +12,4 @@ export const validateEventBatch: ProtocolStandaloneValidator;
 export const validateSnapshot: ProtocolStandaloneValidator;
 export const validateProposal: ProtocolStandaloneValidator;
 export const validateResponse: ProtocolStandaloneValidator;
+export const validateDriveReceipt: ProtocolStandaloneValidator;

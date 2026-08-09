@@ -8,7 +8,7 @@ Update/delete/complete/archive/merge commands supply `expected_revision`. The re
 
 ## Concurrent valid events
 
-Two distinct revision IDs with the same `base_revision` form an explicit conflict set. No timestamp, Drive order, producer name or last-writer-wins rule selects a winner. Hermes durably stores both events, pauses canonical application for that entity, and requests a snapshot. The snapshot exposes all conflict heads sorted lexicographically by revision ID.
+Two distinct revision IDs with the same `base_revision` form an explicit conflict set. No timestamp, Drive order, producer name or last-writer-wins rule selects a winner. Hermes durably stores both events, pauses canonical application for that entity, and requests a snapshot. Its `conflicted` entity exposes every head sorted lexicographically by revision ID, with each full revision, projection and tombstone; consumers recompute every revision ID and the aggregate `conflict_set_id` before use.
 
 The conflict-set token is SHA-256 of UTF-8(`BattlePlan-Hermes/conflict/v2\0` + JCS(lexicographically sorted unique head IDs)). Equal canonical projections may be deterministically collapsed into one resolution whose cause cites both heads. Different projections require an explicit domain/human reconciliation. A `conflict_resolved` event must cite every sorted head in `conflict_heads`; its new revision uses the conflict-set token as `base_revision`. Consumers resume only after ingesting that event or a signed snapshot containing it. This rule makes replay and multi-device order deterministic.
 

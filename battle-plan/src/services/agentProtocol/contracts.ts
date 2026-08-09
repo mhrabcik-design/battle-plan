@@ -4,6 +4,7 @@ export const MAX_PROTOCOL_FILE_BYTES = 524_288 as const;
 export const SIGNING_DOMAIN = 'BattlePlan-Hermes/v2\0' as const;
 export const REVISION_DOMAIN = 'BattlePlan-Hermes/revision/v2\0' as const;
 export const CONFLICT_DOMAIN = 'BattlePlan-Hermes/conflict/v2\0' as const;
+export const ARTIFACT_MANIFEST_DOMAIN = 'BattlePlan-Hermes/artifact-manifest/v1\0' as const;
 
 export const MESSAGE_TYPES = [
     'hello',
@@ -14,6 +15,7 @@ export const MESSAGE_TYPES = [
     'snapshot',
     'proposal',
     'response',
+    'drive-receipt',
 ] as const;
 export type ProtocolMessageType = typeof MESSAGE_TYPES[number];
 
@@ -45,6 +47,15 @@ export const RESULT_STATES = [
 ] as const;
 export type ProtocolResultState = typeof RESULT_STATES[number];
 
+export const RESULT_ERROR_CODES = [
+    'invalid_json', 'duplicate_json_key', 'non_canonical_json', 'payload_too_large', 'schema_invalid',
+    'unsupported_major', 'unknown_message_type', 'unknown_action', 'signature_missing', 'signature_invalid',
+    'signature_metadata_mismatch', 'public_key_fingerprint_mismatch', 'key_unknown', 'key_revoked',
+    'workspace_mismatch', 'producer_mismatch', 'target_mismatch', 'message_expired', 'policy_blocked',
+    'capability_blocked', 'revision_stale', 'revision_conflict', 'approval_stale', 'idempotency_conflict',
+    'idempotency_horizon_expired', 'transport_retryable', 'external_effect_failed',
+] as const;
+
 export const PROTOCOL_ERROR_CODES = [
     'invalid_json',
     'duplicate_json_key',
@@ -57,6 +68,8 @@ export const PROTOCOL_ERROR_CODES = [
     'signature_missing',
     'signature_invalid',
     'signature_metadata_mismatch',
+    'public_key_fingerprint_mismatch',
+    'contract_artifact_mismatch',
     'crypto_unsupported',
     'key_unknown',
     'key_revoked',
@@ -68,12 +81,15 @@ export const PROTOCOL_ERROR_CODES = [
     'capability_blocked',
     'revision_stale',
     'revision_conflict',
+    'approval_stale',
     'idempotency_conflict',
     'idempotency_horizon_expired',
     'drive_authorization_failed',
     'drive_workspace_ambiguous',
     'drive_parent_mismatch',
+    'drive_receipt_mismatch',
     'transport_retryable',
+    'external_effect_failed',
 ] as const;
 export type ProtocolErrorCode = typeof PROTOCOL_ERROR_CODES[number];
 
@@ -129,7 +145,25 @@ export interface ProtocolRange {
     maximum: string;
 }
 
+export interface ProtocolContractArtifact {
+    id: 'battleplan-hermes-protocol';
+    version: typeof PROTOCOL_VERSION;
+    sha256: `sha256:${string}`;
+}
+
+export interface TrustedPairingRecord {
+    status: 'active' | 'revoked';
+    workspaceId: string;
+    producerId: string;
+    targetId: string;
+    keyId: string;
+    pairingEpoch: number;
+    rawPublicKey: string;
+    fingerprint: `sha256:${string}`;
+}
+
 export interface HelloPayload {
+    contract_artifact: ProtocolContractArtifact;
     role: 'battleplan' | 'hermes';
     purpose: 'pairing' | 'drive_interop_probe';
     protocol_range: ProtocolRange;
@@ -151,6 +185,7 @@ export interface HelloPayload {
 }
 
 export interface CapabilityPayload {
+    contract_artifact: ProtocolContractArtifact;
     receiver_id: string;
     status: 'ready' | 'degraded' | 'disabled';
     protocol_range: ProtocolRange;
@@ -163,11 +198,15 @@ export interface CapabilityPayload {
         ed25519_supported: boolean;
         checked_at: string;
     };
-    drive_interop_probe: {
-        status: 'required' | 'passed' | 'failed';
-        receipt_id?: string;
-        completed_at?: string;
-    };
+    drive_interop_probe:
+        | { status: 'required' }
+        | { status: 'failed'; completed_at: string }
+        | {
+            status: 'passed';
+            receipt_message_id: string;
+            receipt_content_sha256: `sha256:${string}`;
+            completed_at: string;
+        };
 }
 
 export type TaskCommandPayload =
@@ -189,20 +228,28 @@ export type ProjectCommandPayload =
 
 export type CommandPayload = TaskCommandPayload | WorkLogCommandPayload | ProjectCommandPayload;
 
-export interface ResultPayload {
-    command_id: string;
-    state: ProtocolResultState;
-    error_code?: ProtocolErrorCode;
-    retry_at?: string;
-    entity_public_id?: string;
-    revision?: ProtocolRevision;
-    effects?: Array<{
-        effect_id: string;
-        kind: 'calendar' | 'google_tasks' | 'drive_publication';
-        state: 'pending' | 'succeeded' | 'failed';
-        error_code?: ProtocolErrorCode;
-    }>;
-}
+type EffectBase = { effect_id: string; kind: 'calendar' | 'google_tasks' | 'drive_publication' };
+export type ProtocolEffect =
+    | (EffectBase & { state: 'pending' | 'succeeded' })
+    | (EffectBase & { state: 'failed'; error_code: 'transport_retryable' | 'external_effect_failed' });
+
+type ResultBase<TState extends ProtocolResultState> = { command_id: string; state: TState };
+export type ResultPayload =
+    | ResultBase<'received' | 'awaiting_approval'>
+    | (ResultBase<'retry_scheduled'> & { error_code: 'transport_retryable'; retry_at: string })
+    | (ResultBase<'applied'> & { entity_public_id: string; revision: ProtocolRevision; effects?: ProtocolEffect[] })
+    | (ResultBase<'blocked'> & { error_code: 'policy_blocked' | 'capability_blocked' })
+    | (ResultBase<'stale'> & { error_code: 'revision_stale' | 'revision_conflict' | 'approval_stale' })
+    | (ResultBase<'expired'> & { error_code: 'message_expired' | 'idempotency_horizon_expired' })
+    | (ResultBase<'rejected'> & { error_code: 'idempotency_conflict' })
+    | (ResultBase<'quarantined'> & {
+        error_code:
+            | 'invalid_json' | 'duplicate_json_key' | 'non_canonical_json' | 'payload_too_large'
+            | 'schema_invalid' | 'unsupported_major' | 'unknown_message_type' | 'unknown_action'
+            | 'signature_missing' | 'signature_invalid' | 'signature_metadata_mismatch'
+            | 'public_key_fingerprint_mismatch' | 'key_unknown' | 'key_revoked'
+            | 'workspace_mismatch' | 'producer_mismatch' | 'target_mismatch';
+    });
 
 export interface EventBatchPayload {
     stream_id: string;
@@ -224,17 +271,60 @@ export interface EventBatchPayload {
     }>;
 }
 
+export interface ResolvedSnapshotEntity {
+    state: 'resolved';
+    entity_kind: 'task' | 'worklog' | 'project';
+    entity_public_id: string;
+    revision: ProtocolRevision;
+    projection: Record<string, unknown>;
+    tombstone: boolean;
+}
+
+export interface ConflictedSnapshotEntity {
+    state: 'conflicted';
+    entity_kind: 'task' | 'worklog' | 'project';
+    entity_public_id: string;
+    conflict_set_id: `sha256:${string}`;
+    conflict_versions: Array<{
+        revision: ProtocolRevision;
+        projection: Record<string, unknown>;
+        tombstone: boolean;
+    }>;
+}
+
 export interface SnapshotPayload {
     stream_id: string;
     high_water_mark: string;
     generated_at: string;
-    entities: Array<{
-        entity_kind: 'task' | 'worklog' | 'project';
-        entity_public_id: string;
-        revision: ProtocolRevision;
-        projection: Record<string, unknown>;
-        conflict_heads?: string[];
-        tombstone?: boolean;
+    entities: Array<ResolvedSnapshotEntity | ConflictedSnapshotEntity>;
+}
+
+export interface DriveReceiptPayload {
+    contract_artifact: ProtocolContractArtifact;
+    verdict: 'passed';
+    completed_at: string;
+    oauth_scope: 'https://www.googleapis.com/auth/drive.file';
+    workspace_location: {
+        folder_id: string;
+        expected_parent_id: string;
+        authority:
+            | { kind: 'shared_drive'; drive_id: string }
+            | { kind: 'owner'; owner_permission_id: string };
+    };
+    directions: Array<{
+        direction: 'battleplan_to_hermes' | 'hermes_to_battleplan';
+        probe_id: string;
+        hello_message_id: string;
+        file_id: string;
+        creator_oauth_client: 'battleplan' | 'hermes';
+        body_sha256: `sha256:${string}`;
+        signing_key_id: string;
+        outcomes: Record<'create' | 'list' | 'get' | 'download' | 'acknowledge' | 'reread', {
+            status: 'passed';
+            http_status: number;
+            observed_file_id: string;
+        }>;
+        verdicts: Record<'body_digest' | 'signature' | 'properties' | 'parent', 'passed'>;
     }>;
 }
 
@@ -260,6 +350,7 @@ export type EventBatchMessage = ProtocolSignedBase<'event-batch', EventBatchPayl
 export type SnapshotMessage = ProtocolSignedBase<'snapshot', SnapshotPayload>;
 export type ProposalMessage = ProtocolSignedBase<'proposal', ProposalPayload>;
 export type ResponseMessage = ProtocolSignedBase<'response', ResponsePayload>;
+export type DriveReceiptMessage = ProtocolSignedBase<'drive-receipt', DriveReceiptPayload>;
 
 export type ProtocolSignedMessage =
     | HelloMessage
@@ -269,7 +360,8 @@ export type ProtocolSignedMessage =
     | EventBatchMessage
     | SnapshotMessage
     | ProposalMessage
-    | ResponseMessage;
+    | ResponseMessage
+    | DriveReceiptMessage;
 
 export interface ProtocolDetachedSignature {
     alg: 'Ed25519';
@@ -290,5 +382,5 @@ export interface ProtocolValidationError {
 }
 
 export type ProtocolValidationResult =
-    | { ok: true; message: ProtocolWireMessage; canonicalSignedJson: string; contentSha256: string }
+    | { ok: true; message: ProtocolWireMessage; canonicalSignedJson: string; contentSha256: `sha256:${string}` }
     | { ok: false; error: ProtocolValidationError };

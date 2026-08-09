@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/contract-artifact.schema.json",
+  "title": "Normative protocol artifact identity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "sha256"],
+  "properties": {
+    "id": { "const": "battleplan-hermes-protocol" },
+    "version": { "const": "2.0.0" },
+    "sha256": { "$ref": "envelope.schema.json#/$defs/sha256" }
+  }
+}

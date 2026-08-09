@@ -1,0 +1,5 @@
+docs/agent-protocol/v2/schemas/*.json text eol=lf
+docs/agent-protocol/v2/ARTIFACT_MANIFEST.json text eol=lf
+docs/agent-protocol/v2/generated-validators.mjs text eol=lf
+battle-plan/src/services/agentProtocol/generatedValidators.js text eol=lf
+battle-plan/src/services/agentProtocol/generatedValidators.d.ts text eol=lf

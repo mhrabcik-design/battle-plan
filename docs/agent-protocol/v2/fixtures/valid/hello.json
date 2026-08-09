@@ -12,6 +12,11 @@
     "signing_key_id": "ed25519:hermes-1",
     "pairing_epoch": 1,
     "payload": {
+      "contract_artifact": {
+        "id": "battleplan-hermes-protocol",
+        "version": "2.0.0",
+        "sha256": "sha256:1b927765d2a36d9bcd7fbf5048ea08b103f9202fc979718e1425413134f20a83"
+      },
       "role": "hermes",
       "purpose": "pairing",
       "protocol_range": { "minimum": "2.0.0", "maximum": "2.0.0" },

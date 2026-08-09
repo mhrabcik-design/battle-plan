@@ -1,0 +1,69 @@
+{
+  "signed": {
+    "protocol_version": "2.0.0",
+    "message_type": "drive-receipt",
+    "message_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000009",
+    "workspace_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000010",
+    "producer_id": "battleplan.device-a",
+    "target": { "kind": "stream", "id": "workspace.drive-bootstrap" },
+    "created_at": "2026-08-09T10:10:00.000Z",
+    "correlation_id": null,
+    "causation_id": null,
+    "signing_key_id": "ed25519:battleplan-1",
+    "pairing_epoch": 1,
+    "payload": {
+      "contract_artifact": {
+        "id": "battleplan-hermes-protocol",
+        "version": "2.0.0",
+        "sha256": "sha256:1b927765d2a36d9bcd7fbf5048ea08b103f9202fc979718e1425413134f20a83"
+      },
+      "verdict": "passed",
+      "completed_at": "2026-08-09T10:10:00.000Z",
+      "oauth_scope": "https://www.googleapis.com/auth/drive.file",
+      "workspace_location": {
+        "folder_id": "drive-folder-123",
+        "expected_parent_id": "drive-parent-456",
+        "authority": { "kind": "owner", "owner_permission_id": "permission-owner-1" }
+      },
+      "directions": [
+        {
+          "direction": "battleplan_to_hermes",
+          "probe_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000091",
+          "hello_message_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000092",
+          "file_id": "drive-file-battleplan",
+          "creator_oauth_client": "battleplan",
+          "body_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signing_key_id": "ed25519:battleplan-1",
+          "outcomes": {
+            "create": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-battleplan" },
+            "list": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-battleplan" },
+            "get": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-battleplan" },
+            "download": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-battleplan" },
+            "acknowledge": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-battleplan" },
+            "reread": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-battleplan" }
+          },
+          "verdicts": { "body_digest": "passed", "signature": "passed", "properties": "passed", "parent": "passed" }
+        },
+        {
+          "direction": "hermes_to_battleplan",
+          "probe_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000093",
+          "hello_message_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000094",
+          "file_id": "drive-file-hermes",
+          "creator_oauth_client": "hermes",
+          "body_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "signing_key_id": "ed25519:hermes-1",
+          "outcomes": {
+            "create": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-hermes" },
+            "list": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-hermes" },
+            "get": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-hermes" },
+            "download": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-hermes" },
+            "acknowledge": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-hermes" },
+            "reread": { "status": "passed", "http_status": 200, "observed_file_id": "drive-file-hermes" }
+          },
+          "verdicts": { "body_digest": "passed", "signature": "passed", "properties": "passed", "parent": "passed" }
+        }
+      ]
+    }
+  },
+  "signature": { "alg": "Ed25519", "key_id": "ed25519:battleplan-1", "pairing_epoch": 1, "value": "AA" }
+}

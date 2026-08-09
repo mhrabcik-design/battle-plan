@@ -6,21 +6,28 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+    ARTIFACT_MANIFEST_DOMAIN,
     COMMAND_ACTIONS,
     MESSAGE_TYPES,
     PROTOCOL_ERROR_CODES,
+    PROTOCOL_VERSION,
     PROTOCOL_RETENTION,
+    RESULT_ERROR_CODES,
     RESULT_STATES,
     SIGNING_DOMAIN,
+    type ProtocolContractArtifact,
+    type TrustedPairingRecord,
     type ProtocolWireMessage,
 } from './contracts.ts';
 import {
     calculateProtocolConflictSetId,
+    calculateEd25519PublicKeyFingerprint,
     calculateProtocolRevisionId,
     canonicalizeProtocolJson,
     createDetachedSignature,
     probeEd25519Support,
     validateProtocolWireMessage,
+    verifyCapabilityDriveReceiptLink,
     verifyProtocolWireMessage,
 } from './validation.ts';
 
@@ -31,12 +38,44 @@ async function readJson(relativePath: string): Promise<unknown> {
     return JSON.parse(await readFile(path.join(protocolRoot, relativePath), 'utf8')) as unknown;
 }
 
+function bytesToBase64Url(bytes: Uint8Array): string {
+    return Buffer.from(bytes).toString('base64url');
+}
+
+async function contractArtifact(): Promise<ProtocolContractArtifact> {
+    const manifest = await readJson('ARTIFACT_MANIFEST.json') as {
+        artifact_id: string;
+        version: string;
+        artifact_sha256: `sha256:${string}`;
+    };
+    assert.equal(manifest.artifact_id, 'battleplan-hermes-protocol');
+    assert.equal(manifest.version, PROTOCOL_VERSION);
+    return { id: 'battleplan-hermes-protocol', version: PROTOCOL_VERSION, sha256: manifest.artifact_sha256 };
+}
+
+async function trustedRecord(
+    message: ProtocolWireMessage,
+    keys: CryptoKeyPair,
+): Promise<TrustedPairingRecord> {
+    const raw = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey));
+    return {
+        status: 'active',
+        workspaceId: message.signed.workspace_id,
+        producerId: message.signed.producer_id,
+        targetId: message.signed.target.id,
+        keyId: message.signed.signing_key_id,
+        pairingEpoch: message.signed.pairing_epoch,
+        rawPublicKey: bytesToBase64Url(raw),
+        fingerprint: calculateEd25519PublicKeyFingerprint(raw),
+    };
+}
+
 test('all valid cross-language fixtures validate and narrow to their message family', async () => {
     for (const messageType of MESSAGE_TYPES) {
         const fixture = await readJson(`fixtures/valid/${messageType}.json`);
         const result = validateProtocolWireMessage(fixture);
-        assert.equal(result.ok, true, `${messageType}: ${result.ok ? '' : result.error.code}`);
-        if (result.ok) assert.equal(result.message.signed.message_type, messageType);
+        if (!result.ok) assert.fail(`${messageType}: ${result.error.code}`);
+        assert.equal(result.message.signed.message_type, messageType);
     }
 });
 
@@ -47,12 +86,52 @@ test('invalid and future fixtures fail with their declared stable error code', a
 
     for (const fixtureName of fixtureNames) {
         const fixture = await readJson(`fixtures/invalid/${fixtureName}`) as {
-            expected_error: string;
-            message: unknown;
+            expected_error?: string;
+            message?: unknown;
+            cases?: Array<{ name: string; expected_error: string; message: unknown }>;
         };
-        const result = validateProtocolWireMessage(fixture.message);
-        assert.equal(result.ok, false, `${fixtureName} unexpectedly validated`);
-        if (!result.ok) assert.equal(result.error.code, fixture.expected_error, fixtureName);
+        const cases = fixture.cases ?? [{ name: fixtureName, expected_error: fixture.expected_error!, message: fixture.message }];
+        for (const invalidCase of cases) {
+            const result = validateProtocolWireMessage(invalidCase.message);
+            assert.equal(result.ok, false, `${fixtureName}/${invalidCase.name} unexpectedly validated`);
+            if (!result.ok) assert.equal(result.error.code, invalidCase.expected_error, `${fixtureName}/${invalidCase.name}`);
+        }
+    }
+});
+
+test('applied effects and approval-stale result variants validate', async () => {
+    for (const name of ['result-applied.json', 'result-approval-stale.json']) {
+        const result = validateProtocolWireMessage(await readJson(`fixtures/valid/${name}`));
+        if (!result.ok) assert.fail(`${name}: ${result.error.message}`);
+    }
+});
+
+test('contract artifact manifest is non-circular, deterministic, and advertised by control messages', async () => {
+    const manifest = await readJson('ARTIFACT_MANIFEST.json') as {
+        format: string;
+        artifact_id: string;
+        version: string;
+        schemas: Array<{ path: string; bytes: number; sha256: `sha256:${string}` }>;
+        artifact_sha256: `sha256:${string}`;
+    };
+    assert.deepEqual(manifest.schemas.map((entry) => entry.path), [...manifest.schemas.map((entry) => entry.path)].sort());
+    for (const entry of manifest.schemas) {
+        const bytes = await readFile(path.join(protocolRoot, entry.path));
+        assert.equal(entry.bytes, bytes.byteLength, entry.path);
+        assert.equal(entry.sha256, `sha256:${createHash('sha256').update(bytes).digest('hex')}`, entry.path);
+    }
+    const material = {
+        format: manifest.format,
+        artifact_id: manifest.artifact_id,
+        version: manifest.version,
+        schemas: manifest.schemas,
+    };
+    const expected = `sha256:${createHash('sha256').update(`${ARTIFACT_MANIFEST_DOMAIN}${canonicalizeProtocolJson(material)}`, 'utf8').digest('hex')}`;
+    assert.equal(manifest.artifact_sha256, expected);
+    const advertised = { id: manifest.artifact_id, version: manifest.version, sha256: manifest.artifact_sha256 };
+    for (const name of ['hello', 'capability', 'drive-receipt']) {
+        const fixture = await readJson(`fixtures/valid/${name}.json`) as ProtocolWireMessage;
+        assert.deepEqual((fixture.signed.payload as { contract_artifact: unknown }).contract_artifact, advertised, name);
     }
 });
 
@@ -101,6 +180,30 @@ test('revision and conflict tokens are content-addressed and order-independent w
     assert.throws(() => calculateProtocolConflictSetId([heads[0]!]), /at least two/);
 });
 
+test('snapshot conflict variants retain complete sorted versions and validate their conflict set', async () => {
+    const fixture = await readJson('fixtures/valid/snapshot-conflicted.json');
+    const result = validateProtocolWireMessage(fixture);
+    if (!result.ok) assert.fail(result.error.message);
+    if (result.message.signed.message_type !== 'snapshot') return;
+    const entity = result.message.signed.payload.entities[0]!;
+    assert.equal(entity.state, 'conflicted');
+    if (entity.state !== 'conflicted') return;
+    assert.equal(entity.conflict_versions.length, 2);
+    assert.equal(
+        entity.conflict_set_id,
+        calculateProtocolConflictSetId(entity.conflict_versions.map((version) => version.revision.revision_id)),
+    );
+
+    const revisionMismatch = structuredClone(fixture) as ProtocolWireMessage;
+    if (revisionMismatch.signed.message_type !== 'snapshot') return;
+    const conflicted = revisionMismatch.signed.payload.entities[0]!;
+    if (conflicted.state !== 'conflicted') return;
+    conflicted.conflict_versions[0]!.projection = { title: 'Tampered projection' };
+    const mismatch = validateProtocolWireMessage(revisionMismatch);
+    assert.equal(mismatch.ok, false);
+    if (!mismatch.ok) assert.equal(mismatch.error.code, 'schema_invalid');
+});
+
 test('raw wire parsing rejects duplicate keys and non-canonical whitespace before schema selection', () => {
     const duplicate = validateProtocolWireMessage('{"signature":{},"signed":{"message_type":"hello","message_type":"command"}}');
     assert.equal(duplicate.ok, false);
@@ -113,26 +216,24 @@ test('raw wire parsing rejects duplicate keys and non-canonical whitespace befor
 
 test('Ed25519 verification binds canonical body, workspace, key id, and pairing epoch', async (t) => {
     const support = await probeEd25519Support();
-    if (!support.supported) {
+    if (support.supported === false) {
         t.skip(`runtime does not support Ed25519: ${support.reason}`);
         return;
     }
 
     const fixture = await readJson('fixtures/valid/hello.json') as ProtocolWireMessage;
     const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
-    const signed = await createDetachedSignature(fixture.signed, keys.privateKey);
-    const message: ProtocolWireMessage = { signed: fixture.signed, signature: signed };
-    const trustedKey = {
-        status: 'active' as const,
-        keyId: fixture.signed.signing_key_id,
-        pairingEpoch: fixture.signed.pairing_epoch,
-        publicKey: keys.publicKey,
-    };
+    const message = structuredClone(fixture);
+    if (message.signed.message_type !== 'hello') throw new Error('hello fixture has wrong type');
+    const trust = await trustedRecord(message, keys);
+    message.signed.payload.public_key.raw_public_key = trust.rawPublicKey;
+    message.signed.payload.public_key.fingerprint = trust.fingerprint;
+    message.signature = await createDetachedSignature(message.signed, keys.privateKey);
+    const artifact = await contractArtifact();
 
     const valid = await verifyProtocolWireMessage(message, {
-        trustedKey,
-        expectedWorkspaceId: fixture.signed.workspace_id,
-        expectedProducerId: fixture.signed.producer_id,
+        trustedPairing: trust,
+        trustedContractArtifact: artifact,
     });
     assert.equal(valid.ok, true);
 
@@ -140,13 +241,13 @@ test('Ed25519 verification binds canonical body, workspace, key id, and pairing 
         ...message,
         signed: { ...message.signed, created_at: '2026-08-09T10:00:01.000Z' },
     };
-    const tamperResult = await verifyProtocolWireMessage(tampered, { trustedKey });
+    const tamperResult = await verifyProtocolWireMessage(tampered, { trustedPairing: trust, trustedContractArtifact: artifact });
     assert.equal(tamperResult.ok, false);
     if (!tamperResult.ok) assert.equal(tamperResult.error.code, 'signature_invalid');
 
     const workspaceResult = await verifyProtocolWireMessage(message, {
-        trustedKey,
-        expectedWorkspaceId: '018f6f5e-2d88-7f2a-9f90-d6ad23111111',
+        trustedPairing: { ...trust, workspaceId: '018f6f5e-2d88-7f2a-9f90-d6ad23111111' },
+        trustedContractArtifact: artifact,
     });
     assert.equal(workspaceResult.ok, false);
     if (!workspaceResult.ok) assert.equal(workspaceResult.error.code, 'workspace_mismatch');
@@ -155,53 +256,84 @@ test('Ed25519 verification binds canonical body, workspace, key id, and pairing 
         ...message,
         signature: { ...message.signature, pairing_epoch: message.signature.pairing_epoch + 1 },
     };
-    const epochResult = await verifyProtocolWireMessage(epochMismatch, { trustedKey });
+    const epochResult = await verifyProtocolWireMessage(epochMismatch, { trustedPairing: trust, trustedContractArtifact: artifact });
     assert.equal(epochResult.ok, false);
     if (!epochResult.ok) assert.equal(epochResult.error.code, 'signature_metadata_mismatch');
 
     const targetResult = await verifyProtocolWireMessage(message, {
-        trustedKey,
-        expectedTargetId: 'battleplan.device-b',
+        trustedPairing: { ...trust, targetId: 'battleplan.device-b' },
+        trustedContractArtifact: artifact,
     });
     assert.equal(targetResult.ok, false);
     if (!targetResult.ok) assert.equal(targetResult.error.code, 'target_mismatch');
+
+    const helloMismatch = structuredClone(message);
+    if (helloMismatch.signed.message_type !== 'hello') throw new Error('hello fixture has wrong type');
+    helloMismatch.signed.payload.public_key.raw_public_key = bytesToBase64Url(new Uint8Array(32).fill(7));
+    helloMismatch.signature = await createDetachedSignature(helloMismatch.signed, keys.privateKey);
+    const helloMismatchResult = await verifyProtocolWireMessage(helloMismatch, {
+        trustedPairing: trust,
+        trustedContractArtifact: artifact,
+    });
+    assert.equal(helloMismatchResult.ok, false);
+    if (!helloMismatchResult.ok) assert.equal(helloMismatchResult.error.code, 'public_key_fingerprint_mismatch');
+
+    const artifactMismatch = structuredClone(message);
+    if (artifactMismatch.signed.message_type !== 'hello') throw new Error('hello fixture has wrong type');
+    artifactMismatch.signed.payload.contract_artifact.sha256 = `sha256:${'f'.repeat(64)}` as `sha256:${string}`;
+    artifactMismatch.signature = await createDetachedSignature(artifactMismatch.signed, keys.privateKey);
+    const artifactMismatchResult = await verifyProtocolWireMessage(artifactMismatch, {
+        trustedPairing: trust,
+        trustedContractArtifact: artifact,
+    });
+    assert.equal(artifactMismatchResult.ok, false);
+    if (!artifactMismatchResult.ok) assert.equal(artifactMismatchResult.error.code, 'contract_artifact_mismatch');
 });
 
-test('unknown, mismatched and revoked key records fail closed before mutation authority is considered', async () => {
-    const fixture = await readJson('fixtures/valid/hello.json');
-    const unknown = await verifyProtocolWireMessage(fixture, {
-        trustedKey: { status: 'unknown' },
-    });
+test('missing, mismatched and revoked pairing records fail closed before mutation authority is considered', async (t) => {
+    const support = await probeEd25519Support();
+    if (support.supported === false) { t.skip(support.reason); return; }
+    const fixture = await readJson('fixtures/valid/command.json') as ProtocolWireMessage;
+    const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const message = { signed: fixture.signed, signature: await createDetachedSignature(fixture.signed, keys.privateKey) } as ProtocolWireMessage;
+    const trust = await trustedRecord(message, keys);
+    const artifact = await contractArtifact();
+    const unknown = await verifyProtocolWireMessage(message, {} as never);
     assert.equal(unknown.ok, false);
     if (!unknown.ok) assert.equal(unknown.error.code, 'key_unknown');
 
-    const message = fixture as ProtocolWireMessage;
     const mismatched = await verifyProtocolWireMessage(message, {
-        trustedKey: {
-            status: 'active',
-            keyId: 'ed25519:another-key',
-            pairingEpoch: message.signed.pairing_epoch,
-            publicKey: new Uint8Array(32),
-        },
+        trustedPairing: { ...trust, keyId: 'ed25519:another-key' },
+        trustedContractArtifact: artifact,
     });
     assert.equal(mismatched.ok, false);
     if (!mismatched.ok) assert.equal(mismatched.error.code, 'key_unknown');
 
     const revoked = await verifyProtocolWireMessage(message, {
-        trustedKey: {
-            status: 'revoked',
-            keyId: message.signed.signing_key_id,
-            pairingEpoch: message.signed.pairing_epoch,
-            publicKey: new Uint8Array(32),
-        },
+        trustedPairing: { ...trust, status: 'revoked' },
+        trustedContractArtifact: artifact,
     });
     assert.equal(revoked.ok, false);
     if (!revoked.ok) assert.equal(revoked.error.code, 'key_revoked');
+
+    const fingerprintMismatch = await verifyProtocolWireMessage(message, {
+        trustedPairing: { ...trust, fingerprint: `sha256:${'f'.repeat(64)}` as `sha256:${string}` },
+        trustedContractArtifact: artifact,
+    });
+    assert.equal(fingerprintMismatch.ok, false);
+    if (!fingerprintMismatch.ok) assert.equal(fingerprintMismatch.error.code, 'public_key_fingerprint_mismatch');
+
+    const nonCanonicalPublicKey = await verifyProtocolWireMessage(message, {
+        trustedPairing: { ...trust, rawPublicKey: `${trust.rawPublicKey}=` },
+        trustedContractArtifact: artifact,
+    });
+    assert.equal(nonCanonicalPublicKey.ok, false);
+    if (!nonCanonicalPublicKey.ok) assert.equal(nonCanonicalPublicKey.error.code, 'public_key_fingerprint_mismatch');
 });
 
 test('authenticated expired commands are terminal before any mutation handler', async (t) => {
     const support = await probeEd25519Support();
-    if (!support.supported) {
+    if (support.supported === false) {
         t.skip(`runtime does not support Ed25519: ${support.reason}`);
         return;
     }
@@ -212,16 +344,50 @@ test('authenticated expired commands are terminal before any mutation handler', 
         signature: await createDetachedSignature(fixture.signed, keys.privateKey),
     };
     const result = await verifyProtocolWireMessage(message, {
-        trustedKey: {
-            status: 'active',
-            keyId: fixture.signed.signing_key_id,
-            pairingEpoch: fixture.signed.pairing_epoch,
-            publicKey: keys.publicKey,
-        },
+        trustedPairing: await trustedRecord(message, keys),
+        trustedContractArtifact: await contractArtifact(),
         now: new Date('2026-08-10T00:00:00.000Z'),
     });
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.error.code, 'message_expired');
+});
+
+test('passed capability links to the exact verified drive receipt message and digest', async () => {
+    const capability = await readJson('fixtures/valid/capability.json') as ProtocolWireMessage;
+    const receipt = await readJson('fixtures/valid/drive-receipt.json') as ProtocolWireMessage;
+    const receiptValidation = validateProtocolWireMessage(receipt);
+    assert.equal(receiptValidation.ok, true);
+    if (!receiptValidation.ok || capability.signed.message_type !== 'capability') return;
+    capability.signed.payload.drive_interop_probe = {
+        status: 'passed',
+        receipt_message_id: receipt.signed.message_id,
+        receipt_content_sha256: receiptValidation.contentSha256,
+        completed_at: '2026-08-09T10:10:00.000Z',
+    };
+    assert.equal(verifyCapabilityDriveReceiptLink(capability, receipt).ok, true);
+    const passedProbe = capability.signed.payload.drive_interop_probe;
+    if (passedProbe.status !== 'passed') throw new Error('capability fixture has wrong probe state');
+    passedProbe.receipt_content_sha256 = `sha256:${'f'.repeat(64)}` as `sha256:${string}`;
+    const mismatch = verifyCapabilityDriveReceiptLink(capability, receipt);
+    assert.equal(mismatch.ok, false);
+    if (!mismatch.ok) assert.equal(mismatch.error.code, 'drive_receipt_mismatch');
+});
+
+test('drive receipt semantic checks preserve both directions and immutable file IDs', async () => {
+    const fixture = await readJson('fixtures/valid/drive-receipt.json') as ProtocolWireMessage;
+    const reversed = structuredClone(fixture);
+    if (reversed.signed.message_type !== 'drive-receipt') return;
+    reversed.signed.payload.directions.reverse();
+    const reversedResult = validateProtocolWireMessage(reversed);
+    assert.equal(reversedResult.ok, false);
+    if (!reversedResult.ok) assert.equal(reversedResult.error.code, 'schema_invalid');
+
+    const substituted = structuredClone(fixture);
+    if (substituted.signed.message_type !== 'drive-receipt') return;
+    substituted.signed.payload.directions[0]!.outcomes.reread.observed_file_id = 'different-file';
+    const substitutedResult = validateProtocolWireMessage(substituted);
+    assert.equal(substitutedResult.ok, false);
+    if (!substitutedResult.ok) assert.equal(substitutedResult.error.code, 'schema_invalid');
 });
 
 test('payload size limit fails before schema validation', async () => {
@@ -267,5 +433,5 @@ test('normative documentation identifiers cannot drift from executable registrie
     assert.deepEqual(envelopeSchema.properties.message_type.enum, [...MESSAGE_TYPES]);
     assert.deepEqual(commandSchema.$defs.action.enum, [...COMMAND_ACTIONS]);
     assert.deepEqual(resultSchema.$defs.state.enum, [...RESULT_STATES]);
-    assert.deepEqual(resultSchema.$defs.errorCode.enum, [...PROTOCOL_ERROR_CODES]);
+    assert.deepEqual(resultSchema.$defs.errorCode.enum, [...RESULT_ERROR_CODES]);
 });

@@ -25,6 +25,25 @@ The following registry is exhaustive for command/result lifecycle values.
 
 `retry_scheduled` never represents work after a local domain mutation committed. Once committed, the command is `applied`; Drive publication, Calendar and Google Tasks retry independently in `effects[]` and can never reopen or duplicate the command.
 
+## Exhaustive result/error matrix
+
+`result.schema.json` accepts only these combinations; an omitted entry is invalid:
+
+| State | Required/forbidden fields |
+| --- | --- |
+| `received`, `awaiting_approval` | `error_code`, `retry_at`, entity/revision and effects are forbidden. |
+| `retry_scheduled` | Requires `error_code=transport_retryable` and `retry_at`; all mutation evidence is forbidden. |
+| `applied` | Requires `entity_public_id` and full `revision`; forbids command-level `error_code` and `retry_at`. |
+| `blocked` | Requires exactly `policy_blocked` or `capability_blocked`. |
+| `stale` | Requires exactly `revision_stale`, `revision_conflict`, or `approval_stale`. |
+| `expired` | Requires exactly `message_expired` or `idempotency_horizon_expired`. |
+| `rejected` | Requires exactly `idempotency_conflict`. |
+| `quarantined` | Diagnostic-only pre-receipt trust/schema/address failure; only the schema registry subset is accepted. |
+
+For an applied command, each effect is independently `pending`, `succeeded`, or `failed`. Pending and succeeded forbid `error_code`; failed requires exactly `transport_retryable` or `external_effect_failed`. An effect failure never changes `applied` and never repeats the domain mutation.
+
+`crypto_unsupported`, `contract_artifact_mismatch`, `drive_authorization_failed`, `drive_workspace_ambiguous`, `drive_parent_mismatch`, and `drive_receipt_mismatch` occur before the authenticated command lifecycle exists. They disable the control plane and must never be serialized as a command `result`.
+
 ## Idempotency
 
 The key is `(workspace_id, message_id)` plus SHA-256 of the domain-separated canonical signed bytes. Same ID and digest returns the recorded lifecycle. Same ID with another digest terminates as `idempotency_conflict`. Commands older than 400 days terminate as `idempotency_horizon_expired`; producers must never reuse IDs.

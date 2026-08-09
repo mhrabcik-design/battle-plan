@@ -15,7 +15,9 @@ The code is stable machine data. `Retry` means retry the identical signed messag
 | `signature_missing` <!-- error-code:signature_missing --> | quarantined | no | Detached signature absent. |
 | `signature_invalid` <!-- error-code:signature_invalid --> | quarantined | no | Ed25519 verification failed. |
 | `signature_metadata_mismatch` <!-- error-code:signature_metadata_mismatch --> | quarantined | no | Body key ID/epoch differs from signature metadata. |
-| `crypto_unsupported` <!-- error-code:crypto_unsupported --> | blocked | no | Runtime cannot perform WebCrypto Ed25519. |
+| `public_key_fingerprint_mismatch` <!-- error-code:public_key_fingerprint_mismatch --> | quarantined | no | Raw key bytes, computed SHA-256 fingerprint, hello assertion and trusted record do not all match. |
+| `contract_artifact_mismatch` <!-- error-code:contract_artifact_mismatch --> | disabled (control plane) | no | Advertised schema artifact tuple differs from the locally trusted generated manifest. No command receipt exists. |
+| `crypto_unsupported` <!-- error-code:crypto_unsupported --> | disabled (control plane) | no | Runtime cannot perform WebCrypto Ed25519. No command receipt exists. |
 | `key_unknown` <!-- error-code:key_unknown --> | quarantined | no | Key is not paired. |
 | `key_revoked` <!-- error-code:key_revoked --> | quarantined | no | Key or epoch is revoked. |
 | `workspace_mismatch` <!-- error-code:workspace_mismatch --> | quarantined | no | Authenticated body names another workspace. |
@@ -26,11 +28,14 @@ The code is stable machine data. `Retry` means retry the identical signed messag
 | `capability_blocked` <!-- error-code:capability_blocked --> | blocked | no | Receiver did not advertise required capability. |
 | `revision_stale` <!-- error-code:revision_stale --> | stale | no | Expected revision is not the current sole head. |
 | `revision_conflict` <!-- error-code:revision_conflict --> | stale | no | Entity has multiple concurrent heads. |
+| `approval_stale` <!-- error-code:approval_stale --> | stale | no | Approval digest no longer matches the current preview and policy inputs. |
 | `idempotency_conflict` <!-- error-code:idempotency_conflict --> | rejected | no | Same message ID has another canonical digest. |
 | `idempotency_horizon_expired` <!-- error-code:idempotency_horizon_expired --> | expired | no | Command is older than 400 days. |
-| `drive_authorization_failed` <!-- error-code:drive_authorization_failed --> | blocked | no | Intended OAuth client cannot access the counterpart file. |
-| `drive_workspace_ambiguous` <!-- error-code:drive_workspace_ambiguous --> | blocked | no | Workspace identity or folder selection is ambiguous. |
-| `drive_parent_mismatch` <!-- error-code:drive_parent_mismatch --> | blocked | no | Probe file is outside the pinned parent. |
+| `drive_authorization_failed` <!-- error-code:drive_authorization_failed --> | disabled (control plane) | no | Intended OAuth client cannot access the counterpart file. No command receipt exists. |
+| `drive_workspace_ambiguous` <!-- error-code:drive_workspace_ambiguous --> | disabled (control plane) | no | Workspace identity or folder selection is ambiguous. No command receipt exists. |
+| `drive_parent_mismatch` <!-- error-code:drive_parent_mismatch --> | disabled (control plane) | no | Probe file is outside the pinned parent. No command receipt exists. |
+| `drive_receipt_mismatch` <!-- error-code:drive_receipt_mismatch --> | disabled (control plane) | no | Capability receipt ID/digest/time/workspace/artifact does not match the exact signed receipt. |
 | `transport_retryable` <!-- error-code:transport_retryable --> | retry_scheduled | yes | Transient transport failure before mutation; same ID only. |
+| `external_effect_failed` <!-- error-code:external_effect_failed --> | applied effect failed | effect only | Committed command remains applied while one external effect failed independently. |
 
 Unknown error codes are incompatible API additions and require at least a protocol minor version.

@@ -4,7 +4,7 @@ This guide is sufficient to implement the Hermes adapter without BattlePlan sour
 
 ## 1. Consume the contract
 
-Vendor the complete `docs/agent-protocol/v2` directory. Validate JSON with Draft 2020-12 schemas, reject unknown properties, implement RFC 8785 JCS with the additional `-0`, duplicate-key, unsafe-integer and Unicode guards, and load the exact error/action/lifecycle registries. Run every fixture through Hermes's own validator and compare the declared result.
+Vendor the complete `docs/agent-protocol/v2` directory. Validate JSON with Draft 2020-12 schemas, reject unknown properties, implement RFC 8785 JCS with the additional `-0`, duplicate-key, unsafe-integer and Unicode guards, and load the exact error/action/lifecycle registries. Independently recompute `ARTIFACT_MANIFEST.json` exactly as specified by `VERSIONING.md`; pin its artifact tuple in the local trusted configuration. Run every fixture through Hermes's own validator and compare the declared result.
 
 ## 2. Create the Hermes identity
 
@@ -12,7 +12,7 @@ Run the Ed25519 capability probe in a secure context. Create a Hermes-owned non-
 
 ## 3. Pair without enabling execution
 
-Pin the workspace UUID, exact Drive folder ID, expected parent/shared-drive identity, both producer identities, BattlePlan receiver ID, both active public keys and fingerprints. Exchange signed `hello` messages. A hello asserts an already verified key; it cannot self-authorize. BattlePlan advertises `execution_enabled=false` until the probe below succeeds.
+Pin the workspace UUID, exact Drive folder ID, expected parent/shared-drive identity, both producer identities, exact target IDs, both active raw 32-byte public keys, computed fingerprints, key IDs and epochs. Exchange signed `hello` messages. Import only the trusted-record raw key; recompute its fingerprint and require both hello key assertions to match. A hello cannot self-authorize. BattlePlan advertises `execution_enabled=false` until the probe below succeeds.
 
 ## 4. Repeatable bidirectional Drive interoperability probe
 
@@ -27,7 +27,8 @@ For direction A (`battleplan_to_hermes`) and then direction B (`hermes_to_battle
 5. Consumer calls `files.get` for metadata and `files.get(alt=media)` for bytes, verifies parent/MIME/properties, canonical JSON, digest, Ed25519 signature, workspace, producer and target.
 6. Consumer updates a non-authoritative acknowledgement property on the same file and downloads it again. Creator observes the exact file ID and acknowledgement without accepting changed body bytes.
 7. Consumer publishes the reverse-direction signed probe using its own OAuth client and Ed25519 key. Repeat steps 1–6.
-8. Both sides persist a signed receipt containing the two immutable probe IDs, two file IDs, exact folder identity, OAuth scope used, creation/list/get/download/update outcomes, digest/signature verdicts and completion timestamp. Capability may then report `drive_interop_probe.status=passed`.
+8. Publish the ninth family, signed `drive-receipt`, only if both directions passed. It contains the exact contract artifact, `drive.file` scope, pinned folder/parent and owner-or-shared-drive authority, completion time, and exactly two ordered direction records. Each record preserves immutable probe/hello/file IDs, creator client, body digest, signing key, `create/list/get/download/acknowledge/reread` outcomes with the same observed file ID, and body/signature/properties/parent verdicts. Partial or failed probes cannot produce a passed receipt.
+9. Capability may report `drive_interop_probe.status=passed` only when it copies that receipt's authenticated message ID, canonical signed-body content digest and exact completion time. Revalidate both messages, workspace and contract artifact when following the link; mismatch is `drive_receipt_mismatch`.
 
 Required stop mappings:
 
@@ -36,7 +37,7 @@ Required stop mappings:
 - Wrong/missing parent or shared-drive identity → `drive_parent_mismatch`.
 - Transient 429/5xx before any mutation → `transport_retryable` with bounded backoff and the same probe ID.
 
-Any stop leaves `execution_enabled=false`. It does not fall back to another folder, broaden scope, enable unsigned mode, or create production commands.
+Any stop leaves `execution_enabled=false`. These are control-plane failures and create no command `result` receipt. The runtime does not fall back to another folder, broaden scope, enable unsigned mode, or create production commands.
 
 ## 5. Operational message loop (after cutover approval only)
 

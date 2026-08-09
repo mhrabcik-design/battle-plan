@@ -2,6 +2,7 @@ import type { ProtocolStandaloneValidator } from './generatedValidators.js';
 import {
     validateCapability,
     validateCommand,
+    validateDriveReceipt,
     validateEventBatch,
     validateHello,
     validateProposal,
@@ -18,12 +19,14 @@ import {
     REVISION_DOMAIN,
     SIGNING_DOMAIN,
     type ProtocolDetachedSignature,
+    type ProtocolContractArtifact,
     type ProtocolErrorCode,
     type ProtocolMessageType,
     type ProtocolRevisionMaterial,
     type ProtocolSignedMessage,
     type ProtocolValidationResult,
     type ProtocolWireMessage,
+    type TrustedPairingRecord,
 } from './contracts.ts';
 
 const encoder = new TextEncoder();
@@ -36,6 +39,7 @@ const validators: Record<ProtocolMessageType, ProtocolStandaloneValidator> = {
     snapshot: validateSnapshot,
     proposal: validateProposal,
     response: validateResponse,
+    'drive-receipt': validateDriveReceipt,
 };
 
 class DuplicateJsonKeyError extends Error {}
@@ -240,7 +244,7 @@ function sha256Hex(bytes: Uint8Array): string {
     return [...hash].map((word) => word.toString(16).padStart(8, '0')).join('');
 }
 
-function signingBytes(signed: ProtocolSignedMessage): { canonical: string; bytes: Uint8Array; digest: string } {
+function signingBytes(signed: ProtocolSignedMessage): { canonical: string; bytes: Uint8Array; digest: `sha256:${string}` } {
     const canonical = canonicalizeProtocolJson(signed);
     const bytes = encoder.encode(`${SIGNING_DOMAIN}${canonical}`);
     return { canonical, bytes, digest: `sha256:${sha256Hex(bytes)}` };
@@ -308,18 +312,58 @@ function semanticError(wire: ProtocolWireMessage): ProtocolValidationResult | un
         case 'snapshot':
             if (signed.payload.stream_id !== signed.target.id) return invalid('schema_invalid', 'Snapshot stream_id must equal target.id');
             for (const entity of signed.payload.entities) {
-                if (entity.conflict_heads && !isSorted(entity.conflict_heads)) return invalid('schema_invalid', 'Conflict heads must be unique and lexicographically sorted');
-                const expected = calculateProtocolRevisionId({
-                    entity_kind: entity.entity_kind,
-                    entity_public_id: entity.entity_public_id,
-                    base_revision: entity.revision.base_revision,
-                    mutation_id: entity.revision.mutation_id,
-                    projection: entity.projection,
-                    tombstone: entity.tombstone ?? false,
-                });
-                if (entity.revision.revision_id !== expected) return invalid('schema_invalid', 'Snapshot revision_id does not match canonical revision material');
+                if (entity.state === 'resolved') {
+                    const expected = calculateProtocolRevisionId({
+                        entity_kind: entity.entity_kind,
+                        entity_public_id: entity.entity_public_id,
+                        base_revision: entity.revision.base_revision,
+                        mutation_id: entity.revision.mutation_id,
+                        projection: entity.projection,
+                        tombstone: entity.tombstone,
+                    });
+                    if (entity.revision.revision_id !== expected) return invalid('schema_invalid', 'Resolved snapshot revision_id does not match canonical revision material');
+                    continue;
+                }
+                const heads = entity.conflict_versions.map((version) => version.revision.revision_id);
+                if (!isSorted(heads)) return invalid('schema_invalid', 'Snapshot conflict versions must be unique and lexicographically sorted by revision_id');
+                const bases = new Set(entity.conflict_versions.map((version) => version.revision.base_revision));
+                if (bases.size !== 1) return invalid('schema_invalid', 'Snapshot conflict versions must share one base_revision');
+                for (const version of entity.conflict_versions) {
+                    const expected = calculateProtocolRevisionId({
+                        entity_kind: entity.entity_kind,
+                        entity_public_id: entity.entity_public_id,
+                        base_revision: version.revision.base_revision,
+                        mutation_id: version.revision.mutation_id,
+                        projection: version.projection,
+                        tombstone: version.tombstone,
+                    });
+                    if (version.revision.revision_id !== expected) return invalid('schema_invalid', 'Snapshot conflict revision_id does not match canonical revision material');
+                }
+                if (entity.conflict_set_id !== calculateProtocolConflictSetId(heads)) {
+                    return invalid('schema_invalid', 'Snapshot conflict_set_id does not match the complete sorted head set');
+                }
             }
             break;
+        case 'drive-receipt': {
+            const expectedDirections = ['battleplan_to_hermes', 'hermes_to_battleplan'] as const;
+            const operations = ['create', 'list', 'get', 'download', 'acknowledge', 'reread'] as const;
+            for (let index = 0; index < expectedDirections.length; index++) {
+                const direction = signed.payload.directions[index]!;
+                if (direction.direction !== expectedDirections[index]) {
+                    return invalid('schema_invalid', 'Drive receipt directions must be complete and ordered battleplan_to_hermes, hermes_to_battleplan');
+                }
+                const expectedCreator = direction.direction === 'battleplan_to_hermes' ? 'battleplan' : 'hermes';
+                if (direction.creator_oauth_client !== expectedCreator) {
+                    return invalid('schema_invalid', 'Drive receipt direction must match its OAuth creator');
+                }
+                for (const operation of operations) {
+                    if (direction.outcomes[operation].observed_file_id !== direction.file_id) {
+                        return invalid('schema_invalid', `Drive receipt ${operation} outcome must preserve the immutable file_id`);
+                    }
+                }
+            }
+            break;
+        }
         default:
             break;
     }
@@ -386,9 +430,20 @@ function bytesToBase64Url(bytes: Uint8Array): string {
 }
 
 function base64UrlToBytes(value: string): Uint8Array {
+    if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) {
+        throw new Error('Value is not unpadded base64url');
+    }
     const padded = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4);
     const binary = atob(padded);
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    if (bytesToBase64Url(bytes) !== value) throw new Error('Value is not canonical base64url');
+    return bytes;
+}
+
+/** SHA-256 fingerprint over the exact 32 raw Ed25519 public-key bytes. */
+export function calculateEd25519PublicKeyFingerprint(rawPublicKey: Uint8Array | string): `sha256:${string}` {
+    const bytes = typeof rawPublicKey === 'string' ? base64UrlToBytes(rawPublicKey) : rawPublicKey;
+    return `sha256:${sha256Hex(bytes)}`;
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -422,18 +477,24 @@ export async function createDetachedSignature(
 }
 
 export interface VerifyProtocolOptions {
-    trustedKey:
-        | { status: 'unknown' }
-        | {
-            status: 'active' | 'revoked';
-            keyId: string;
-            pairingEpoch: number;
-            publicKey: CryptoKey | Uint8Array | string;
-        };
-    expectedWorkspaceId?: string;
-    expectedProducerId?: string;
-    expectedTargetId?: string;
+    trustedPairing: TrustedPairingRecord;
+    trustedContractArtifact: ProtocolContractArtifact;
     now?: Date;
+}
+
+function sameContractArtifact(actual: ProtocolContractArtifact, expected: ProtocolContractArtifact): boolean {
+    return actual.id === expected.id && actual.version === expected.version && actual.sha256 === expected.sha256;
+}
+
+function assertedContractArtifact(message: ProtocolSignedMessage): ProtocolContractArtifact | undefined {
+    switch (message.message_type) {
+        case 'hello':
+        case 'capability':
+        case 'drive-receipt':
+            return message.payload.contract_artifact;
+        default:
+            return undefined;
+    }
 }
 
 export async function verifyProtocolWireMessage(
@@ -442,33 +503,39 @@ export async function verifyProtocolWireMessage(
 ): Promise<ProtocolValidationResult> {
     const validation = validateProtocolWireMessage(input);
     if (!validation.ok) return validation;
-    if (options.trustedKey.status === 'unknown') return invalid('key_unknown', 'Signing key is not paired for this workspace');
+    if (!options?.trustedPairing) return invalid('key_unknown', 'A trusted pairing record is required');
+    const trust = options.trustedPairing;
     const signed = validation.message.signed;
     if (
-        options.trustedKey.keyId !== signed.signing_key_id
-        || options.trustedKey.pairingEpoch !== signed.pairing_epoch
+        trust.keyId !== signed.signing_key_id
+        || trust.pairingEpoch !== signed.pairing_epoch
     ) {
         return invalid('key_unknown', 'Signing key ID or pairing epoch does not match the trusted pairing record');
     }
-    if (options.trustedKey.status === 'revoked') return invalid('key_revoked', 'Signing key or pairing epoch is revoked');
+    if (trust.status === 'revoked') return invalid('key_revoked', 'Signing key or pairing epoch is revoked');
+    let publicKeyBytes: Uint8Array;
+    try {
+        publicKeyBytes = base64UrlToBytes(trust.rawPublicKey);
+    } catch {
+        return invalid('public_key_fingerprint_mismatch', 'Trusted raw public key is not valid base64url');
+    }
+    if (publicKeyBytes.byteLength !== 32) {
+        return invalid('public_key_fingerprint_mismatch', 'Trusted Ed25519 raw public key must be exactly 32 bytes');
+    }
+    const actualFingerprint = calculateEd25519PublicKeyFingerprint(publicKeyBytes);
+    if (trust.fingerprint !== actualFingerprint) {
+        return invalid('public_key_fingerprint_mismatch', 'Trusted fingerprint does not match the trusted raw public key bytes');
+    }
     const subtle = globalThis.crypto?.subtle;
     if (!subtle) return invalid('crypto_unsupported', 'WebCrypto Ed25519 is unavailable');
     try {
-        let publicKey: CryptoKey;
-        if (typeof CryptoKey !== 'undefined' && options.trustedKey.publicKey instanceof CryptoKey) {
-            publicKey = options.trustedKey.publicKey;
-        } else {
-            const publicKeyBytes = typeof options.trustedKey.publicKey === 'string'
-                ? base64UrlToBytes(options.trustedKey.publicKey)
-                : options.trustedKey.publicKey as Uint8Array;
-            publicKey = await subtle.importKey(
-                'raw',
-                toArrayBuffer(publicKeyBytes),
-                { name: 'Ed25519' },
-                false,
-                ['verify'],
-            );
-        }
+        const publicKey = await subtle.importKey(
+            'raw',
+            toArrayBuffer(publicKeyBytes),
+            { name: 'Ed25519' },
+            false,
+            ['verify'],
+        );
         const { bytes } = signingBytes(validation.message.signed);
         let signatureBytes: Uint8Array;
         try {
@@ -485,19 +552,69 @@ export async function verifyProtocolWireMessage(
         );
         if (!verified) return invalid('signature_invalid', 'Ed25519 signature does not match canonical signed bytes');
     } catch (error) {
-        return invalid('crypto_unsupported', error instanceof Error ? error.message : 'Ed25519 verification unavailable');
+        if (error instanceof DOMException && error.name === 'NotSupportedError') {
+            return invalid('crypto_unsupported', error.message || 'Ed25519 verification unavailable');
+        }
+        return invalid('signature_invalid', error instanceof Error ? error.message : 'Ed25519 verification failed');
     }
-    if (options.expectedWorkspaceId && signed.workspace_id !== options.expectedWorkspaceId) {
+    if (signed.workspace_id !== trust.workspaceId) {
         return invalid('workspace_mismatch', 'Authenticated message belongs to another workspace');
     }
-    if (options.expectedProducerId && signed.producer_id !== options.expectedProducerId) {
+    if (signed.producer_id !== trust.producerId) {
         return invalid('producer_mismatch', 'Authenticated message belongs to another producer');
     }
-    if (options.expectedTargetId && signed.target.id !== options.expectedTargetId) {
+    if (signed.target.id !== trust.targetId) {
         return invalid('target_mismatch', 'Authenticated message targets another receiver or stream');
+    }
+    if (signed.message_type === 'hello') {
+        let assertedBytes: Uint8Array;
+        try {
+            assertedBytes = base64UrlToBytes(signed.payload.public_key.raw_public_key);
+        } catch {
+            return invalid('public_key_fingerprint_mismatch', 'Hello raw public key is not valid base64url');
+        }
+        const assertedFingerprint = calculateEd25519PublicKeyFingerprint(assertedBytes);
+        if (
+            signed.payload.public_key.raw_public_key !== trust.rawPublicKey
+            || assertedFingerprint !== trust.fingerprint
+            || signed.payload.public_key.fingerprint !== trust.fingerprint
+        ) {
+            return invalid('public_key_fingerprint_mismatch', 'Hello public key bytes and fingerprint must match the trusted pairing record');
+        }
+    }
+    const advertisedArtifact = assertedContractArtifact(signed);
+    if (
+        advertisedArtifact
+        && (!options.trustedContractArtifact || !sameContractArtifact(advertisedArtifact, options.trustedContractArtifact))
+    ) {
+        return invalid('contract_artifact_mismatch', 'Authenticated control message advertises a different normative contract artifact');
     }
     if (signed.expires_at && new Date(signed.expires_at).getTime() <= (options.now ?? new Date()).getTime()) {
         return invalid('message_expired', 'Authenticated message is expired');
     }
     return validation;
+}
+
+export function verifyCapabilityDriveReceiptLink(capability: unknown, receipt: unknown): ProtocolValidationResult {
+    const capabilityValidation = validateProtocolWireMessage(capability);
+    if (!capabilityValidation.ok) return capabilityValidation;
+    const receiptValidation = validateProtocolWireMessage(receipt);
+    if (!receiptValidation.ok) return receiptValidation;
+    const capabilityMessage = capabilityValidation.message.signed;
+    const receiptMessage = receiptValidation.message.signed;
+    if (capabilityMessage.message_type !== 'capability' || receiptMessage.message_type !== 'drive-receipt') {
+        return invalid('drive_receipt_mismatch', 'Link verification requires capability and drive-receipt messages');
+    }
+    const probe = capabilityMessage.payload.drive_interop_probe;
+    if (
+        probe.status !== 'passed'
+        || capabilityMessage.workspace_id !== receiptMessage.workspace_id
+        || probe.receipt_message_id !== receiptMessage.message_id
+        || probe.receipt_content_sha256 !== receiptValidation.contentSha256
+        || probe.completed_at !== receiptMessage.payload.completed_at
+        || !sameContractArtifact(capabilityMessage.payload.contract_artifact, receiptMessage.payload.contract_artifact)
+    ) {
+        return invalid('drive_receipt_mismatch', 'Capability does not link the exact passed receipt ID, digest, completion time, workspace, and contract artifact');
+    }
+    return receiptValidation;
 }

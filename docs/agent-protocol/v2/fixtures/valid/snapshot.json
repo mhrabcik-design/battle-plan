@@ -16,6 +16,7 @@
       "high_water_mark": "1",
       "generated_at": "2026-08-09T10:00:03.000Z",
       "entities": [{
+        "state": "resolved",
         "entity_kind": "task",
         "entity_public_id": "task_alpha",
         "revision": {
@@ -23,7 +24,8 @@
           "base_revision": null,
           "mutation_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000052"
         },
-        "projection": { "title": "Prepare review", "status": "pending" }
+        "projection": { "title": "Prepare review", "status": "pending" },
+        "tombstone": false
       }]
     }
   },

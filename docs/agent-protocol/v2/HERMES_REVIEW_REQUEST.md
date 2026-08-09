@@ -17,7 +17,7 @@ node docs/agent-protocol/v2/conformance.mjs
 Expected result:
 
 ```text
-BattlePlan-Hermes v2 source-independent schema conformance: 18 fixtures passed.
+BattlePlan-Hermes v2 source-independent schema conformance: 29 fixtures passed.
 ```
 
 Hermes must also validate every fixture with its own implementation. It must not import BattlePlan TypeScript as its protocol implementation.
@@ -26,13 +26,15 @@ Hermes must also validate every fixture with its own implementation. It must not
 
 Confirm or reject each item with an exact file, JSON path or field, observed behavior, and proposed correction:
 
-1. BattlePlan and Hermes own separate Ed25519 keypairs. Pairing binds public-key fingerprint, key ID, pairing epoch, producer, receiver, and workspace. Unknown, mismatched, rolled-back, or revoked epochs fail closed.
+1. BattlePlan and Hermes own separate Ed25519 keypairs. A required trusted pairing record carries the exact raw public key and its recomputed SHA-256 fingerprint plus key ID, pairing epoch, producer, target and workspace. Verify with that raw key and require both hello assertions to match; there is no self-authorizing or default-active path.
 2. Ed25519 and SHA-256 use the same domain-separated UTF-8 bytes of the RFC 8785 canonical `signed` body. Drive properties are non-authoritative hints.
-3. Entity revisions are content-addressed. Concurrent heads create an explicit deterministic conflict set; no timestamp, Drive order, producer name, or last-writer-wins rule selects a winner.
+3. Entity revisions are content-addressed. Concurrent heads create an explicit deterministic conflict set; a conflicted snapshot carries every full revision/projection/tombstone and recomputes all revision and set IDs. No timestamp, Drive order, producer name, or last-writer-wins rule selects a winner.
 4. Receipt, event, snapshot, quarantine, tombstone, inactive-consumer, and revoked-key retention/GC rules are implementable without unstated assumptions.
-5. `quarantined`, `blocked`, `stale`, and `retry_scheduled` have one exhaustive normative meaning and terminal/retry classification.
+5. `result.schema.json` exhaustively constrains every lifecycle/error/effect combination. `crypto_unsupported`, contract-artifact mismatch and Drive bootstrap failures disable the control plane and never appear in a command result.
 6. Every Settings command is absent from the v2.0 action registry and fails before receipt creation.
-7. A capability cannot advertise execution enabled unless pairing, Ed25519, transport, and the signed Drive interoperability receipt are all ready.
+7. `ARTIFACT_MANIFEST.json` recomputes from sorted raw schema bytes without circular fixture input, and hello/capability/drive-receipt advertise its exact tuple.
+8. The ninth signed `drive-receipt` family losslessly records both OAuth probe directions and all required IDs/outcomes/verdicts. A capability `passed` reference is accepted only when the receipt message ID, content digest, completion time, workspace and contract artifact all match.
+9. A capability cannot advertise execution enabled unless pairing, Ed25519, transport, and the signed Drive interoperability receipt are all ready.
 
 ## Required response
 

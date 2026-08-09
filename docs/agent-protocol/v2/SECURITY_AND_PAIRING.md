@@ -8,9 +8,9 @@ Before pairing, both runtimes run `crypto.subtle.generateKey({name:'Ed25519'}, f
 
 ## Pairing record
 
-Each side stores: workspace UUID, peer producer ID, receiver IDs, raw 32-byte Ed25519 public key, `key_id`, monotonically increasing `pairing_epoch`, SHA-256 public-key fingerprint, activation time, status, and revocation time. The user compares the base64url SHA-256 fingerprint through the out-of-band channel before activation.
+Each side stores one required trusted record containing: workspace UUID, peer producer ID, exact receiver/target ID, base64url of the raw 32-byte Ed25519 public key, `key_id`, monotonically increasing `pairing_epoch`, `sha256:` plus lowercase SHA-256 of those exact raw bytes, activation time, status, and revocation time. The user compares that fingerprint through the out-of-band channel before activation. Absence of a record is `key_unknown`; there is no optional or default-active trust mode.
 
-The signed `hello.public_key` must match that pre-authorized record. A hello never authorizes its own key. Drive only transports the already-authorized assertion.
+Verification imports the raw public key from the trusted record, never from the incoming hello. Before import it decodes exactly 32 bytes, recomputes SHA-256, and matches the stored fingerprint. After signature and address verification, both `hello.public_key.raw_public_key` and `hello.public_key.fingerprint` must exactly match the same record and recomputed fingerprint. The signed `hello` therefore only asserts a pre-authorized key; it never authorizes its own key. Drive only transports that already-authorized assertion.
 
 ## Signing
 

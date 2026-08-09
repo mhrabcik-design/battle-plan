@@ -1,0 +1,73 @@
+{
+  "format": "battleplan-hermes-contract-manifest/v1",
+  "artifact_id": "battleplan-hermes-protocol",
+  "version": "2.0.0",
+  "schemas": [
+    {
+      "path": "schemas/capability.schema.json",
+      "bytes": 4951,
+      "sha256": "sha256:5af34177484b5fecbcbfe59551d05f0ea11393c7e7a5257a219c39b55f3f8d64"
+    },
+    {
+      "path": "schemas/command.schema.json",
+      "bytes": 7147,
+      "sha256": "sha256:43aa00c59a6ec1153986dea4fefe24a1aef0104e493886364b3dabfd73c166d5"
+    },
+    {
+      "path": "schemas/contract-artifact.schema.json",
+      "bytes": 478,
+      "sha256": "sha256:047c08ebb31caeef03aa1372c8c21dc7278e917b67608eb8eab8d1f5e37dcb21"
+    },
+    {
+      "path": "schemas/drive-receipt.schema.json",
+      "bytes": 4697,
+      "sha256": "sha256:9f1bed84faa6aa389e6d1f6b836cb795075b8a82f684fc257f37686d5e00412e"
+    },
+    {
+      "path": "schemas/envelope.schema.json",
+      "bytes": 2044,
+      "sha256": "sha256:0d1c21d8d0dc22fe1b5554625f912db85c7574451ba024c3ffffd7664b9ede93"
+    },
+    {
+      "path": "schemas/event-batch.schema.json",
+      "bytes": 2733,
+      "sha256": "sha256:0d3000462f5a8c8601b2827e6dfd76a03f5132034aec614b42a5bbc2b4cd22eb"
+    },
+    {
+      "path": "schemas/hello.schema.json",
+      "bytes": 3354,
+      "sha256": "sha256:e905b6504d2e48fec9e0fc03ff73e1988b64b65e18f86674f0c7236be912681e"
+    },
+    {
+      "path": "schemas/proposal.schema.json",
+      "bytes": 1248,
+      "sha256": "sha256:641a1158a506fe8d1bde13bb84c1eae2fa65f32fb3a3f31a619fb75f0f944908"
+    },
+    {
+      "path": "schemas/response.schema.json",
+      "bytes": 1391,
+      "sha256": "sha256:63d58e7ce2d8206510a4c193ba780f3238cda5fdfbaf66794937fd0353063619"
+    },
+    {
+      "path": "schemas/result.schema.json",
+      "bytes": 6328,
+      "sha256": "sha256:3f5925a43315186e40c1fe38de6a95ae869f7b799cf0b93c0537f2c5e3cfcaf2"
+    },
+    {
+      "path": "schemas/revision.schema.json",
+      "bytes": 536,
+      "sha256": "sha256:68bfa0ab2ee1ced746aec9dfeeaaccaaa4cfc20ddd70a7b366ca5545db0fab55"
+    },
+    {
+      "path": "schemas/signature.schema.json",
+      "bytes": 526,
+      "sha256": "sha256:a3023eae28898d8d6ab7728f9e69828c000a172b27e4b006623f55340f823b87"
+    },
+    {
+      "path": "schemas/snapshot.schema.json",
+      "bytes": 3679,
+      "sha256": "sha256:e45f95ce12dd4099d3b667707e784acb6ffd6d3ea776456393e0c99e103428b9"
+    }
+  ],
+  "artifact_sha256": "sha256:1b927765d2a36d9bcd7fbf5048ea08b103f9202fc979718e1425413134f20a83"
+}

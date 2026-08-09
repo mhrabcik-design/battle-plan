@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/drive-receipt.schema.json",
+  "title": "Signed bidirectional Drive interoperability receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        {
+          "type": "object",
+          "properties": {
+            "message_type": { "const": "drive-receipt" },
+            "target": { "type": "object", "properties": { "kind": { "const": "stream" } } },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["contract_artifact", "verdict", "completed_at", "oauth_scope", "workspace_location", "directions"],
+              "properties": {
+                "contract_artifact": { "$ref": "contract-artifact.schema.json" },
+                "verdict": { "const": "passed" },
+                "completed_at": { "type": "string", "format": "date-time" },
+                "oauth_scope": { "const": "https://www.googleapis.com/auth/drive.file" },
+                "workspace_location": { "$ref": "#/$defs/workspaceLocation" },
+                "directions": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": { "$ref": "#/$defs/direction" }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  },
+  "$defs": {
+    "workspaceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["folder_id", "expected_parent_id", "authority"],
+      "properties": {
+        "folder_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "expected_parent_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "authority": {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false, "required": ["kind", "drive_id"],
+              "properties": { "kind": { "const": "shared_drive" }, "drive_id": { "type": "string", "minLength": 1, "maxLength": 255 } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["kind", "owner_permission_id"],
+              "properties": { "kind": { "const": "owner" }, "owner_permission_id": { "type": "string", "minLength": 1, "maxLength": 255 } }
+            }
+          ]
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "http_status", "observed_file_id"],
+      "properties": {
+        "status": { "const": "passed" },
+        "http_status": { "type": "integer", "minimum": 200, "maximum": 299 },
+        "observed_file_id": { "type": "string", "minLength": 1, "maxLength": 255 }
+      }
+    },
+    "direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction", "probe_id", "hello_message_id", "file_id", "creator_oauth_client", "body_sha256", "signing_key_id", "outcomes", "verdicts"],
+      "properties": {
+        "direction": { "enum": ["battleplan_to_hermes", "hermes_to_battleplan"] },
+        "probe_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+        "hello_message_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+        "file_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "creator_oauth_client": { "enum": ["battleplan", "hermes"] },
+        "body_sha256": { "$ref": "envelope.schema.json#/$defs/sha256" },
+        "signing_key_id": { "$ref": "envelope.schema.json#/$defs/keyId" },
+        "outcomes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["create", "list", "get", "download", "acknowledge", "reread"],
+          "properties": {
+            "create": { "$ref": "#/$defs/outcome" }, "list": { "$ref": "#/$defs/outcome" },
+            "get": { "$ref": "#/$defs/outcome" }, "download": { "$ref": "#/$defs/outcome" },
+            "acknowledge": { "$ref": "#/$defs/outcome" }, "reread": { "$ref": "#/$defs/outcome" }
+          }
+        },
+        "verdicts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["body_digest", "signature", "properties", "parent"],
+          "properties": {
+            "body_digest": { "const": "passed" }, "signature": { "const": "passed" },
+            "properties": { "const": "passed" }, "parent": { "const": "passed" }
+          }
+        }
+      }
+    }
+  }
+}

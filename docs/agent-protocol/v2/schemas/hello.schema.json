@@ -22,8 +22,9 @@
             "payload": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["role", "purpose", "protocol_range", "nonce", "public_key"],
+              "required": ["contract_artifact", "role", "purpose", "protocol_range", "nonce", "public_key"],
               "properties": {
+                "contract_artifact": { "$ref": "contract-artifact.schema.json" },
                 "role": { "enum": ["battleplan", "hermes"] },
                 "purpose": { "enum": ["pairing", "drive_interop_probe"] },
                 "protocol_range": { "$ref": "#/$defs/protocolRange" },

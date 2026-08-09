@@ -66,10 +66,11 @@ Agent zapisuje příkazy do Google Drive souboru `agent-pending-writes.json`. Ko
 
 ## Agent Protocol v2 — veřejný Hermes kontrakt
 
-Normativní, zdrojově nezávislý kontrakt je publikován v `docs/agent-protocol/v2/`. JSON Schema 2020-12, registry, fixture a conformance runner jsou autoritativnější než implementační TypeScript. V2 používá oddělené Ed25519 identity BattlePlanu a Hermesu, RFC 8785 canonical JSON a explicitní message families pro hello, capability/health, command, result, event batch, snapshot, proposal a response.
+Normativní, zdrojově nezávislý kontrakt je publikován v `docs/agent-protocol/v2/`. JSON Schema 2020-12, generovaný necyklický `ARTIFACT_MANIFEST.json`, registry, fixture a conformance runner jsou autoritativnější než implementační TypeScript. V2 používá oddělené Ed25519 identity BattlePlanu a Hermesu, RFC 8785 canonical JSON a devět explicitních message families pro hello, capability/health, command, result, event batch, snapshot, proposal, response a podepsaný `drive-receipt`.
 
 - Settings příkazy nejsou ve v2.0 podporované a schema je odmítá jako `unknown_action`.
 - V2 dokumentační a validační artefakty jsou contract-ready, ale produkční vykonávání zůstává vypnuté, dokud neprojde podepsaný obousměrný Drive probe s reálnými OAuth klienty.
+- Hello se ověřuje výhradně proti povinnému důvěryhodnému párovacímu záznamu s raw Ed25519 klíčem a skutečně přepočítaným SHA-256 fingerprintem; příchozí klíč se sám neautorizuje.
 - Přidání typu, akce, lifecycle stavu nebo error kódu vyžaduje současnou změnu schématu, TypeScript registru, validních i nevalidních fixture, dokumentace, changelogu a regenerovaných standalone validátorů.
 
 ## Datové mapování
