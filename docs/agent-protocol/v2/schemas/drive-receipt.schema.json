@@ -22,7 +22,7 @@
               "properties": {
                 "contract_artifact": { "$ref": "contract-artifact.schema.json" },
                 "verdict": { "const": "passed" },
-                "completed_at": { "type": "string", "format": "date-time" },
+                "completed_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" },
                 "oauth_scope": { "const": "https://www.googleapis.com/auth/drive.file" },
                 "workspace_location": { "$ref": "#/$defs/workspaceLocation" },
                 "directions": {

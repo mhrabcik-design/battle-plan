@@ -138,10 +138,20 @@ test('contract artifact manifest is non-circular, deterministic, and advertised 
         artifact_sha256: `sha256:${string}`;
     };
     assert.deepEqual(manifest.schemas.map((entry) => entry.path), [...manifest.schemas.map((entry) => entry.path)].sort());
+    assert.ok(
+        manifest.schemas.some((entry) => entry.path === 'schemas/temporal-profile.schema.json'),
+        'artifact identity must cover the normative temporal validation profile',
+    );
+    const temporalProfile = await readJson('schemas/temporal-profile.schema.json') as {
+        $defs: { dateTime: { pattern: string } };
+    };
+    assert.match(temporalProfile.$defs.dateTime.pattern, /\[0-5\]\[0-9\]/u);
+    assert.doesNotMatch(temporalProfile.$defs.dateTime.pattern, /\|60/u);
     for (const entry of manifest.schemas) {
         const bytes = await readFile(path.join(protocolRoot, entry.path));
         assert.equal(entry.bytes, bytes.byteLength, entry.path);
         assert.equal(entry.sha256, `sha256:${createHash('sha256').update(bytes).digest('hex')}`, entry.path);
+        assert.doesNotMatch(bytes.toString('utf8'), /"format"\s*:/u, `${entry.path} must not depend on generator-local format callbacks`);
     }
     const material = {
         format: manifest.format,
@@ -152,7 +162,7 @@ test('contract artifact manifest is non-circular, deterministic, and advertised 
     const expected = `sha256:${createHash('sha256').update(`${ARTIFACT_MANIFEST_DOMAIN}${canonicalizeProtocolJson(material)}`, 'utf8').digest('hex')}`;
     assert.equal(manifest.artifact_sha256, expected);
     const advertised = { id: manifest.artifact_id, version: manifest.version, sha256: manifest.artifact_sha256 };
-    for (const name of ['hello', 'capability', 'drive-receipt']) {
+    for (const name of ['hello', 'hello-rfc3339-offset', 'capability', 'drive-receipt']) {
         const fixture = await readJson(`fixtures/valid/${name}.json`) as ProtocolWireMessage;
         assert.deepEqual((fixture.signed.payload as { contract_artifact: unknown }).contract_artifact, advertised, name);
     }

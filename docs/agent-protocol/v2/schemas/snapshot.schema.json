@@ -22,7 +22,7 @@
               "properties": {
                 "stream_id": { "$ref": "envelope.schema.json#/$defs/identity" },
                 "high_water_mark": { "$ref": "envelope.schema.json#/$defs/decimalCounter" },
-                "generated_at": { "type": "string", "format": "date-time" },
+                "generated_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" },
                 "entities": {
                   "type": "array",
                   "maxItems": 10000,

@@ -48,7 +48,7 @@
                     "transport": { "enum": ["ready", "unavailable", "ambiguous"] },
                     "execution_enabled": { "type": "boolean" },
                     "ed25519_supported": { "type": "boolean" },
-                    "checked_at": { "type": "string", "format": "date-time" }
+                    "checked_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" }
                   }
                 },
                 "drive_interop_probe": {
@@ -61,7 +61,7 @@
                       "type": "object", "additionalProperties": false, "required": ["status", "completed_at"],
                       "properties": {
                         "status": { "const": "failed" },
-                        "completed_at": { "type": "string", "format": "date-time" }
+                        "completed_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" }
                       }
                     },
                     {
@@ -71,7 +71,7 @@
                         "status": { "const": "passed" },
                         "receipt_message_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
                         "receipt_content_sha256": { "$ref": "envelope.schema.json#/$defs/sha256" },
-                        "completed_at": { "type": "string", "format": "date-time" }
+                        "completed_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" }
                       }
                     }
                   ]

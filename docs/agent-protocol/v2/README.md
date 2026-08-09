@@ -4,7 +4,7 @@ Start with `API_REFERENCE.md`, then implement `SECURITY_AND_PAIRING.md`, `MESSAG
 
 For the current U1 integration gate, follow `HERMES_REVIEW_REQUEST.md` and return its required evidence before U2 begins.
 
-Schemas are JSON Schema Draft 2020-12. `ARTIFACT_MANIFEST.json` is the generated, non-circular checksum of their exact bytes. `fixtures/valid` and `fixtures/invalid` are the source-independent conformance corpus. The nine signed families include the control-plane `drive-receipt`; a capability links a passed receipt by exact message ID and canonical signed-body digest. BattlePlan's focused gate is:
+Schemas are JSON Schema Draft 2020-12. `ARTIFACT_MANIFEST.json` is the generated, non-circular checksum of their exact bytes; this includes `schemas/temporal-profile.schema.json`, which is the only normative date/time acceptance definition. `fixtures/valid` and `fixtures/invalid` are the source-independent conformance corpus. The nine signed families include the control-plane `drive-receipt`; a capability links a passed receipt by exact message ID and canonical signed-body digest. BattlePlan's focused gate is:
 
 ```sh
 cd battle-plan

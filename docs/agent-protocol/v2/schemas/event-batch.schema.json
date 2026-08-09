@@ -39,7 +39,7 @@
         "entity_public_id": { "$ref": "envelope.schema.json#/$defs/publicId" },
         "revision": { "$ref": "revision.schema.json" },
         "conflict_heads": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "envelope.schema.json#/$defs/sha256" } },
-        "occurred_at": { "type": "string", "format": "date-time" },
+        "occurred_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" },
         "actor": { "$ref": "envelope.schema.json#/$defs/identity" },
         "origin": { "enum": ["ui", "voice", "hermes", "drive", "google"] },
         "cause_id": { "$ref": "envelope.schema.json#/$defs/uuid" },

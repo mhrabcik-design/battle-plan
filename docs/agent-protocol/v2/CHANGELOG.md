@@ -14,5 +14,6 @@
 - Bidirectional production-OAuth Drive probe specified as a cutover gate.
 - RFC 3339 offsets and real Gregorian calendar dates enforced by standalone validators.
 - Leap-second `:60` wire values are rejected and expiry comparisons fail closed on non-finite timestamps.
+- Temporal and UUID acceptance moved entirely into manifest-covered schema patterns, rotating the artifact hash to `fa049652…d7d7`; the old tuple is incompatible.
 - Capability-to-receipt links require full cryptographic verification of both messages.
 - Drive receipt, linked probe hello and inactive-consumer retention clocks and GC gates are explicit.

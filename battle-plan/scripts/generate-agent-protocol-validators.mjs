@@ -3,7 +3,6 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
 import standaloneCode from 'ajv/dist/standalone/index.js';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -65,16 +64,6 @@ const ajv = new Ajv2020({
     validateFormats: true,
     code: { esm: true, source: true, optimize: true },
 });
-addFormats(ajv);
-// Override function-backed temporal formats with serializable RFC 3339 forms
-// so standalone ESM never emits CommonJS `require()` into the Vite bundle.
-// The date branch enforces Gregorian month lengths and leap-year rules; the
-// time branch accepts numeric offsets. Protocol v2 deliberately rejects `:60`
-// because JavaScript Date cannot safely enforce or compare leap seconds.
-const fullDate = '(?:(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8])))';
-const fullTime = 'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])';
-ajv.addFormat('date', new RegExp(`^${fullDate}$`, 'u'));
-ajv.addFormat('date-time', new RegExp(`^${fullDate}${fullTime}$`, 'u'));
 
 for (const { source } of schemaSources) {
     const schema = JSON.parse(source.toString('utf8'));

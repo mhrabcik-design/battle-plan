@@ -54,7 +54,7 @@
       "type": "object", "additionalProperties": false, "required": ["command_id", "state", "error_code", "retry_at"],
       "properties": {
         "command_id": { "$ref": "#/$defs/commandId" }, "state": { "const": "retry_scheduled" },
-        "error_code": { "const": "transport_retryable" }, "retry_at": { "type": "string", "format": "date-time" }
+        "error_code": { "const": "transport_retryable" }, "retry_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" }
       }
     },
     "applied": {

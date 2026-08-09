@@ -32,10 +32,10 @@ Confirm or reject each item with an exact file, JSON path or field, observed beh
 4. Receipt, event, snapshot, quarantine, tombstone, inactive-consumer, and revoked-key retention/GC rules are implementable without unstated assumptions.
 5. `result.schema.json` exhaustively constrains every lifecycle/error/effect combination. `crypto_unsupported`, contract-artifact mismatch and Drive bootstrap failures disable the control plane and never appear in a command result.
 6. Every Settings command is absent from the v2.0 action registry and fails before receipt creation.
-7. `ARTIFACT_MANIFEST.json` recomputes from sorted raw schema bytes without circular fixture input, and hello/capability/drive-receipt advertise its exact tuple.
+7. `ARTIFACT_MANIFEST.json` recomputes from sorted raw schema bytes without circular fixture input, includes `schemas/temporal-profile.schema.json`, and hello/capability/drive-receipt advertise its new exact tuple. Schemas contain no implementation-defined `format` callbacks. The superseded `1b927765…20a83` tuple must mismatch the current `fa049652…d7d7` tuple.
 8. The ninth signed `drive-receipt` family losslessly records both OAuth probe directions and all required IDs/outcomes/verdicts. A capability `passed` reference is accepted only when the receipt message ID, content digest, completion time, workspace and contract artifact all match.
 9. A capability cannot advertise execution enabled unless pairing, Ed25519, transport, and the signed Drive interoperability receipt are all ready.
-10. RFC 3339-profile timestamps accept numeric offsets, reject impossible Gregorian dates and `:60` leap-second values, preserve the original signed string, and fail closed if either expiry operand is non-finite.
+10. RFC 3339-profile timestamps accept numeric offsets, reject impossible Gregorian dates and `:60` leap-second values, preserve the original signed string, and fail closed if either expiry operand is non-finite. Every temporal field obtains this behavior through a manifest-covered `$ref`, not generator-local code.
 11. Capability-to-receipt link verification cryptographically verifies both messages with their respective trusted pairing records before comparing authenticated link fields; fixture signatures such as `AA` can never pass this helper.
 12. Current/superseded Drive receipts, both linked probe hello files, and inactive-consumer records have explicit clock start points, minimum durations and fail-closed GC conditions.
 

@@ -25,8 +25,8 @@
         "id": { "$ref": "#/$defs/identity" }
       }
     },
-    "created_at": { "type": "string", "format": "date-time" },
-    "expires_at": { "type": "string", "format": "date-time" },
+    "created_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" },
+    "expires_at": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" },
     "correlation_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
     "causation_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
     "signing_key_id": { "$ref": "#/$defs/keyId" },
@@ -34,7 +34,7 @@
     "payload": { "type": "object" }
   },
   "$defs": {
-    "uuid": { "type": "string", "format": "uuid" },
+    "uuid": { "type": "string", "pattern": "^(?:[Uu][Rr][Nn]:[Uu][Uu][Ii][Dd]:)?[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$" },
     "identity": { "type": "string", "pattern": "^[a-z][a-z0-9._:-]{2,127}$" },
     "keyId": { "type": "string", "pattern": "^ed25519:[a-z0-9][a-z0-9._-]{2,63}$" },
     "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },

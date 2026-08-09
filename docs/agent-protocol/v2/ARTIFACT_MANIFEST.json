@@ -5,13 +5,13 @@
   "schemas": [
     {
       "path": "schemas/capability.schema.json",
-      "bytes": 4951,
-      "sha256": "sha256:5af34177484b5fecbcbfe59551d05f0ea11393c7e7a5257a219c39b55f3f8d64"
+      "bytes": 4996,
+      "sha256": "sha256:6c952e1575400414f1bb7f74a6c027f4f0b3ae8fd8ded73f92c1cedbd8bf9b34"
     },
     {
       "path": "schemas/command.schema.json",
-      "bytes": 7147,
-      "sha256": "sha256:43aa00c59a6ec1153986dea4fefe24a1aef0104e493886364b3dabfd73c166d5"
+      "bytes": 7178,
+      "sha256": "sha256:dffe88d842da1e9f6cf20d10e85c9179ad0bb6bcf400efc9d26b8248b5a0115a"
     },
     {
       "path": "schemas/contract-artifact.schema.json",
@@ -20,18 +20,18 @@
     },
     {
       "path": "schemas/drive-receipt.schema.json",
-      "bytes": 4697,
-      "sha256": "sha256:9f1bed84faa6aa389e6d1f6b836cb795075b8a82f684fc257f37686d5e00412e"
+      "bytes": 4712,
+      "sha256": "sha256:82842cb091664ba96643393ace58a5040d347ad6a2e78e75940f6ea77e80eaf2"
     },
     {
       "path": "schemas/envelope.schema.json",
-      "bytes": 2044,
-      "sha256": "sha256:0d1c21d8d0dc22fe1b5554625f912db85c7574451ba024c3ffffd7664b9ede93"
+      "bytes": 2160,
+      "sha256": "sha256:cdad87ca4d4091e12a49838ea7cbf8dbb43ccb5b9791a65ac2d11b4512687722"
     },
     {
       "path": "schemas/event-batch.schema.json",
-      "bytes": 2733,
-      "sha256": "sha256:0d3000462f5a8c8601b2827e6dfd76a03f5132034aec614b42a5bbc2b4cd22eb"
+      "bytes": 2748,
+      "sha256": "sha256:1f8c0f368913618342e6a9225aac799073eadb807602556fbfb279bb2cc7f04b"
     },
     {
       "path": "schemas/hello.schema.json",
@@ -50,8 +50,8 @@
     },
     {
       "path": "schemas/result.schema.json",
-      "bytes": 6328,
-      "sha256": "sha256:3f5925a43315186e40c1fe38de6a95ae869f7b799cf0b93c0537f2c5e3cfcaf2"
+      "bytes": 6343,
+      "sha256": "sha256:3b87d89f6dea020b0b5e23a01260679157210c2ca4be95479e842e2268cd354c"
     },
     {
       "path": "schemas/revision.schema.json",
@@ -65,9 +65,14 @@
     },
     {
       "path": "schemas/snapshot.schema.json",
-      "bytes": 3679,
-      "sha256": "sha256:e45f95ce12dd4099d3b667707e784acb6ffd6d3ea776456393e0c99e103428b9"
+      "bytes": 3694,
+      "sha256": "sha256:c1c83177b8a679f4845f157a53175eee8229b0784c00bbee726485b220a64b37"
+    },
+    {
+      "path": "schemas/temporal-profile.schema.json",
+      "bytes": 1049,
+      "sha256": "sha256:8b8bb3bbd1943fa74ba824d0ca63c7f8218117faeb83bf8ff5923fc37ff2fbe5"
     }
   ],
-  "artifact_sha256": "sha256:1b927765d2a36d9bcd7fbf5048ea08b103f9202fc979718e1425413134f20a83"
+  "artifact_sha256": "sha256:fa0496524c56796ff8eec77f5ccd013b4b6d404836d673b1cb8dcc70ae96d7d7"
 }

@@ -18,7 +18,7 @@
         "contract_artifact": {
           "id": "battleplan-hermes-protocol",
           "version": "2.0.0",
-          "sha256": "sha256:1b927765d2a36d9bcd7fbf5048ea08b103f9202fc979718e1425413134f20a83"
+          "sha256": "sha256:fa0496524c56796ff8eec77f5ccd013b4b6d404836d673b1cb8dcc70ae96d7d7"
         },
         "role": "hermes",
         "purpose": "pairing",

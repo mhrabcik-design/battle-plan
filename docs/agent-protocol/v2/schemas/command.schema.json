@@ -54,14 +54,14 @@
       "properties": {
         "title": { "type": "string", "minLength": 1, "maxLength": 300 },
         "description": { "type": "string", "maxLength": 20000 },
-        "deadline": { "type": "string", "format": "date-time" }
+        "deadline": { "$ref": "temporal-profile.schema.json#/$defs/dateTime" }
       }
     },
     "worklogInput": {
       "type": "object", "additionalProperties": false, "minProperties": 1,
       "properties": {
         "project_public_id": { "$ref": "#/$defs/publicId" },
-        "date": { "type": "string", "format": "date" },
+        "date": { "$ref": "temporal-profile.schema.json#/$defs/date" },
         "hours": { "type": "number", "exclusiveMinimum": 0, "maximum": 10000 },
         "people": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "description": { "type": "string", "maxLength": 20000 }
