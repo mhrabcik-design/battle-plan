@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/result.schema.json",
+  "title": "Signed command result",
+  "type": "object", "additionalProperties": false, "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        { "type": "object", "properties": {
+          "message_type": { "const": "result" },
+          "target": { "type": "object", "properties": { "kind": { "const": "receiver" } } },
+          "payload": {
+            "type": "object", "additionalProperties": false, "required": ["command_id", "state"],
+            "properties": {
+              "command_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+              "state": { "$ref": "#/$defs/state" },
+              "error_code": { "$ref": "#/$defs/errorCode" },
+              "retry_at": { "type": "string", "format": "date-time" },
+              "entity_public_id": { "$ref": "envelope.schema.json#/$defs/publicId" },
+              "revision": { "$ref": "revision.schema.json" },
+              "effects": {
+                "type": "array", "maxItems": 64,
+                "items": {
+                  "type": "object", "additionalProperties": false, "required": ["effect_id", "kind", "state"],
+                  "properties": {
+                    "effect_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+                    "kind": { "enum": ["calendar", "google_tasks", "drive_publication"] },
+                    "state": { "enum": ["pending", "succeeded", "failed"] },
+                    "error_code": { "$ref": "#/$defs/errorCode" }
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": { "required": ["state"], "properties": { "state": { "const": "retry_scheduled" } } },
+                "then": { "required": ["retry_at", "error_code"] },
+                "else": { "not": { "required": ["retry_at"] } }
+              },
+              {
+                "if": { "required": ["state"], "properties": { "state": { "enum": ["rejected", "expired", "blocked", "stale", "quarantined"] } } },
+                "then": { "required": ["error_code"] }
+              },
+              {
+                "if": { "required": ["state"], "properties": { "state": { "enum": ["received", "awaiting_approval", "applied"] } } },
+                "then": { "not": { "required": ["error_code"] } }
+              },
+              {
+                "if": { "required": ["state"], "properties": { "state": { "const": "applied" } } },
+                "else": { "not": { "required": ["effects"] } }
+              }
+            ]
+          }
+        } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  },
+  "$defs": {
+    "state": { "enum": ["received", "awaiting_approval", "retry_scheduled", "applied", "rejected", "expired", "blocked", "stale", "quarantined"] },
+    "errorCode": { "enum": [
+      "invalid_json", "duplicate_json_key", "non_canonical_json", "payload_too_large", "schema_invalid",
+      "unsupported_major", "unknown_message_type", "unknown_action", "signature_missing", "signature_invalid",
+      "signature_metadata_mismatch", "crypto_unsupported", "key_unknown", "key_revoked", "workspace_mismatch",
+      "producer_mismatch", "target_mismatch", "message_expired", "policy_blocked", "capability_blocked",
+      "revision_stale", "revision_conflict", "idempotency_conflict", "idempotency_horizon_expired",
+      "drive_authorization_failed", "drive_workspace_ambiguous", "drive_parent_mismatch", "transport_retryable"
+    ] }
+  }
+}

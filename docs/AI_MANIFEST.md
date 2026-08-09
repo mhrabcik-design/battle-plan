@@ -64,6 +64,14 @@ Agent zapisuje příkazy do Google Drive souboru `agent-pending-writes.json`. Ko
 - Aplikace načítá jen dosud neaplikované zápisy, zrcadlí jejich stav do `agentInbox` a provede doménovou změnu. Úspěšné i deterministicky neplatné zápisy dostanou `applied_at` zpět do Drive souboru; přechodná I/O selhání zůstávají k opakování.
 - Změna seznamu akcí nebo payloadu vyžaduje současnou úpravu typů, mapy `ENTITY_BY_ACTION`, testů Agent Bridge a tohoto dokumentu.
 
+## Agent Protocol v2 — veřejný Hermes kontrakt
+
+Normativní, zdrojově nezávislý kontrakt je publikován v `docs/agent-protocol/v2/`. JSON Schema 2020-12, registry, fixture a conformance runner jsou autoritativnější než implementační TypeScript. V2 používá oddělené Ed25519 identity BattlePlanu a Hermesu, RFC 8785 canonical JSON a explicitní message families pro hello, capability/health, command, result, event batch, snapshot, proposal a response.
+
+- Settings příkazy nejsou ve v2.0 podporované a schema je odmítá jako `unknown_action`.
+- V2 dokumentační a validační artefakty jsou contract-ready, ale produkční vykonávání zůstává vypnuté, dokud neprojde podepsaný obousměrný Drive probe s reálnými OAuth klienty.
+- Přidání typu, akce, lifecycle stavu nebo error kódu vyžaduje současnou změnu schématu, TypeScript registru, validních i nevalidních fixture, dokumentace, changelogu a regenerovaných standalone validátorů.
+
 ## Datové mapování
 
 | Typ | Časové pole | Text | Audit vstupu |

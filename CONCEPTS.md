@@ -41,6 +41,26 @@ The browser-side Drive persistence layer for small JSON files in the shared Batt
 
 The shared store owns folder lookup, cached folder identity, file lookup, JSON download, and multipart upload mechanics. Domain services still own payload shape, merge rules, diagnostics, and user-facing error meaning.
 
+### Agent Collaboration Protocol
+A versioned, paired message contract through which an external agent can propose work, request allowlisted domain mutations, receive explicit outcomes, and consume safe BattlePlan change events.
+
+Protocol messages have stable identities, runtime-validated schemas, verified producers, explicit target receivers, and separate command, result, proposal, response, event, and snapshot semantics. Google Drive is a transport for these messages, not the source of domain truth.
+
+### Command Receipt
+The durable local record that proves BattlePlan has seen a protocol command and owns its lifecycle from receipt through approval, application, rejection, expiry, or recovery.
+
+A receipt uses the command identity and payload digest as its idempotency boundary. Replaying the same command returns the recorded lifecycle, while reusing the identity for different content fails closed.
+
+### Protocol Outbox
+The durable queue written in the same local transaction as a domain mutation and its change events.
+
+Drive publication and other external effects run after that transaction and may retry independently. This prevents a network failure from causing BattlePlan to repeat a committed domain mutation.
+
+### Change Event Stream
+An ordered, per-producer sequence of safe domain-change projections that lets Hermes or another paired consumer update its context without reading BattlePlan's private local database.
+
+Consumers advance their cursor only after durable ingestion. A sequence gap or lost cursor requires a protocol snapshot before incremental consumption resumes.
+
 ### Shared Audio AI Pipeline
 The browser-side voice-processing layer shared by task voice and WorkLog voice flows for recording, audio normalization, Gemini request preparation, retry/error handling, and missing-key messaging.
 

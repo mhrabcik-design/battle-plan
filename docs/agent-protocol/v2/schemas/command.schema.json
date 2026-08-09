@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/command.schema.json",
+  "title": "Signed command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        {
+          "type": "object",
+          "required": ["expires_at"],
+          "properties": {
+            "message_type": { "const": "command" },
+            "target": { "type": "object", "properties": { "kind": { "const": "receiver" } } },
+            "payload": {
+              "oneOf": [
+                { "$ref": "#/$defs/createTask" },
+                { "$ref": "#/$defs/updateTask" },
+                { "$ref": "#/$defs/completeTask" },
+                { "$ref": "#/$defs/archiveTask" },
+                { "$ref": "#/$defs/createWorklog" },
+                { "$ref": "#/$defs/updateWorklog" },
+                { "$ref": "#/$defs/deleteWorklog" },
+                { "$ref": "#/$defs/createProject" },
+                { "$ref": "#/$defs/updateProject" },
+                { "$ref": "#/$defs/archiveProject" },
+                { "$ref": "#/$defs/mergeProject" }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  },
+  "$defs": {
+    "action": {
+      "enum": [
+        "create_task", "update_task", "complete_task", "archive_task",
+        "create_worklog", "update_worklog", "delete_worklog",
+        "create_project", "update_project", "archive_project", "merge_project"
+      ]
+    },
+    "publicId": { "$ref": "envelope.schema.json#/$defs/publicId" },
+    "revisionId": { "$ref": "envelope.schema.json#/$defs/sha256" },
+    "approvalDigest": { "$ref": "envelope.schema.json#/$defs/sha256" },
+    "taskInput": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": "string", "maxLength": 20000 },
+        "deadline": { "type": "string", "format": "date-time" }
+      }
+    },
+    "worklogInput": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "project_public_id": { "$ref": "#/$defs/publicId" },
+        "date": { "type": "string", "format": "date" },
+        "hours": { "type": "number", "exclusiveMinimum": 0, "maximum": 10000 },
+        "people": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "description": { "type": "string", "maxLength": 20000 }
+      }
+    },
+    "projectInput": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "color": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,31}$" }
+      }
+    },
+    "createTask": {
+      "type": "object", "additionalProperties": false, "required": ["action", "input"],
+      "properties": {
+        "action": { "const": "create_task" },
+        "input": { "type": "object", "$ref": "#/$defs/taskInput", "required": ["title"] }
+      }
+    },
+    "updateTask": {
+      "type": "object", "additionalProperties": false, "required": ["action", "public_id", "expected_revision", "input"],
+      "properties": {
+        "action": { "const": "update_task" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }, "input": { "$ref": "#/$defs/taskInput" }
+      }
+    },
+    "completeTask": {
+      "type": "object", "additionalProperties": false, "required": ["action", "public_id", "expected_revision"],
+      "properties": {
+        "action": { "const": "complete_task" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }
+      }
+    },
+    "archiveTask": {
+      "type": "object", "additionalProperties": false, "required": ["action", "public_id", "expected_revision", "approval_digest"],
+      "properties": {
+        "action": { "const": "archive_task" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }, "approval_digest": { "$ref": "#/$defs/approvalDigest" }
+      }
+    },
+    "createWorklog": {
+      "type": "object", "additionalProperties": false, "required": ["action", "input"],
+      "properties": {
+        "action": { "const": "create_worklog" },
+        "input": { "type": "object", "$ref": "#/$defs/worklogInput", "required": ["project_public_id", "date", "hours", "people"] }
+      }
+    },
+    "updateWorklog": {
+      "type": "object", "additionalProperties": false, "required": ["action", "public_id", "expected_revision", "input"],
+      "properties": {
+        "action": { "const": "update_worklog" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }, "input": { "$ref": "#/$defs/worklogInput" }
+      }
+    },
+    "deleteWorklog": {
+      "type": "object", "additionalProperties": false, "required": ["action", "public_id", "expected_revision", "approval_digest"],
+      "properties": {
+        "action": { "const": "delete_worklog" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }, "approval_digest": { "$ref": "#/$defs/approvalDigest" }
+      }
+    },
+    "createProject": {
+      "type": "object", "additionalProperties": false, "required": ["action", "input"],
+      "properties": {
+        "action": { "const": "create_project" },
+        "input": { "type": "object", "$ref": "#/$defs/projectInput", "required": ["name"] }
+      }
+    },
+    "updateProject": {
+      "type": "object", "additionalProperties": false, "required": ["action", "public_id", "expected_revision", "input"],
+      "properties": {
+        "action": { "const": "update_project" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }, "input": { "$ref": "#/$defs/projectInput" }
+      }
+    },
+    "archiveProject": {
+      "type": "object", "additionalProperties": false, "required": ["action", "public_id", "expected_revision", "approval_digest"],
+      "properties": {
+        "action": { "const": "archive_project" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }, "approval_digest": { "$ref": "#/$defs/approvalDigest" }
+      }
+    },
+    "mergeProject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action", "public_id", "expected_revision", "source_public_id", "source_expected_revision", "approval_digest"],
+      "properties": {
+        "action": { "const": "merge_project" }, "public_id": { "$ref": "#/$defs/publicId" },
+        "expected_revision": { "$ref": "#/$defs/revisionId" }, "source_public_id": { "$ref": "#/$defs/publicId" },
+        "source_expected_revision": { "$ref": "#/$defs/revisionId" }, "approval_digest": { "$ref": "#/$defs/approvalDigest" }
+      }
+    }
+  }
+}

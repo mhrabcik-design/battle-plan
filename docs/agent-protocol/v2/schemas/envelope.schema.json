@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/envelope.schema.json",
+  "title": "BattlePlan-Hermes v2 signed envelope",
+  "type": "object",
+  "required": [
+    "protocol_version", "message_type", "message_id", "workspace_id", "producer_id",
+    "target", "created_at", "correlation_id", "causation_id", "signing_key_id",
+    "pairing_epoch", "payload"
+  ],
+  "properties": {
+    "protocol_version": { "const": "2.0.0" },
+    "message_type": {
+      "enum": ["hello", "capability", "command", "result", "event-batch", "snapshot", "proposal", "response"]
+    },
+    "message_id": { "$ref": "#/$defs/uuid" },
+    "workspace_id": { "$ref": "#/$defs/uuid" },
+    "producer_id": { "$ref": "#/$defs/identity" },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["receiver", "stream"] },
+        "id": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "correlation_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+    "causation_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+    "signing_key_id": { "$ref": "#/$defs/keyId" },
+    "pairing_epoch": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+    "payload": { "type": "object" }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "identity": { "type": "string", "pattern": "^[a-z][a-z0-9._:-]{2,127}$" },
+    "keyId": { "type": "string", "pattern": "^ed25519:[a-z0-9][a-z0-9._-]{2,63}$" },
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "decimalCounter": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,38})$" },
+    "publicId": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{2,127}$" },
+    "base64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" }
+  }
+}

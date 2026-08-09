@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/hello.schema.json",
+  "title": "Signed pairing or Drive interoperability hello",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        {
+          "type": "object",
+          "properties": {
+            "message_type": { "const": "hello" },
+            "target": {
+              "type": "object",
+              "required": ["kind", "id"],
+              "properties": { "kind": { "const": "receiver" } }
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["role", "purpose", "protocol_range", "nonce", "public_key"],
+              "properties": {
+                "role": { "enum": ["battleplan", "hermes"] },
+                "purpose": { "enum": ["pairing", "drive_interop_probe"] },
+                "protocol_range": { "$ref": "#/$defs/protocolRange" },
+                "nonce": { "$ref": "envelope.schema.json#/$defs/uuid" },
+                "public_key": { "$ref": "#/$defs/publicKey" },
+                "probe": { "$ref": "#/$defs/probe" }
+              },
+              "allOf": [
+                {
+                  "if": { "properties": { "purpose": { "const": "drive_interop_probe" } } },
+                  "then": { "required": ["probe"] },
+                  "else": { "not": { "required": ["probe"] } }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  },
+  "$defs": {
+    "protocolRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "maximum": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      }
+    },
+    "publicKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "pairing_epoch", "raw_public_key", "fingerprint"],
+      "properties": {
+        "algorithm": { "const": "Ed25519" },
+        "key_id": { "$ref": "envelope.schema.json#/$defs/keyId" },
+        "pairing_epoch": { "type": "integer", "minimum": 1 },
+        "raw_public_key": { "$ref": "envelope.schema.json#/$defs/base64url" },
+        "fingerprint": { "$ref": "envelope.schema.json#/$defs/sha256" }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe_id", "direction", "folder_id", "expected_parent_id", "creator_oauth_client"],
+      "properties": {
+        "probe_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+        "direction": { "enum": ["battleplan_to_hermes", "hermes_to_battleplan"] },
+        "folder_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "expected_parent_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "creator_oauth_client": { "enum": ["battleplan", "hermes"] }
+      }
+    }
+  }
+}

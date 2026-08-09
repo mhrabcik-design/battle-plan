@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/snapshot.schema.json",
+  "title": "Signed stream snapshot",
+  "type": "object", "additionalProperties": false, "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        { "type": "object", "properties": {
+          "message_type": { "const": "snapshot" },
+          "target": { "type": "object", "properties": { "kind": { "const": "stream" } } },
+          "payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["stream_id", "high_water_mark", "generated_at", "entities"],
+            "properties": {
+              "stream_id": { "$ref": "envelope.schema.json#/$defs/identity" },
+              "high_water_mark": { "$ref": "envelope.schema.json#/$defs/decimalCounter" },
+              "generated_at": { "type": "string", "format": "date-time" },
+              "entities": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/entity" } }
+            }
+          }
+        } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  },
+  "$defs": {
+    "entity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["entity_kind", "entity_public_id", "revision", "projection"],
+      "properties": {
+        "entity_kind": { "enum": ["task", "worklog", "project"] },
+        "entity_public_id": { "$ref": "envelope.schema.json#/$defs/publicId" },
+        "revision": { "$ref": "revision.schema.json" },
+        "projection": { "type": "object", "maxProperties": 64 },
+        "conflict_heads": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "envelope.schema.json#/$defs/sha256" } },
+        "tombstone": { "type": "boolean" }
+      }
+    }
+  }
+}

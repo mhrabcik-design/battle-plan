@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/proposal.schema.json",
+  "title": "Signed human proposal",
+  "type": "object", "additionalProperties": false, "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        { "type": "object", "properties": {
+          "message_type": { "const": "proposal" },
+          "target": { "type": "object", "properties": { "kind": { "const": "receiver" } } },
+          "payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["proposal_id", "title", "body", "requested_action"],
+            "properties": {
+              "proposal_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+              "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+              "body": { "type": "string", "minLength": 1, "maxLength": 100000 },
+              "requested_action": { "enum": ["accept", "reject", "defer", "convert_to_task"] }
+            }
+          }
+        } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  }
+}

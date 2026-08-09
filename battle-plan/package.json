@@ -9,11 +9,16 @@
     "lint": "eslint .",
     "test": "npm run test:worklogs",
     "test:worklogs": "node --import fake-indexeddb/auto --experimental-strip-types --test \"src/**/*.test.ts\"",
+    "agent-protocol:generate": "node scripts/generate-agent-protocol-validators.mjs",
+    "agent-protocol:check": "node scripts/generate-agent-protocol-validators.mjs --check",
+    "test:agent-protocol": "npm run agent-protocol:check && node --experimental-strip-types --test src/services/agentProtocol/validation.test.ts && node ../docs/agent-protocol/v2/conformance.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
     "@types/google.accounts": "^0.0.18",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "dexie": "^4.2.1",
     "dexie-react-hooks": "^4.2.0",
     "framer-motion": "^12.27.3",

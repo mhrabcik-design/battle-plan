@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/revision.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision_id", "base_revision", "mutation_id"],
+  "properties": {
+    "revision_id": { "$ref": "envelope.schema.json#/$defs/sha256" },
+    "base_revision": {
+      "oneOf": [{ "$ref": "envelope.schema.json#/$defs/sha256" }, { "type": "null" }]
+    },
+    "mutation_id": { "$ref": "envelope.schema.json#/$defs/uuid" }
+  }
+}

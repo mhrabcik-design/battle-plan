@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/response.schema.json",
+  "title": "Signed proposal response",
+  "type": "object", "additionalProperties": false, "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        { "type": "object", "properties": {
+          "message_type": { "const": "response" },
+          "target": { "type": "object", "properties": { "kind": { "const": "receiver" } } },
+          "payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["proposal_id", "decision"],
+            "properties": {
+              "proposal_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+              "decision": { "enum": ["accepted", "rejected", "deferred", "converted_to_task"] },
+              "comment": { "type": "string", "maxLength": 20000 },
+              "task_public_id": { "$ref": "envelope.schema.json#/$defs/publicId" }
+            },
+            "allOf": [
+              { "if": { "properties": { "decision": { "const": "converted_to_task" } } }, "then": { "required": ["task_public_id"] } }
+            ]
+          }
+        } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  }
+}

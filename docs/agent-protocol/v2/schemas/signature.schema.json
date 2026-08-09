@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/signature.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["alg", "key_id", "pairing_epoch", "value"],
+  "properties": {
+    "alg": { "const": "Ed25519" },
+    "key_id": { "$ref": "envelope.schema.json#/$defs/keyId" },
+    "pairing_epoch": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+    "value": { "$ref": "envelope.schema.json#/$defs/base64url" }
+  }
+}

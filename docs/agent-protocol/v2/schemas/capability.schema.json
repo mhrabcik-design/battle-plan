@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://battleplan.app/agent-protocol/v2/schemas/capability.schema.json",
+  "title": "Signed receiver capability and health",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "envelope.schema.json" },
+        {
+          "type": "object",
+          "properties": {
+            "message_type": { "const": "capability" },
+            "target": { "type": "object", "properties": { "kind": { "const": "stream" } } },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["receiver_id", "status", "protocol_range", "actions", "policy_revision", "health", "drive_interop_probe"],
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "health": {
+                        "type": "object",
+                        "properties": { "execution_enabled": { "const": true } },
+                        "required": ["execution_enabled"]
+                      }
+                    },
+                    "required": ["health"]
+                  },
+                  "then": {
+                    "properties": {
+                      "status": { "const": "ready" },
+                      "health": {
+                        "type": "object",
+                        "properties": {
+                          "paired": { "const": true },
+                          "transport": { "const": "ready" },
+                          "ed25519_supported": { "const": true }
+                        }
+                      },
+                      "drive_interop_probe": {
+                        "type": "object",
+                        "properties": { "status": { "const": "passed" } },
+                        "required": ["receipt_id", "completed_at"]
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "drive_interop_probe": {
+                        "type": "object",
+                        "properties": { "status": { "const": "passed" } },
+                        "required": ["status"]
+                      }
+                    },
+                    "required": ["drive_interop_probe"]
+                  },
+                  "then": {
+                    "properties": {
+                      "drive_interop_probe": { "type": "object", "required": ["receipt_id", "completed_at"] }
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "receiver_id": { "$ref": "envelope.schema.json#/$defs/identity" },
+                "status": { "enum": ["ready", "degraded", "disabled"] },
+                "protocol_range": {
+                  "type": "object", "additionalProperties": false, "required": ["minimum", "maximum"],
+                  "properties": {
+                    "minimum": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+                    "maximum": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+                  }
+                },
+                "actions": {
+                  "type": "array", "uniqueItems": true, "maxItems": 32,
+                  "items": { "$ref": "command.schema.json#/$defs/action" }
+                },
+                "policy_revision": { "$ref": "envelope.schema.json#/$defs/sha256" },
+                "health": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["paired", "transport", "execution_enabled", "ed25519_supported", "checked_at"],
+                  "properties": {
+                    "paired": { "type": "boolean" },
+                    "transport": { "enum": ["ready", "unavailable", "ambiguous"] },
+                    "execution_enabled": { "type": "boolean" },
+                    "ed25519_supported": { "type": "boolean" },
+                    "checked_at": { "type": "string", "format": "date-time" }
+                  }
+                },
+                "drive_interop_probe": {
+                  "type": "object", "additionalProperties": false, "required": ["status"],
+                  "properties": {
+                    "status": { "enum": ["required", "passed", "failed"] },
+                    "receipt_id": { "$ref": "envelope.schema.json#/$defs/uuid" },
+                    "completed_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "signature": { "$ref": "signature.schema.json" }
+  }
+}

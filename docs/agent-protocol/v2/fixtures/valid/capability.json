@@ -1,0 +1,31 @@
+{
+  "signed": {
+    "protocol_version": "2.0.0",
+    "message_type": "capability",
+    "message_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000002",
+    "workspace_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000010",
+    "producer_id": "battleplan.device-a",
+    "target": { "kind": "stream", "id": "workspace.capabilities" },
+    "created_at": "2026-08-09T10:00:00.000Z",
+    "correlation_id": null,
+    "causation_id": null,
+    "signing_key_id": "ed25519:battleplan-1",
+    "pairing_epoch": 1,
+    "payload": {
+      "receiver_id": "battleplan.device-a",
+      "status": "disabled",
+      "protocol_range": { "minimum": "2.0.0", "maximum": "2.0.0" },
+      "actions": ["create_task", "update_task", "complete_task"],
+      "policy_revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "health": {
+        "paired": true,
+        "transport": "ready",
+        "execution_enabled": false,
+        "ed25519_supported": true,
+        "checked_at": "2026-08-09T10:00:00.000Z"
+      },
+      "drive_interop_probe": { "status": "required" }
+    }
+  },
+  "signature": { "alg": "Ed25519", "key_id": "ed25519:battleplan-1", "pairing_epoch": 1, "value": "AA" }
+}
