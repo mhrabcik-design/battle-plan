@@ -85,9 +85,9 @@ test('RFC 3339 timestamps accept numeric offsets and reject impossible calendar 
     withOffset.signed.created_at = '2026-08-09T12:00:00+02:00';
     assert.equal(validateProtocolWireMessage(withOffset).ok, true);
 
-    const leapCentury = structuredClone(fixture);
-    leapCentury.signed.created_at = '2000-02-29T23:59:60-00:00';
-    assert.equal(validateProtocolWireMessage(leapCentury).ok, true);
+    const unsupportedLeapSecond = structuredClone(fixture);
+    unsupportedLeapSecond.signed.created_at = '2000-02-29T23:59:60-00:00';
+    assert.equal(validateProtocolWireMessage(unsupportedLeapSecond).ok, false);
 
     const impossibleDate = structuredClone(fixture);
     impossibleDate.signed.created_at = '2026-02-31T10:00:00Z';
@@ -373,6 +373,23 @@ test('authenticated expired commands are terminal before any mutation handler', 
     });
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.error.code, 'message_expired');
+});
+
+test('unsupported leap-second timestamps cannot bypass command expiry', async (t) => {
+    const support = await probeEd25519Support();
+    if (support.supported === false) { t.skip(support.reason); return; }
+    const fixture = await readJson('fixtures/valid/command.json') as ProtocolWireMessage;
+    const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const message = structuredClone(fixture);
+    message.signed.expires_at = '2026-08-09T10:15:60Z';
+    message.signature = await createDetachedSignature(message.signed, keys.privateKey);
+    const result = await verifyProtocolWireMessage(message, {
+        trustedPairing: await trustedRecord(message, keys),
+        trustedContractArtifact: await contractArtifact(),
+        now: new Date('2026-08-10T00:00:00.000Z'),
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, 'schema_invalid');
 });
 
 test('passed capability links only to the exact cryptographically verified drive receipt', async (t) => {

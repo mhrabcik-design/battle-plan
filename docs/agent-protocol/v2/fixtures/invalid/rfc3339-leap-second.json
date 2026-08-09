@@ -1,0 +1,22 @@
+{
+  "name": "v2 rejects unsupported RFC 3339 leap-second wire values",
+  "expected_error": "schema_invalid",
+  "message": {
+    "signed": {
+      "protocol_version": "2.0.0",
+      "message_type": "command",
+      "message_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000405",
+      "workspace_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000010",
+      "producer_id": "hermes.primary",
+      "target": { "kind": "receiver", "id": "battleplan.device-a" },
+      "created_at": "2026-08-09T10:00:00Z",
+      "expires_at": "2026-08-09T10:15:60Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "signing_key_id": "ed25519:hermes-1",
+      "pairing_epoch": 1,
+      "payload": { "action": "create_task", "input": { "title": "Must not outlive expiry" } }
+    },
+    "signature": { "alg": "Ed25519", "key_id": "ed25519:hermes-1", "pairing_epoch": 1, "value": "AA" }
+  }
+}

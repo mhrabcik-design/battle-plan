@@ -276,11 +276,17 @@ function semanticError(wire: ProtocolWireMessage): ProtocolValidationResult | un
                 return invalid('signature_metadata_mismatch', 'Hello public-key assertion must match signed key metadata');
             }
             break;
-        case 'command':
-            if (Date.parse(signed.expires_at!) <= Date.parse(signed.created_at)) {
+        case 'command': {
+            const createdAt = Date.parse(signed.created_at);
+            const expiresAt = Date.parse(signed.expires_at!);
+            if (!Number.isFinite(createdAt) || !Number.isFinite(expiresAt)) {
+                return invalid('schema_invalid', 'Command timestamps must be safely comparable RFC 3339 values');
+            }
+            if (expiresAt <= createdAt) {
                 return invalid('schema_invalid', 'Command expires_at must be later than created_at');
             }
             break;
+        }
         case 'result':
             if (signed.correlation_id !== signed.payload.command_id) {
                 return invalid('schema_invalid', 'Result correlation_id must equal payload.command_id');
@@ -589,8 +595,13 @@ export async function verifyProtocolWireMessage(
     ) {
         return invalid('contract_artifact_mismatch', 'Authenticated control message advertises a different normative contract artifact');
     }
-    if (signed.expires_at && new Date(signed.expires_at).getTime() <= (options.now ?? new Date()).getTime()) {
-        return invalid('message_expired', 'Authenticated message is expired');
+    if (signed.expires_at) {
+        const expiresAt = Date.parse(signed.expires_at);
+        const now = (options.now ?? new Date()).getTime();
+        if (!Number.isFinite(expiresAt) || !Number.isFinite(now)) {
+            return invalid('schema_invalid', 'Expiry and verifier clock must be safely comparable timestamps');
+        }
+        if (expiresAt <= now) return invalid('message_expired', 'Authenticated message is expired');
     }
     return validation;
 }

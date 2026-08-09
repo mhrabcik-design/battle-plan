@@ -10,7 +10,7 @@ The JSON Schemas in `schemas/`, `ARTIFACT_MANIFEST.json`, the registries in this
 {"signature":{"alg":"Ed25519","key_id":"ed25519:hermes-1","pairing_epoch":1,"value":"BASE64URL_SIGNATURE"},"signed":{"...":"authoritative message body"}}
 ```
 
-The serialized file is RFC 8785 JCS. The signed and digested bytes are exactly UTF-8(`BattlePlan-Hermes/v2\0` + JCS(`signed`)). Duplicate keys, `-0`, non-finite numbers, lone Unicode surrogates and integers outside JavaScript's safe range are invalid. Large counters are canonical decimal strings. Every `date-time` is RFC 3339 with required seconds and either uppercase `Z` or a numeric `±HH:MM` offset; every `date`/`date-time` must name a real proleptic-Gregorian calendar date, including the century leap-year rule. Offset timestamps are not rewritten before signature or digest verification.
+The serialized file is RFC 8785 JCS. The signed and digested bytes are exactly UTF-8(`BattlePlan-Hermes/v2\0` + JCS(`signed`)). Duplicate keys, `-0`, non-finite numbers, lone Unicode surrogates and integers outside JavaScript's safe range are invalid. Large counters are canonical decimal strings. Every `date-time` uses the RFC 3339 profile with required seconds `00`–`59` and either uppercase `Z` or a numeric `±HH:MM` offset; protocol v2 deliberately forbids leap-second wire value `:60` because JavaScript runtimes cannot safely compare it for expiry. Every `date`/`date-time` must name a real proleptic-Gregorian calendar date, including the century leap-year rule. Offset timestamps are not rewritten before signature or digest verification, and any non-finite parsed timestamp fails closed as `schema_invalid`.
 
 ## Envelope fields
 
