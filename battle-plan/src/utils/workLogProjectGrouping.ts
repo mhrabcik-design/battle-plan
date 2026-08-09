@@ -20,6 +20,11 @@ export interface WorkLogProjectIndex {
     byId: Map<number, Project>;
 }
 
+interface WorkLogProjectDisplay {
+    name: string;
+    color: ProjectColor;
+}
+
 export function createWorkLogProjectIndex(projects: Project[] = []): WorkLogProjectIndex {
     const catalogGroups = new Map<string, Project[]>();
     for (const project of projects) {
@@ -48,6 +53,44 @@ export function createWorkLogProjectIndex(projects: Project[] = []): WorkLogProj
     return { byName, byId };
 }
 
+function sameCanonicalProject(left: Project, right: Project): boolean {
+    if (left === right) return true;
+    return left.id != null && right.id != null && left.id === right.id;
+}
+
+interface WorkLogProjectResolution {
+    normalizedSnapshotName: string;
+    project?: Project;
+}
+
+function resolveWorkLogProject(
+    workLog: WorkLog,
+    projectIndex: WorkLogProjectIndex,
+): WorkLogProjectResolution {
+    const normalizedSnapshotName = normalizeProjectName(workLog.projectName);
+    const projectByName = projectIndex.byName.get(normalizedSnapshotName);
+    if (!projectByName) return { normalizedSnapshotName };
+
+    const projectById = projectIndex.byId.get(workLog.projectId);
+    if (projectById && sameCanonicalProject(projectById, projectByName)) {
+        return { normalizedSnapshotName, project: projectById };
+    }
+
+    // Project IDs are device-local. A mismatched or stale ID may therefore
+    // resolve only through the globally unambiguous stored snapshot identity.
+    return { normalizedSnapshotName, project: projectByName };
+}
+
+export function resolveWorkLogProjectDisplay(
+    workLog: WorkLog,
+    projectIndex: WorkLogProjectIndex,
+): WorkLogProjectDisplay {
+    const { project } = resolveWorkLogProject(workLog, projectIndex);
+    return project
+        ? { name: project.name.trim(), color: project.color }
+        : { name: workLog.projectName.trim(), color: 'slate' };
+}
+
 export function groupWorkLogsByProject(
     workLogs: WorkLog[],
     projectsOrIndex: Project[] | WorkLogProjectIndex = [],
@@ -58,17 +101,18 @@ export function groupWorkLogsByProject(
     const grouped = new Map<string, Omit<WorkLogProjectGroup, 'people'> & { peopleSet: Set<string> }>();
 
     for (const workLog of workLogs) {
-        const normalizedName = normalizeProjectName(workLog.projectName);
-        const project = projectIndex.byId.get(workLog.projectId) ?? projectIndex.byName.get(normalizedName);
+        const { normalizedSnapshotName, project } = resolveWorkLogProject(workLog, projectIndex);
+        const name = project?.name.trim() || workLog.projectName.trim();
+        const color = project?.color ?? 'slate';
         const key = project?.id != null
             ? `project-id:${project.id}`
-            : normalizedName || `project-id:${workLog.projectId}`;
+            : normalizedSnapshotName || `project-id:${workLog.projectId}`;
         let group = grouped.get(key);
         if (!group) {
             group = {
                 key,
-                name: project?.name.trim() || workLog.projectName.trim(),
-                color: project?.color ?? 'slate',
+                name,
+                color,
                 hours: 0,
                 count: 0,
                 peopleSet: new Set(),

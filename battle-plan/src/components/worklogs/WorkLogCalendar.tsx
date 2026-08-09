@@ -4,12 +4,13 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { type WorkLog, type Project } from '../../db';
 import { currentMonthKey, monthKeyToDate, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
 import { PROJECT_COLOR_DOT } from '../../utils/projectColors';
-import { createWorkLogProjectIndex, groupWorkLogsByProject } from '../../utils/workLogProjectGrouping';
+import { groupWorkLogsByProject, type WorkLogProjectIndex } from '../../utils/workLogProjectGrouping';
 import { WorkLogCard } from './WorkLogCard';
 
 interface WorkLogCalendarProps {
     logs: WorkLog[];
     projects: Project[];
+    projectIndex: WorkLogProjectIndex;
 }
 
 const isoDate = (year: number, month0: number, day: number): string => {
@@ -18,7 +19,7 @@ const isoDate = (year: number, month0: number, day: number): string => {
 
 const WEEKDAYS_CS = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
-export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
+export function WorkLogCalendar({ logs, projects, projectIndex }: WorkLogCalendarProps) {
     const [monthKey, setMonthKey] = useState(currentMonthKey(0));
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -31,7 +32,6 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
         }
         return map;
     }, [logs]);
-    const projectIndex = useMemo(() => createWorkLogProjectIndex(projects), [projects]);
     const projectGroupsByDate = useMemo(
         () => new Map(Array.from(logsByDate, ([date, dayLogs]) => [
             date,
@@ -242,7 +242,7 @@ export function WorkLogCalendar({ logs, projects }: WorkLogCalendarProps) {
                                     </div>
                                 ) : (
                                     selectedLogs.map((log) => (
-                                        <WorkLogCard key={log.id} log={log} />
+                                        <WorkLogCard key={log.id} log={log} projectIndex={projectIndex} />
                                     ))
                                 )}
                             </div>

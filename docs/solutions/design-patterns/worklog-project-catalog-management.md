@@ -43,10 +43,10 @@ Automatic normalization can safely collapse case and spacing variants, but it ca
 The durable representation is deliberately small:
 
 - `Project.aliases?: string[]` stores absorbed and previous canonical names on the survivor. These aliases are synchronized identity tombstones: they reserve the old names and prevent a stale Drive row, create, or rename from recreating a second identity.
-- `mergeProjects` preserves the selected survivor's ID, name, color, active state, `createdAt`, and attribution. In one guarded Dexie transaction it advances the survivor `updatedAt`, relinks source WorkLogs by `projectId`, and removes the source. It never rewrites `WorkLog.projectName`, which remains the historical snapshot shown on an individual record.
+- `mergeProjects` preserves the selected survivor's ID, name, color, active state, `createdAt`, and attribution. In one guarded Dexie transaction it advances the survivor `updatedAt`, relinks source WorkLogs by `projectId`, and removes the source. It never rewrites `WorkLog.projectName`; that field remains the historical persistence and sync snapshot, while overview cards resolve the survivor's current identity.
 - `reconcileProjectIdentities` treats an unambiguous alias owner as authoritative over a stale canonical source, unions aliases deterministically, and relinks device-local IDs. Cycles or competing alias owners throw before the transaction commits; reconciliation must fail closed instead of picking the first match.
 - `mergeLocalToCloud` pulls before it pushes the complete `work_logs_data.json` payload. The existing `App.tsx` live hash observes WorkLog/project counts and `updatedAt`; deleting the source and advancing the survivor therefore schedules the ordinary WorkLogs backup without a second dirty-state mechanism.
-- Reports resolve `projectId`, canonical name, and aliases to the survivor before grouping. Aggregate name and color come from the survivor, while each WorkLog keeps its original snapshot text.
+- Reports and individual overview records resolve `projectId`, canonical name, and aliases to the survivor before display. Their visible name and color come from the survivor, while each WorkLog keeps its original snapshot text internally.
 - Semantic merge is human-only. Agent Bridge reuses alias-aware catalog and WorkLog validation for its existing 13 actions, but exposes no `merge_project` action and never redirects a stale project-ID mutation to the survivor.
 
 This alias contract protects convergence only between alias-aware application builds. An older already-open PWA can still upload a payload that does not preserve metadata it does not understand, so participating devices must refresh before cross-device merge verification.
@@ -55,7 +55,7 @@ This alias contract protects convergence only between alias-aware application bu
 
 Keeping lifecycle logic in one transaction boundary prevents two callers from creating normalized duplicates and closes the gap where a project could be archived between validation and WorkLog persistence. Explicit outcomes also keep UI feedback and Agent Bridge behavior aligned. Deterministic Agent Bridge rejections are terminal acknowledgements; only transient storage or transport failures should be retried.
 
-The denormalized project name on each WorkLog is intentional historical data. Reconciliation changes the catalog ID but preserves that snapshot. Reports resolve the local project ID or snapshot name through the canonical/alias index for grouping and use the survivor row for the displayed name and color. Numeric IDs remain device-local and are not sufficient for cross-device matching.
+The denormalized project name on each WorkLog is intentional historical data. Reconciliation changes the catalog ID but preserves that snapshot for persistence, sync, audit fallback, and unchanged-assignment editing. Overview cards and reports resolve the local project ID plus snapshot identity through the canonical/alias index and use the survivor row for the displayed name and color. Numeric IDs remain device-local and are not sufficient for cross-device matching; ambiguous identity falls back to the stored snapshot instead of borrowing another project's metadata.
 
 ## When to Apply
 

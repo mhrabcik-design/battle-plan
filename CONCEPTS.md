@@ -9,7 +9,7 @@ Only active projects are available for new WorkLogs. Archived projects keep thei
 
 Canonical names and aliases share one project identity namespace. Normalization reconciles safe spacing and letter-case variants automatically; a user can explicitly merge semantically equivalent but differently named rows by selecting a source and the active survivor.
 
-Absorbed and previous names remain on the survivor as synchronized alias tombstones. They prevent an old Drive payload or later create/rename from recreating the removed identity. WorkLogs move to the survivor through `projectId`, but retain their historical `projectName` snapshot; reports group by the resolved canonical project. Ambiguous alias ownership fails closed, and semantic merge remains a human-only action.
+Absorbed and previous names remain on the survivor as synchronized alias tombstones. They prevent an old Drive payload or later create/rename from recreating the removed identity. WorkLogs move to the survivor through `projectId` and retain their historical `projectName` snapshot for persistence and sync, while overview surfaces resolve the current canonical project name and color. Ambiguous alias ownership fails closed, and semantic merge remains a human-only action.
 
 ### WorkLog
 A record of completed work on a project, distinct from a task or meeting because it represents labor that can be reported by date, project, people, and hours.
