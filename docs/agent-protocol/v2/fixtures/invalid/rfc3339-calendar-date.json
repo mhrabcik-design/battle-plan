@@ -1,0 +1,38 @@
+{
+  "name": "RFC 3339 rejects impossible Gregorian calendar dates",
+  "expected_error": "schema_invalid",
+  "message": {
+    "signed": {
+      "protocol_version": "2.0.0",
+      "message_type": "hello",
+      "message_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000403",
+      "workspace_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000010",
+      "producer_id": "hermes.primary",
+      "target": { "kind": "receiver", "id": "battleplan.device-a" },
+      "created_at": "2026-02-31T10:00:00Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "signing_key_id": "ed25519:hermes-1",
+      "pairing_epoch": 1,
+      "payload": {
+        "contract_artifact": {
+          "id": "battleplan-hermes-protocol",
+          "version": "2.0.0",
+          "sha256": "sha256:1b927765d2a36d9bcd7fbf5048ea08b103f9202fc979718e1425413134f20a83"
+        },
+        "role": "hermes",
+        "purpose": "pairing",
+        "protocol_range": { "minimum": "2.0.0", "maximum": "2.0.0" },
+        "nonce": "018f6f5e-2d88-7f2a-8f90-d6ad23000404",
+        "public_key": {
+          "algorithm": "Ed25519",
+          "key_id": "ed25519:hermes-1",
+          "pairing_epoch": 1,
+          "raw_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    "signature": { "alg": "Ed25519", "key_id": "ed25519:hermes-1", "pairing_epoch": 1, "value": "AA" }
+  }
+}

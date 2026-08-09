@@ -100,6 +100,9 @@ export const PROTOCOL_RETENTION = Object.freeze({
     snapshotMinimumCount: 3,
     snapshotMinimumDays: 30,
     inactiveConsumerResnapshotDays: 90,
+    driveReceiptAfterSupersededDays: 400,
+    driveProbeHelloAfterReceiptSupersededDays: 400,
+    inactiveConsumerRecordAfterDecommissionDays: 400,
     quarantinePayloadDays: 30,
     revokedKeyHistoryDays: 400,
 });

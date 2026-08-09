@@ -17,7 +17,7 @@ node docs/agent-protocol/v2/conformance.mjs
 Expected result:
 
 ```text
-BattlePlan-Hermes v2 source-independent schema conformance: 29 fixtures passed.
+BattlePlan-Hermes v2 source-independent schema conformance: 31 fixtures passed.
 ```
 
 Hermes must also validate every fixture with its own implementation. It must not import BattlePlan TypeScript as its protocol implementation.
@@ -35,6 +35,9 @@ Confirm or reject each item with an exact file, JSON path or field, observed beh
 7. `ARTIFACT_MANIFEST.json` recomputes from sorted raw schema bytes without circular fixture input, and hello/capability/drive-receipt advertise its exact tuple.
 8. The ninth signed `drive-receipt` family losslessly records both OAuth probe directions and all required IDs/outcomes/verdicts. A capability `passed` reference is accepted only when the receipt message ID, content digest, completion time, workspace and contract artifact all match.
 9. A capability cannot advertise execution enabled unless pairing, Ed25519, transport, and the signed Drive interoperability receipt are all ready.
+10. RFC 3339 timestamps accept numeric offsets, reject impossible Gregorian dates, and preserve the original signed string.
+11. Capability-to-receipt link verification cryptographically verifies both messages with their respective trusted pairing records before comparing authenticated link fields; fixture signatures such as `AA` can never pass this helper.
+12. Current/superseded Drive receipts, both linked probe hello files, and inactive-consumer records have explicit clock start points, minimum durations and fail-closed GC conditions.
 
 ## Required response
 

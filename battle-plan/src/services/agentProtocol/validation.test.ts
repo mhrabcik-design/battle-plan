@@ -79,6 +79,29 @@ test('all valid cross-language fixtures validate and narrow to their message fam
     }
 });
 
+test('RFC 3339 timestamps accept numeric offsets and reject impossible calendar dates', async () => {
+    const fixture = await readJson('fixtures/valid/hello.json') as ProtocolWireMessage;
+    const withOffset = structuredClone(fixture);
+    withOffset.signed.created_at = '2026-08-09T12:00:00+02:00';
+    assert.equal(validateProtocolWireMessage(withOffset).ok, true);
+
+    const leapCentury = structuredClone(fixture);
+    leapCentury.signed.created_at = '2000-02-29T23:59:60-00:00';
+    assert.equal(validateProtocolWireMessage(leapCentury).ok, true);
+
+    const impossibleDate = structuredClone(fixture);
+    impossibleDate.signed.created_at = '2026-02-31T10:00:00Z';
+    const invalid = validateProtocolWireMessage(impossibleDate);
+    assert.equal(invalid.ok, false);
+    if (!invalid.ok) assert.equal(invalid.error.code, 'schema_invalid');
+
+    for (const timestamp of ['1900-02-29T10:00:00Z', '2026-04-31T10:00:00Z', '2026-08-09T10:00:00+24:00']) {
+        const adversarial = structuredClone(fixture);
+        adversarial.signed.created_at = timestamp;
+        assert.equal(validateProtocolWireMessage(adversarial).ok, false, timestamp);
+    }
+});
+
 test('invalid and future fixtures fail with their declared stable error code', async () => {
     const fixtureNames = (await readdir(path.join(protocolRoot, 'fixtures/invalid')))
         .filter((name) => name.endsWith('.json'))
@@ -352,7 +375,9 @@ test('authenticated expired commands are terminal before any mutation handler', 
     if (!result.ok) assert.equal(result.error.code, 'message_expired');
 });
 
-test('passed capability links to the exact verified drive receipt message and digest', async () => {
+test('passed capability links only to the exact cryptographically verified drive receipt', async (t) => {
+    const support = await probeEd25519Support();
+    if (support.supported === false) { t.skip(support.reason); return; }
     const capability = await readJson('fixtures/valid/capability.json') as ProtocolWireMessage;
     const receipt = await readJson('fixtures/valid/drive-receipt.json') as ProtocolWireMessage;
     const receiptValidation = validateProtocolWireMessage(receipt);
@@ -364,11 +389,38 @@ test('passed capability links to the exact verified drive receipt message and di
         receipt_content_sha256: receiptValidation.contentSha256,
         completed_at: '2026-08-09T10:10:00.000Z',
     };
-    assert.equal(verifyCapabilityDriveReceiptLink(capability, receipt).ok, true);
+    const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const artifact = await contractArtifact();
+    const options = {
+        capability: {
+            trustedPairing: await trustedRecord(capability, keys),
+            trustedContractArtifact: artifact,
+        },
+        receipt: {
+            trustedPairing: await trustedRecord(receipt, keys),
+            trustedContractArtifact: artifact,
+        },
+    };
+
+    const unverified = await verifyCapabilityDriveReceiptLink(capability, receipt, options);
+    assert.equal(unverified.ok, false);
+    if (!unverified.ok) assert.equal(unverified.error.code, 'signature_invalid');
+
+    capability.signature = await createDetachedSignature(capability.signed, keys.privateKey);
+    receipt.signature = await createDetachedSignature(receipt.signed, keys.privateKey);
+    assert.equal((await verifyCapabilityDriveReceiptLink(capability, receipt, options)).ok, true);
+
+    const invalidReceiptSignature = structuredClone(receipt);
+    invalidReceiptSignature.signature.value = 'AA';
+    const invalidReceipt = await verifyCapabilityDriveReceiptLink(capability, invalidReceiptSignature, options);
+    assert.equal(invalidReceipt.ok, false);
+    if (!invalidReceipt.ok) assert.equal(invalidReceipt.error.code, 'signature_invalid');
+
     const passedProbe = capability.signed.payload.drive_interop_probe;
     if (passedProbe.status !== 'passed') throw new Error('capability fixture has wrong probe state');
     passedProbe.receipt_content_sha256 = `sha256:${'f'.repeat(64)}` as `sha256:${string}`;
-    const mismatch = verifyCapabilityDriveReceiptLink(capability, receipt);
+    capability.signature = await createDetachedSignature(capability.signed, keys.privateKey);
+    const mismatch = await verifyCapabilityDriveReceiptLink(capability, receipt, options);
     assert.equal(mismatch.ok, false);
     if (!mismatch.ok) assert.equal(mismatch.error.code, 'drive_receipt_mismatch');
 });
@@ -408,6 +460,9 @@ test('retention boundaries are executable contract constants', () => {
         snapshotMinimumCount: 3,
         snapshotMinimumDays: 30,
         inactiveConsumerResnapshotDays: 90,
+        driveReceiptAfterSupersededDays: 400,
+        driveProbeHelloAfterReceiptSupersededDays: 400,
+        inactiveConsumerRecordAfterDecommissionDays: 400,
         quarantinePayloadDays: 30,
         revokedKeyHistoryDays: 400,
     });

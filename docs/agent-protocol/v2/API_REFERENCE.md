@@ -10,7 +10,7 @@ The JSON Schemas in `schemas/`, `ARTIFACT_MANIFEST.json`, the registries in this
 {"signature":{"alg":"Ed25519","key_id":"ed25519:hermes-1","pairing_epoch":1,"value":"BASE64URL_SIGNATURE"},"signed":{"...":"authoritative message body"}}
 ```
 
-The serialized file is RFC 8785 JCS. The signed and digested bytes are exactly UTF-8(`BattlePlan-Hermes/v2\0` + JCS(`signed`)). Duplicate keys, `-0`, non-finite numbers, lone Unicode surrogates and integers outside JavaScript's safe range are invalid. Large counters are canonical decimal strings.
+The serialized file is RFC 8785 JCS. The signed and digested bytes are exactly UTF-8(`BattlePlan-Hermes/v2\0` + JCS(`signed`)). Duplicate keys, `-0`, non-finite numbers, lone Unicode surrogates and integers outside JavaScript's safe range are invalid. Large counters are canonical decimal strings. Every `date-time` is RFC 3339 with required seconds and either uppercase `Z` or a numeric `±HH:MM` offset; every `date`/`date-time` must name a real proleptic-Gregorian calendar date, including the century leap-year rule. Offset timestamps are not rewritten before signature or digest verification.
 
 ## Envelope fields
 
@@ -45,7 +45,7 @@ Every referenced example is loaded and validated by `validation.test.ts` with th
 
 ## Control plane
 
-`hello`, `capability`, and `drive-receipt` are control-plane messages. Each requires the exact `contract_artifact` tuple from `ARTIFACT_MANIFEST.json`. A valid signed hello proves identity but does not enable execution. A passed capability must link the exact receipt by authenticated message ID and content digest. Capability health must report `paired=true`, `ed25519_supported=true`, `transport=ready`, `drive_interop_probe.status=passed`, and `execution_enabled=true` before a sender may target commands. The receiver remains disabled on ambiguity. `crypto_unsupported` and Drive bootstrap failures disable this plane and produce no command receipt.
+`hello`, `capability`, and `drive-receipt` are control-plane messages. Each requires the exact `contract_artifact` tuple from `ARTIFACT_MANIFEST.json`. A valid signed hello proves identity but does not enable execution. A passed capability must link the exact receipt by authenticated message ID and content digest. `verifyCapabilityDriveReceiptLink()` is asynchronous and requires independent trusted verification options for the capability and receipt; it first runs full schema, address, artifact, expiry and Ed25519 verification on both messages, then compares their authenticated fields. Structural validation alone can never establish the link. Capability health must report `paired=true`, `ed25519_supported=true`, `transport=ready`, `drive_interop_probe.status=passed`, and `execution_enabled=true` before a sender may target commands. The receiver remains disabled on ambiguity. `crypto_unsupported` and Drive bootstrap failures disable this plane and produce no command receipt.
 
 ## Data plane
 

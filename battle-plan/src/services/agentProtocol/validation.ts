@@ -595,10 +595,19 @@ export async function verifyProtocolWireMessage(
     return validation;
 }
 
-export function verifyCapabilityDriveReceiptLink(capability: unknown, receipt: unknown): ProtocolValidationResult {
-    const capabilityValidation = validateProtocolWireMessage(capability);
+export interface VerifyCapabilityDriveReceiptLinkOptions {
+    capability: VerifyProtocolOptions;
+    receipt: VerifyProtocolOptions;
+}
+
+export async function verifyCapabilityDriveReceiptLink(
+    capability: unknown,
+    receipt: unknown,
+    options: VerifyCapabilityDriveReceiptLinkOptions,
+): Promise<ProtocolValidationResult> {
+    const capabilityValidation = await verifyProtocolWireMessage(capability, options?.capability);
     if (!capabilityValidation.ok) return capabilityValidation;
-    const receiptValidation = validateProtocolWireMessage(receipt);
+    const receiptValidation = await verifyProtocolWireMessage(receipt, options?.receipt);
     if (!receiptValidation.ok) return receiptValidation;
     const capabilityMessage = capabilityValidation.message.signed;
     const receiptMessage = receiptValidation.message.signed;

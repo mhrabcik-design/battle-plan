@@ -66,10 +66,14 @@ const ajv = new Ajv2020({
     code: { esm: true, source: true, optimize: true },
 });
 addFormats(ajv);
-// Override function-backed temporal formats with serializable strict forms so
-// standalone ESM never emits CommonJS `require()` into the Vite bundle.
-ajv.addFormat('date', /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/u);
-ajv.addFormat('date-time', /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?Z$/u);
+// Override function-backed temporal formats with serializable RFC 3339 forms
+// so standalone ESM never emits CommonJS `require()` into the Vite bundle.
+// The date branch enforces Gregorian month lengths and leap-year rules; the
+// time branch accepts RFC 3339 numeric offsets and the optional leap second.
+const fullDate = '(?:(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29|[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8])))';
+const fullTime = 'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:(?:[0-5][0-9]|60)(?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])';
+ajv.addFormat('date', new RegExp(`^${fullDate}$`, 'u'));
+ajv.addFormat('date-time', new RegExp(`^${fullDate}${fullTime}$`, 'u'));
 
 for (const { source } of schemaSources) {
     const schema = JSON.parse(source.toString('utf8'));

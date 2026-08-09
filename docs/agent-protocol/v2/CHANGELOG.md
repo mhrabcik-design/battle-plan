@@ -12,3 +12,6 @@
 - Exact lifecycle, error, revision/conflict, retention and policy registries.
 - Settings commands intentionally forbidden for v2.0.
 - Bidirectional production-OAuth Drive probe specified as a cutover gate.
+- RFC 3339 offsets and real Gregorian calendar dates enforced by standalone validators.
+- Capability-to-receipt links require full cryptographic verification of both messages.
+- Drive receipt, linked probe hello and inactive-consumer retention clocks and GC gates are explicit.

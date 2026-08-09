@@ -20,7 +20,15 @@ The conflict-set token is SHA-256 of UTF-8(`BattlePlan-Hermes/conflict/v2\0` + J
 | V1 migration tombstone | 400 days | v1 disabled and legacy backlog proven empty |
 | Event batch | 90 days | sequence is below every active consumer checkpoint and covered by a retained signed snapshot |
 | Snapshot | latest 3 and 30 days | a newer verified snapshot covers its high-water mark |
+| Current signed Drive interoperability receipt | current lifetime | never GC while any capability references it or execution relies on it |
+| Superseded signed Drive interoperability receipt | 400 days after supersession | no retained capability references it and both pairing epochs are retained |
+| Both signed probe `hello` files named by a Drive receipt | current receipt lifetime plus 400 days after receipt supersession | linked receipt passed retention and stored receipt metadata still contains both immutable hello/file IDs and digests |
 | Quarantine raw payload | 30 days | bounded diagnostic metadata/digest remains; secrets are never retained |
 | Revoked public-key epoch history | 400 days | no retained artifact can legitimately reference the epoch |
+| Inactive-consumer record | until explicit decommission plus 400 days | consumer is still inactive, its key/receiver identity is decommissioned, and any later reuse is forced through fresh pairing and full snapshot |
 
-A consumer with no durable checkpoint update for 90 days becomes inactive and must resnapshot before consuming incremental batches. GC never infers acknowledgement from Drive reads or modified time. The idempotency horizon is 400 days: older commands expire before mutation, and producers never reuse message IDs.
+A consumer with no durable checkpoint update for 90 days becomes inactive and must resnapshot before consuming incremental batches. Merely becoming inactive does not start GC: its record remains indefinitely until an explicit signed/local administrative decommission. The 400-day inactive-record clock starts at that decommission timestamp. After GC, the same producer/receiver/key identifiers are never silently reactivated; any appearance is treated as unpaired and requires fresh pairing plus a full signed snapshot.
+
+A Drive receipt is superseded only when a newer fully verified passed receipt for the same workspace is durably installed and all current capabilities have stopped referencing the old receipt. That durable installation timestamp starts both 400-day clocks. The two probe hello files remain available for the entire current-receipt lifetime and for the full 400 days after supersession; deleting or replacing a Drive file does not shorten this requirement. Failed or partial probes follow quarantine retention and can never supersede a passed receipt.
+
+GC never infers acknowledgement, supersession or decommission from Drive reads, file modified time, absence, account logout or consumer silence. The idempotency horizon is 400 days: older commands expire before mutation, and producers never reuse message IDs.
