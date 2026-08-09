@@ -61,6 +61,10 @@ const CLIENT_ID = (import.meta as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).
 // external agents (e.g. Anu bp_suggestions.py). Re-authorization required
 // after this scope set changes.
 const GOOGLE_TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
+/** Exact scope required by the isolated v2 interoperability probe and later cutover. */
+export const AGENT_PROTOCOL_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file' as const;
+// Legacy v1 Drive/Suggestions still uses the broader grant until dual-read/single-write cutover.
+// The v2 transport must not treat this existing token as proof that the drive.file probe passed.
 const CORE_SCOPES = 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive';
 const SCOPES = `${CORE_SCOPES} ${GOOGLE_TASKS_SCOPE}`;
 const CORE_SCOPE_SET = CORE_SCOPES.split(/\s+/).filter(Boolean);
@@ -298,6 +302,10 @@ class GoogleService {
             state: this.getAuthState(),
             accessToken: this.accessToken
         };
+    }
+
+    getAccountId(): string | null {
+        return this.userEmail;
     }
 
     private dispatchAuthChange() {

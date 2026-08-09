@@ -3,6 +3,7 @@ import type { TaskDriveBackupLoadResult } from '../services/taskDriveBackup';
 import type { SyncHealth } from '../hooks/useSyncDiagnostics';
 import { ProjectIdentityConflictError } from './projectIdentityReconciliation.ts';
 import { getErrorMessage } from './errors.ts';
+import { DriveTransportError } from '../services/agentProtocol/driveTransport.ts';
 
 const DRIVE_SCOPE_ERROR_PATTERN = /403|PERMISSION_DENIED|Insufficient Authentication Scopes/i;
 
@@ -43,6 +44,27 @@ export function emptySuggestionsHealth(): Partial<SyncHealth> {
         detail: 'Žádné návrhy na Drive zatím nejsou',
         lastError: null,
     };
+}
+
+export function agentDriveTransportHealth(error: unknown): Partial<SyncHealth> {
+    if (!(error instanceof DriveTransportError)) {
+        const message = getErrorMessage(error);
+        return { state: 'error', detail: 'Agent protocol Drive transport selhal', lastError: message };
+    }
+    if (error.code === 'authorization_failed') {
+        return { state: 'idle', detail: 'Agent protocol čeká na Drive autorizaci', lastError: error.message };
+    }
+    if (error.code === 'rate_limited' || error.code === 'transport_retryable') {
+        return { state: 'stale', detail: 'Agent protocol Drive transport bude zopakován', lastError: error.message };
+    }
+    if (error.code === 'workspace_missing'
+        || error.code === 'workspace_ambiguous'
+        || error.code === 'workspace_parent_mismatch'
+        || error.code === 'workspace_authority_mismatch'
+        || error.code === 'stale_binding_cache') {
+        return { state: 'error', detail: 'Agent protocol Drive pairing není bezpečně ověřen', lastError: error.message };
+    }
+    return { state: 'error', detail: `Agent protocol Drive: ${error.code}`, lastError: error.message };
 }
 
 export function autoSyncFailureHealth(error: unknown): {

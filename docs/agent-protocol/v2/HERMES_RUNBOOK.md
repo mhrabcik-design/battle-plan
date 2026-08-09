@@ -2,6 +2,8 @@
 
 This guide is sufficient to implement the Hermes adapter without BattlePlan source. Do not enable command writes until all contract checks and the live Drive receipt pass.
 
+The normative source-independent operational adapter contract, public properties, pagination, replay, cursor, and error rules are in `DRIVE_TRANSPORT.md`. Implement and test that profile before running the live probe below.
+
 ## 1. Consume the contract
 
 Vendor the complete `docs/agent-protocol/v2` directory. Validate JSON with Draft 2020-12 schemas, reject unknown properties, implement RFC 8785 JCS with the additional `-0`, duplicate-key, unsafe-integer and Unicode guards, and load the exact error/action/lifecycle registries. Independently recompute `ARTIFACT_MANIFEST.json` exactly as specified by `VERSIONING.md`; pin its artifact tuple in the local trusted configuration. Run every fixture through Hermes's own validator and compare the declared result.

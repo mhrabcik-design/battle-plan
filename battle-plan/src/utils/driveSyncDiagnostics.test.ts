@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import {
     autoSyncFailureHealth,
+    agentDriveTransportHealth,
     driveUnavailableHealth,
     emptySuggestionsHealth,
     GOOGLE_DRIVE_RECONSENT_MESSAGE,
@@ -11,6 +12,7 @@ import {
     taskBackupHealth,
 } from './driveSyncDiagnostics.ts';
 import { ProjectIdentityConflictError } from './projectIdentityReconciliation.ts';
+import { DriveTransportError } from '../services/agentProtocol/driveTransport.ts';
 
 test('Drive scope diagnostics centralize permission detection and recovery guidance', () => {
     assert.equal(isDriveScopeError('403 Forbidden'), true);
@@ -75,4 +77,19 @@ test('emptySuggestionsHealth reports a healthy empty suggestions file state', ()
         detail: 'Žádné návrhy na Drive zatím nejsou',
         lastError: null,
     });
+});
+
+test('agent protocol Drive diagnostics keep authorization, retry, and pairing ambiguity distinct', () => {
+    assert.deepEqual(
+        agentDriveTransportHealth(new DriveTransportError('authorization_failed', '401')),
+        { state: 'idle', detail: 'Agent protocol čeká na Drive autorizaci', lastError: '401' },
+    );
+    assert.deepEqual(
+        agentDriveTransportHealth(new DriveTransportError('rate_limited', '429')),
+        { state: 'stale', detail: 'Agent protocol Drive transport bude zopakován', lastError: '429' },
+    );
+    assert.deepEqual(
+        agentDriveTransportHealth(new DriveTransportError('workspace_ambiguous', 'two folders')),
+        { state: 'error', detail: 'Agent protocol Drive pairing není bezpečně ověřen', lastError: 'two folders' },
+    );
 });

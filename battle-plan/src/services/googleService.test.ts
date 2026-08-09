@@ -27,7 +27,7 @@ const localStorage = {
 };
 (globalThis as unknown as { localStorage: typeof localStorage }).localStorage = localStorage;
 
-const { GoogleService } = await import('./googleService.ts');
+const { AGENT_PROTOCOL_DRIVE_SCOPE, GoogleService } = await import('./googleService.ts');
 
 function freshService(): InstanceType<typeof GoogleService> {
     return new GoogleService();
@@ -1214,4 +1214,13 @@ test('R9: addToCalendar 403 surfaces the calendar error without clearing Google 
     );
 
     assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
+});
+
+test('v2 Drive transport exposes its exact narrow scope and account cache discriminator', () => {
+    clearStore();
+    localStorage.setItem('google_user_email', 'user@example.com');
+    const svc = freshService();
+
+    assert.equal(AGENT_PROTOCOL_DRIVE_SCOPE, 'https://www.googleapis.com/auth/drive.file');
+    assert.equal(svc.getAccountId(), 'user@example.com');
 });

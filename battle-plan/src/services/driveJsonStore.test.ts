@@ -36,7 +36,14 @@ const defaultWindow: MockWindow = {
 (globalThis as unknown as { window: MockWindow }).window = defaultWindow;
 (globalThis as unknown as { localStorage: MockLocalStorage }).localStorage = defaultLocalStorage;
 
-const { buildDriveFileMetadata, buildMultipartJsonBody, DriveJsonStore, getUploadedDriveFileId } = await import('./driveJsonStore.ts');
+const {
+    buildDriveFileMetadata,
+    buildMultipartJsonBody,
+    buildMultipartRawJsonBody,
+    DriveJsonStore,
+    GapiDriveProtocolApi,
+    getUploadedDriveFileId,
+} = await import('./driveJsonStore.ts');
 const { AuthUnavailableError, googleService } = await import('./googleService.ts');
 
 type GoogleServiceInternalState = {
@@ -463,4 +470,125 @@ test('DriveJsonStore readJsonFileWithStatus distinguishes missing files and fail
 
     const loaded = await store.readJsonFileWithStatus<{ hello: string }>('data.json');
     assert.deepEqual(loaded, { kind: 'loaded', fileId: 'file-existing', data: { hello: 'world' } });
+});
+
+test('buildMultipartRawJsonBody preserves the exact canonical protocol bytes', () => {
+    const canonical = '{"10":"ten","2":"two"}';
+    const body = buildMultipartRawJsonBody(
+        buildDriveFileMetadata('message.json', 'application/json', 'folder-123', null),
+        canonical,
+        'boundary-test',
+    );
+
+    assert.match(body, /\r\n\r\n\{"10":"ten","2":"two"\}\r\n--boundary-test--$/);
+    assert.doesNotMatch(body, /\{"2":"two","10":"ten"\}/);
+});
+
+test('GapiDriveProtocolApi issues exact-ID, paginated, all-drives-safe transport requests', async () => {
+    const requests: Array<{ path: string; method: string; body: string }> = [];
+    installDriveGlobals({
+        request: async (args: { path: string; method: string; body: string }) => {
+            requests.push(args);
+            if (args.path.includes('/changes/startPageToken')) {
+                return { status: 200, result: { startPageToken: 'start-1' } };
+            }
+            if (args.path.includes('/changes?')) {
+                return {
+                    status: 200,
+                    result: {
+                        changes: [{
+                            fileId: 'message-1',
+                            removed: false,
+                            file: {
+                                id: 'message-1',
+                                name: 'message.json',
+                                mimeType: 'application/json',
+                                parents: ['folder-v2'],
+                                properties: {},
+                                size: '2',
+                            },
+                        }],
+                        newStartPageToken: 'start-2',
+                    },
+                };
+            }
+            if (args.path.includes('/files?')) {
+                return { status: 200, result: { files: [], nextPageToken: 'page-2', incompleteSearch: false } };
+            }
+            return {
+                status: 200,
+                result: {
+                    id: 'folder-v2',
+                    name: 'BattlePlan-Hermes-v2',
+                    mimeType: 'application/vnd.google-apps.folder',
+                    parents: ['root'],
+                    trashed: false,
+                    owners: [{ permissionId: 'owner-1' }],
+                },
+            };
+        },
+    });
+    const api = new GapiDriveProtocolApi({
+        accountId: 'user@example.com',
+        folderId: 'folder-v2',
+        folderName: 'BattlePlan-Hermes-v2',
+        expectedParentId: 'root',
+        authority: { kind: 'owner', ownerPermissionId: 'owner-1' },
+        workspaceId: 'workspace-1',
+    });
+
+    assert.equal((await api.getFile('folder-v2')).id, 'folder-v2');
+    assert.equal((await api.listMessageFiles({ folderId: 'folder-v2', workspaceId: 'workspace-1', pageToken: 'page-1' })).nextPageToken, 'page-2');
+    assert.equal(await api.getStartPageToken(), 'start-1');
+    assert.equal((await api.listChanges('start-1')).newStartPageToken, 'start-2');
+
+    assert.match(requests[0].path, /files\/folder-v2\?/);
+    assert.match(requests[0].path, /supportsAllDrives=true/);
+    assert.match(decodeURIComponent(requests[1].path), /'folder-v2' in parents/);
+    assert.match(decodeURIComponent(requests[1].path), /bpv2_workspace_id/);
+    assert.match(requests[1].path, /pageToken=page-1/);
+    assert.match(requests[3].path, /includeItemsFromAllDrives=true/);
+});
+
+test('GapiDriveProtocolApi creates canonical bodies with a pre-generated immutable Drive ID', async () => {
+    const requests: Array<{ path: string; method: string; body: string }> = [];
+    installDriveGlobals({
+        request: async (args: { path: string; method: string; body: string }) => {
+            requests.push(args);
+            if (args.path.includes('generateIds')) return { status: 200, result: { ids: ['reserved-1'] } };
+            return { status: 200, result: { id: 'reserved-1' } };
+        },
+    });
+    const api = new GapiDriveProtocolApi({
+        accountId: 'user@example.com',
+        folderId: 'folder-v2',
+        folderName: 'BattlePlan-Hermes-v2',
+        expectedParentId: 'root',
+        authority: { kind: 'owner', ownerPermissionId: 'owner-1' },
+        workspaceId: 'workspace-1',
+    });
+
+    assert.equal(await api.generateFileId(), 'reserved-1');
+    await api.createImmutableFile({
+        fileId: 'reserved-1',
+        body: '{"hello":"world"}',
+        metadata: {
+            id: 'reserved-1',
+            name: 'message.json',
+            mimeType: 'application/json',
+            parents: ['folder-v2'],
+            trashed: false,
+            owners: [],
+            driveId: null,
+            properties: { bpv2_message_id: 'message-1' },
+            size: '17',
+        },
+    });
+
+    assert.match(requests[0].path, /generateIds/);
+    assert.match(requests[1].path, /uploadType=multipart/);
+    assert.match(requests[1].body, /"id":"reserved-1"/);
+    assert.match(requests[1].body, /"parents":\["folder-v2"\]/);
+    assert.match(requests[1].body, /"hello":"world"/);
+    assert.doesNotMatch(requests[1].body, /Bearer|access_token/i);
 });

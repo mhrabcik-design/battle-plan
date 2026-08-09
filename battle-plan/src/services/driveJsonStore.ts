@@ -1,5 +1,13 @@
 import { AuthUnavailableError, googleService } from './googleService.ts';
 import { isAuthUnavailable } from '../types.ts';
+import {
+    DRIVE_PROTOCOL_PROPERTIES,
+    type DriveProtocolApi,
+    type DriveProtocolChangePage,
+    type DriveProtocolFileMetadata,
+    type DriveProtocolFilePage,
+    type DriveWorkspaceBinding,
+} from './agentProtocol/driveTransport.ts';
 
 const DEFAULT_FOLDER_NAME = 'Anu-BattlePlan';
 const DEFAULT_FOLDER_CACHE_KEY = 'bp_folder_id';
@@ -13,7 +21,9 @@ interface DriveFileMeta {
 
 interface DriveUploadResponse {
     body?: string;
-    result?: { id?: string };
+    result?: unknown;
+    status?: number;
+    statusText?: string;
 }
 
 interface GapiDriveClient {
@@ -76,7 +86,9 @@ export function buildDriveFileMetadata(name: string, mimeType: string, folderId:
 }
 
 export function getUploadedDriveFileId(response: DriveUploadResponse): string | null {
-    if (response.result?.id) return response.result.id;
+    if (response.result && typeof response.result === 'object' && 'id' in response.result && typeof response.result.id === 'string') {
+        return response.result.id;
+    }
     if (!response.body) return null;
     try {
         const parsed = JSON.parse(response.body) as { id?: string };
@@ -90,11 +102,34 @@ function escapeDriveQueryValue(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+export class DriveRequestError extends Error {
+    readonly status: number;
+
+    constructor(status: number, message: string) {
+        super(message);
+        this.name = 'DriveRequestError';
+        this.status = status;
+    }
+}
+
 function ensureDriveRequestOk(response: { status?: number; statusText?: string }, action: string): void {
     const { status } = response;
     if (status !== undefined && (status < 200 || status >= 300)) {
-        throw new Error(`${action} failed: ${status} ${response.statusText ?? ''}`.trim());
+        throw new DriveRequestError(status, `${action} failed: ${status} ${response.statusText ?? ''}`.trim());
     }
+}
+
+function responseObject<T>(response: DriveUploadResponse, action: string): T {
+    ensureDriveRequestOk(response, action);
+    if (response.result && typeof response.result === 'object') return response.result as T;
+    if (response.body) {
+        try {
+            return JSON.parse(response.body) as T;
+        } catch (error) {
+            throw new Error(`${action} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    throw new Error(`${action} returned no JSON body`);
 }
 
 export function buildMultipartJsonBody(metadata: DriveFileMetadata, payload: unknown, boundary = MULTIPART_BOUNDARY): string {
@@ -104,6 +139,16 @@ export function buildMultipartJsonBody(metadata: DriveFileMetadata, payload: unk
         '--' + boundary + '\r\n' +
         'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
         JSON.stringify(payload) + '\r\n' +
+        '--' + boundary + '--';
+}
+
+export function buildMultipartRawJsonBody(metadata: DriveFileMetadata, canonicalJson: string, boundary = MULTIPART_BOUNDARY): string {
+    return '--' + boundary + '\r\n' +
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+        JSON.stringify(metadata) + '\r\n' +
+        '--' + boundary + '\r\n' +
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+        canonicalJson + '\r\n' +
         '--' + boundary + '--';
 }
 
@@ -117,6 +162,188 @@ export function buildMultipartBlobBody(metadata: DriveFileMetadata, blob: Blob, 
     const head = new TextEncoder().encode(body);
     const tail = new TextEncoder().encode('\r\n--' + boundary + '--');
     return new Blob([head, blob, tail], { type: 'multipart/related' });
+}
+
+function normalizeProtocolMetadata(input: Partial<DriveProtocolFileMetadata> & { id?: string }): DriveProtocolFileMetadata {
+    if (!input.id) throw new Error('Drive metadata response is missing id');
+    return {
+        id: input.id,
+        name: input.name ?? '',
+        mimeType: input.mimeType ?? '',
+        parents: input.parents ?? [],
+        trashed: input.trashed ?? false,
+        owners: input.owners ?? [],
+        driveId: input.driveId ?? null,
+        properties: input.properties ?? {},
+        size: input.size ?? null,
+    };
+}
+
+const PROTOCOL_FILE_FIELDS = 'id,name,mimeType,parents,trashed,owners(permissionId),driveId,properties,size';
+
+/**
+ * Browser/GAPI implementation of the source-independent immutable transport
+ * boundary. Constructing this adapter does not start polling or command work.
+ */
+export class GapiDriveProtocolApi implements DriveProtocolApi {
+    private readonly sharedDriveId: string | null;
+
+    constructor(binding: DriveWorkspaceBinding) {
+        this.sharedDriveId = binding.authority.kind === 'shared_drive' ? binding.authority.driveId : null;
+    }
+
+    async getFile(fileId: string): Promise<DriveProtocolFileMetadata> {
+        const response = await this.client().request({
+            path: `/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=${encodeURIComponent(PROTOCOL_FILE_FIELDS)}`,
+            method: 'GET',
+            headers: {},
+            body: '',
+        });
+        return normalizeProtocolMetadata(responseObject(response, 'Drive protocol metadata read'));
+    }
+
+    async listFoldersByName(input: {
+        name: string;
+        expectedParentId: string;
+        pageToken: string | null;
+    }): Promise<DriveProtocolFilePage> {
+        const query = `name='${escapeDriveQueryValue(input.name)}' and mimeType='application/vnd.google-apps.folder' and '${escapeDriveQueryValue(input.expectedParentId)}' in parents and trashed=false`;
+        return this.listFiles(query, input.pageToken);
+    }
+
+    async listMessageFiles(input: {
+        folderId: string;
+        workspaceId: string;
+        pageToken: string | null;
+    }): Promise<DriveProtocolFilePage> {
+        const query = [
+            `'${escapeDriveQueryValue(input.folderId)}' in parents`,
+            'trashed=false',
+            `properties has { key='${DRIVE_PROTOCOL_PROPERTIES.protocolMajor}' and value='2' }`,
+            `properties has { key='${DRIVE_PROTOCOL_PROPERTIES.workspaceId}' and value='${escapeDriveQueryValue(input.workspaceId)}' }`,
+        ].join(' and ');
+        return this.listFiles(query, input.pageToken);
+    }
+
+    async generateFileId(): Promise<string> {
+        const response = await this.client().request({
+            path: '/drive/v3/files/generateIds?count=1&space=drive&type=files',
+            method: 'GET',
+            headers: {},
+            body: '',
+        });
+        const result = responseObject<{ ids?: string[] }>(response, 'Drive protocol file ID generation');
+        if (!result.ids?.[0]) throw new Error('Drive protocol file ID generation returned no ID');
+        return result.ids[0];
+    }
+
+    async createImmutableFile(input: {
+        fileId: string;
+        metadata: DriveProtocolFileMetadata;
+        body: string;
+    }): Promise<void> {
+        const metadata = {
+            id: input.fileId,
+            name: input.metadata.name,
+            mimeType: input.metadata.mimeType,
+            parents: input.metadata.parents,
+            properties: input.metadata.properties,
+        };
+        const response = await this.client().request({
+            path: '/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id',
+            method: 'POST',
+            headers: { 'Content-Type': `multipart/related; boundary=${MULTIPART_BOUNDARY}` },
+            body: buildMultipartRawJsonBody(metadata, input.body),
+        });
+        ensureDriveRequestOk(response, 'Immutable Drive protocol create');
+        const createdId = getUploadedDriveFileId(response);
+        if (createdId !== input.fileId) {
+            throw new Error(`Immutable Drive protocol create returned unexpected file ID ${createdId ?? '<missing>'}`);
+        }
+    }
+
+    async downloadFile(fileId: string): Promise<string> {
+        const response = await this.client().request({
+            path: `/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`,
+            method: 'GET',
+            headers: {},
+            body: '',
+        });
+        ensureDriveRequestOk(response, 'Drive protocol media read');
+        if (typeof response.body !== 'string') throw new Error('Drive protocol media read returned no bytes');
+        return response.body;
+    }
+
+    async getStartPageToken(): Promise<string> {
+        const sharedDrive = this.sharedDriveId ? `&driveId=${encodeURIComponent(this.sharedDriveId)}` : '';
+        const response = await this.client().request({
+            path: `/drive/v3/changes/startPageToken?supportsAllDrives=true${sharedDrive}`,
+            method: 'GET',
+            headers: {},
+            body: '',
+        });
+        const result = responseObject<{ startPageToken?: string }>(response, 'Drive start page token read');
+        if (!result.startPageToken) throw new Error('Drive start page token response is missing startPageToken');
+        return result.startPageToken;
+    }
+
+    async listChanges(pageToken: string): Promise<DriveProtocolChangePage> {
+        const sharedDrive = this.sharedDriveId ? `&driveId=${encodeURIComponent(this.sharedDriveId)}` : '';
+        const fields = `nextPageToken,newStartPageToken,changes(fileId,removed,file(${PROTOCOL_FILE_FIELDS}))`;
+        const response = await this.client().request({
+            path: `/drive/v3/changes?pageToken=${encodeURIComponent(pageToken)}&pageSize=1000&spaces=drive&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=${encodeURIComponent(fields)}${sharedDrive}`,
+            method: 'GET',
+            headers: {},
+            body: '',
+        });
+        const result = responseObject<{
+            changes?: Array<{ fileId?: string; removed?: boolean; file?: Partial<DriveProtocolFileMetadata> }>;
+            nextPageToken?: string;
+            newStartPageToken?: string;
+        }>(response, 'Drive change-page read');
+        return {
+            changes: (result.changes ?? []).map((change) => {
+                if (!change.fileId) throw new Error('Drive change is missing fileId');
+                return {
+                    fileId: change.fileId,
+                    removed: change.removed ?? false,
+                    file: change.file ? normalizeProtocolMetadata(change.file) : null,
+                };
+            }),
+            nextPageToken: result.nextPageToken ?? null,
+            newStartPageToken: result.newStartPageToken ?? null,
+        };
+    }
+
+    private async listFiles(query: string, pageToken: string | null): Promise<DriveProtocolFilePage> {
+        const sharedDrive = this.sharedDriveId
+            ? `&corpora=drive&driveId=${encodeURIComponent(this.sharedDriveId)}`
+            : '&corpora=user';
+        const token = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+        const fields = `nextPageToken,incompleteSearch,files(${PROTOCOL_FILE_FIELDS})`;
+        const response = await this.client().request({
+            path: `/drive/v3/files?q=${encodeURIComponent(query)}&spaces=drive&pageSize=1000&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=${encodeURIComponent(fields)}${sharedDrive}${token}`,
+            method: 'GET',
+            headers: {},
+            body: '',
+        });
+        const result = responseObject<{
+            files?: Array<Partial<DriveProtocolFileMetadata>>;
+            nextPageToken?: string;
+            incompleteSearch?: boolean;
+        }>(response, 'Drive protocol list');
+        return {
+            files: (result.files ?? []).map(normalizeProtocolMetadata),
+            nextPageToken: result.nextPageToken ?? null,
+            incompleteSearch: result.incompleteSearch ?? false,
+        };
+    }
+
+    private client(): GapiClient {
+        const client = ((window as WindowWithGapi).gapi?.client) ?? null;
+        if (!client) throw new Error('GAPI client is not available');
+        return client;
+    }
 }
 
 export class DriveJsonStore {

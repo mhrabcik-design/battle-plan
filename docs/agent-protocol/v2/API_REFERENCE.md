@@ -29,6 +29,8 @@ The serialized file is RFC 8785 JCS. The signed and digested bytes are exactly U
 
 Drive public properties are non-authoritative index hints only. If present, `message_id`, `message_type`, `workspace_id`, `producer_id`, `key_id`, `pairing_epoch`, and SHA-256 digest must match the verified body and detached signature.
 
+The normative Google Drive object layout, property names, immutable-create replay algorithm, pagination, change cursor, and transport errors are defined in `DRIVE_TRANSPORT.md` under profile `drive-immutable-v2`.
+
 ## Message families and executable examples
 
 - `hello`: pairing or bidirectional Drive probe; receiver target. <!-- fixture:fixtures/valid/hello.json -->
