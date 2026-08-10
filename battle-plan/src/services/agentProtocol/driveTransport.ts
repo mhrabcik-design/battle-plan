@@ -516,22 +516,23 @@ export class ImmutableDriveTransport {
     }
 
     async publish(prepared: PreparedDriveProtocolMessage): Promise<{ kind: 'published'; fileId: string; replayed: boolean }> {
-        await this.assertPreparedRecord(prepared);
+        const immutablePrepared = structuredClone(prepared);
+        await this.assertPreparedRecord(immutablePrepared);
         await this.verifyWorkspace();
         for (let attempt = 0; attempt <= DRIVE_RETRY_DELAYS_MS.length; attempt += 1) {
             try {
-                await this.api.createImmutableFile(prepared);
-                return { kind: 'published', fileId: prepared.fileId, replayed: false };
+                await this.api.createImmutableFile(immutablePrepared);
+                return { kind: 'published', fileId: immutablePrepared.fileId, replayed: false };
             } catch (error) {
                 if (httpStatus(error) === 409) {
-                    await this.verifyPreparedExisting(prepared);
-                    return { kind: 'published', fileId: prepared.fileId, replayed: true };
+                    await this.verifyPreparedExisting(immutablePrepared);
+                    return { kind: 'published', fileId: immutablePrepared.fileId, replayed: true };
                 }
                 const normalized = normalizeDriveError(error, 'Immutable Drive message create');
                 if (!isRetryableTransportError(normalized)) throw normalized;
 
-                const existing = await this.findPreparedExisting(prepared);
-                if (existing) return { kind: 'published', fileId: prepared.fileId, replayed: true };
+                const existing = await this.findPreparedExisting(immutablePrepared);
+                if (existing) return { kind: 'published', fileId: immutablePrepared.fileId, replayed: true };
                 if (attempt === DRIVE_RETRY_DELAYS_MS.length) throw normalized;
                 await this.sleep(DRIVE_RETRY_DELAYS_MS[attempt]);
             }

@@ -70,7 +70,7 @@ Preparation is deterministic except for the reserved Drive ID:
 6. Seal that complete record as `prepared_sha256 = SHA-256("BattlePlan-Hermes/drive-prepared/v2\0" || JCS(prepared record without prepared_sha256))`.
 7. Persist the record and its seal in the sender's durable outbox before upload. BattlePlan's outbox is implemented in a later milestone; Hermes must provide its own durable equivalent.
 
-Before any publish request, recompute and compare the preparation seal, then enforce that the top-level file ID and `metadata.id` both equal the originally sealed ID. This explicitly rejects simultaneous post-persistence replacement of both ID fields. Publish the prepared record with one create call. A successful response must return the reserved ID.
+At the synchronous entry to `publish`, before its first asynchronous boundary, create a deep snapshot of the caller-owned prepared record. From that point onward, only this snapshot may be used for seal/metadata validation, workspace verification, create, return values, `409` replay, ambiguous-failure recovery, and every retry. Recompute and compare the preparation seal from the snapshot, then enforce that its top-level file ID and `metadata.id` both equal the originally sealed ID. This rejects both pre-publish replacement and caller mutation raced against an asynchronous publish flight. Publish the snapshot with one create call. A successful response must return the reserved ID.
 
 If the create response is ambiguous because of timeout or returns HTTP `409`, do not allocate another ID. Fetch the reserved ID and require all of the following:
 

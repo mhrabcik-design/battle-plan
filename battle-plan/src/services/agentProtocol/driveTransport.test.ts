@@ -302,6 +302,46 @@ test('persisted preparation seal rejects simultaneous replacement of fileId and 
     assert.equal(createCalls, 0);
 });
 
+test('publish snapshots the prepared record before an async workspace verification can race caller mutation', async () => {
+    const api = new FakeDriveApi();
+    const client = transport(api);
+    const prepared = await client.prepare(await canonicalFixture());
+    const originalFileId = prepared.fileId;
+    let markWorkspaceLookupStarted!: () => void;
+    let releaseWorkspaceLookup!: () => void;
+    const workspaceLookupStarted = new Promise<void>((resolve) => { markWorkspaceLookupStarted = resolve; });
+    const workspaceLookupGate = new Promise<void>((resolve) => { releaseWorkspaceLookup = resolve; });
+    api.listFoldersByName = async () => {
+        markWorkspaceLookupStarted();
+        await workspaceLookupGate;
+        return {
+            files: [structuredClone(api.files.get(binding.folderId)!.metadata)],
+            nextPageToken: null,
+            incompleteSearch: false,
+        };
+    };
+    const createdIds: string[] = [];
+    api.createImmutableFile = async (input) => {
+        createdIds.push(input.fileId);
+        assert.equal(input.metadata.id, originalFileId);
+        api.files.set(input.fileId, { metadata: structuredClone(input.metadata), body: input.body });
+    };
+
+    const publishing = client.publish(prepared);
+    await workspaceLookupStarted;
+    prepared.fileId = 'attacker-raced-id';
+    prepared.metadata.id = 'attacker-raced-id';
+    releaseWorkspaceLookup();
+
+    assert.deepEqual(await publishing, {
+        kind: 'published',
+        fileId: originalFileId,
+        replayed: false,
+    });
+    assert.deepEqual(createdIds, [originalFileId]);
+    assert.equal(api.files.has('attacker-raced-id'), false);
+});
+
 test('constructor rejects a structural-only verifier that did not come from the full-U1 factory', () => {
     const api = new FakeDriveApi();
     const structuralOnly = {
@@ -710,4 +750,5 @@ test('normative Drive transport documentation contains every implemented propert
     assert.match(documentation, /full-U1 verifier factory/);
     assert.match(documentation, /scanAll\(\).*shared synchronization coordinator/);
     assert.match(documentation, /trashed=true/);
+    assert.match(documentation, /synchronous entry to `publish`, before its first asynchronous boundary/);
 });
