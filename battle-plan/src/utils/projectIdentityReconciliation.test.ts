@@ -13,6 +13,26 @@ async function resetDb(): Promise<void> {
     await db.projects.clear();
 }
 
+function withoutProjectPublicId(project: Project | undefined): Omit<Project, 'publicId'> | undefined {
+    if (!project) return undefined;
+    assert.match(project.publicId ?? '', /^project_[0-9a-f-]{36}$/);
+    const legacyProject = { ...project };
+    delete legacyProject.publicId;
+    return legacyProject;
+}
+
+function withoutWorkLogPortableIds(
+    workLog: WorkLog | undefined,
+): Omit<WorkLog, 'publicId' | 'syncId'> | undefined {
+    if (!workLog) return undefined;
+    assert.match(workLog.publicId ?? '', /^worklog_[0-9a-f-]{36}$/);
+    assert.match(workLog.syncId ?? '', /^[0-9a-f-]{36}$/);
+    const legacyWorkLog = { ...workLog };
+    delete legacyWorkLog.publicId;
+    delete legacyWorkLog.syncId;
+    return legacyWorkLog;
+}
+
 test('normalized project variants become one project and all WorkLogs use its identity', async () => {
     await resetDb();
 
@@ -53,7 +73,7 @@ test('normalized project variants become one project and all WorkLogs use its id
     assert.equal(result.projectsMerged, 1);
     assert.equal(result.workLogsRelinked, 2);
     assert.equal(await db.projects.count(), 1);
-    assert.deepEqual(await db.projects.get(activeId), {
+    assert.deepEqual(withoutProjectPublicId(await db.projects.get(activeId)), {
         id: activeId,
         name: 'Komerční banka',
         color: 'indigo',
@@ -159,7 +179,7 @@ test('an absorbed canonical project collapses into its alias owner without repla
 
     assert.equal(result.projectsMerged, 1);
     assert.equal(result.workLogsRelinked, 1);
-    assert.deepEqual(await db.projects.get(survivorId), {
+    assert.deepEqual(withoutProjectPublicId(await db.projects.get(survivorId)), {
         id: survivorId,
         name: 'Komerční Banka',
         aliases: ['KB LIBEREC', 'KB Plaza', 'Komerční banka Plaza'],
@@ -170,7 +190,7 @@ test('an absorbed canonical project collapses into its alias owner without repla
         updatedAt: 100,
     });
     assert.equal(await db.projects.get(staleSourceId), undefined);
-    assert.deepEqual(await db.workLogs.get(workLogId), {
+    assert.deepEqual(withoutWorkLogPortableIds(await db.workLogs.get(workLogId)), {
         id: workLogId,
         date: '2026-08-08', projectId: survivorId, projectName: 'Komerční banka Plaza',
         people: 'Martin', hours: 2, source: 'manual', createdAt: 30, updatedAt: 30,
@@ -192,7 +212,7 @@ test('acyclic alias chains collapse deterministically and are idempotent', async
     const first = await db.transaction('rw', [db.projects, db.workLogs], () => (
         reconcileProjectIdentities(db.projects, db.workLogs)
     ));
-    const afterFirst = await db.projects.toArray();
+    const afterFirst = (await db.projects.toArray()).map(withoutProjectPublicId);
     const second = await db.transaction('rw', [db.projects, db.workLogs], () => (
         reconcileProjectIdentities(db.projects, db.workLogs)
     ));
@@ -209,7 +229,7 @@ test('acyclic alias chains collapse deterministically and are idempotent', async
         updatedAt: 10,
     }]);
     assert.equal(second.projectsMerged, 0);
-    assert.deepEqual(await db.projects.toArray(), afterFirst);
+    assert.deepEqual((await db.projects.toArray()).map(withoutProjectPublicId), afterFirst);
 });
 
 test('cyclic or competing alias ownership fails closed without partial writes', async () => {
