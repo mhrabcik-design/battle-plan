@@ -21,8 +21,11 @@ import {
     type ProtocolDetachedSignature,
     type ProtocolContractArtifact,
     type ProtocolErrorCode,
+    type EventBatchPayload,
     type ProtocolMessageType,
     type ProtocolRevisionMaterial,
+    type ResultPayload,
+    type SnapshotPayload,
     type ProtocolSignedMessage,
     type ProtocolValidationResult,
     type ProtocolWireMessage,
@@ -42,10 +45,55 @@ const validators: Record<ProtocolMessageType, ProtocolStandaloneValidator> = {
     'drive-receipt': validateDriveReceipt,
 };
 
+const PAYLOAD_VALIDATION_UUID = '018f6f5e-2d88-7f2a-8f90-d6ad23000999';
+
+function payloadValidationEnvelope(
+    messageType: 'result' | 'event-batch',
+    targetKind: 'receiver' | 'stream',
+    payload: unknown,
+): unknown {
+    return {
+        signed: {
+            protocol_version: '2.0.0',
+            message_type: messageType,
+            message_id: PAYLOAD_VALIDATION_UUID,
+            workspace_id: PAYLOAD_VALIDATION_UUID,
+            producer_id: 'validation-producer',
+            target: { kind: targetKind, id: 'validation-target' },
+            created_at: '2026-01-01T00:00:00Z',
+            correlation_id: null,
+            causation_id: null,
+            signing_key_id: 'ed25519:validation-key',
+            pairing_epoch: 1,
+            payload,
+        },
+        signature: {
+            alg: 'Ed25519',
+            key_id: 'ed25519:validation-key',
+            pairing_epoch: 1,
+            value: 'AA',
+        },
+    };
+}
+
+/** Uses the manifest-covered standalone schema as the structural authority. */
+export function validateResultPayloadContract(payload: unknown): payload is ResultPayload {
+    return validateResult(payloadValidationEnvelope('result', 'receiver', payload));
+}
+
+/** Uses the manifest-covered standalone schema as the structural authority. */
+export function validateEventBatchPayloadContract(payload: unknown): payload is EventBatchPayload {
+    return validateEventBatch(payloadValidationEnvelope('event-batch', 'stream', payload));
+}
+
 class DuplicateJsonKeyError extends Error {}
 class CanonicalJsonError extends Error {}
 
-function invalid(code: ProtocolErrorCode, message: string, details?: readonly string[]): ProtocolValidationResult {
+function invalid(
+    code: ProtocolErrorCode,
+    message: string,
+    details?: readonly string[],
+): Extract<ProtocolValidationResult, { ok: false }> {
     return { ok: false, error: { code, message, ...(details ? { details } : {}) } };
 }
 
@@ -604,6 +652,62 @@ export async function verifyProtocolWireMessage(
         if (expiresAt <= now) return invalid('message_expired', 'Authenticated message is expired');
     }
     return validation;
+}
+
+export interface VerifiedSnapshotProof {
+    readonly contentSha256: `sha256:${string}`;
+    readonly workspaceId: string;
+    readonly producerId: string;
+    readonly targetStreamId: string;
+    readonly signingKeyId: string;
+    readonly pairingEpoch: number;
+    readonly payload: SnapshotPayload;
+}
+
+export type VerifySnapshotForInstallResult =
+    | { ok: true; proof: VerifiedSnapshotProof }
+    | Extract<ProtocolValidationResult, { ok: false }>;
+
+const verifiedSnapshotProofs = new WeakSet<object>();
+
+function deepFreezeProtocolValue<T>(value: T): T {
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    for (const child of Object.values(value)) deepFreezeProtocolValue(child);
+    return Object.freeze(value);
+}
+
+/**
+ * Mints an in-process recovery capability only after the complete U1 verifier
+ * authenticates one immutable snapshot and binds its target to its stream.
+ */
+export async function verifySnapshotForInstall(
+    input: unknown,
+    options: VerifyProtocolOptions,
+): Promise<VerifySnapshotForInstallResult> {
+    const verification = await verifyProtocolWireMessage(input, options);
+    if (verification.ok === false) return verification;
+    const signed = verification.message.signed;
+    if (signed.message_type !== 'snapshot') {
+        return invalid('schema_invalid', 'Snapshot recovery requires a signed snapshot message');
+    }
+    if (signed.target.kind !== 'stream' || signed.target.id !== signed.payload.stream_id) {
+        return invalid('target_mismatch', 'Snapshot target and payload stream must match');
+    }
+    const proof = deepFreezeProtocolValue<VerifiedSnapshotProof>({
+        contentSha256: verification.contentSha256,
+        workspaceId: signed.workspace_id,
+        producerId: signed.producer_id,
+        targetStreamId: signed.target.id,
+        signingKeyId: signed.signing_key_id,
+        pairingEpoch: signed.pairing_epoch,
+        payload: structuredClone(signed.payload),
+    });
+    verifiedSnapshotProofs.add(proof);
+    return { ok: true, proof };
+}
+
+export function isVerifiedSnapshotProof(value: unknown): value is VerifiedSnapshotProof {
+    return typeof value === 'object' && value !== null && verifiedSnapshotProofs.has(value);
 }
 
 export interface VerifyCapabilityDriveReceiptLinkOptions {

@@ -1,6 +1,7 @@
 ---
 title: Durable ledger for at-least-once agent commands
 date: 2026-08-10
+last_updated: 2026-08-11
 category: architecture-patterns
 module: Agent Collaboration Protocol
 problem_type: architecture_pattern
@@ -57,6 +58,16 @@ workers may retry the persisted payload or effect without repeating the domain
 mutation. A digest alone is insufficient for an outbox because recovery after a
 restart must not depend on reconstructing caller memory.
 
+Persisted protocol payloads must pass the same manifest-covered standalone
+validators that peers use. Local TypeScript types and hand-written lifecycle
+checks are not sufficient: they can drift on UUID syntax, portable public IDs,
+the normative timestamp profile, revision tuples, conflict fields, or batch
+limits. Result finalization validates the complete payload and binds all three
+revision fields to the receipt result. Event batches are generated inside the
+transaction, validated before the domain mutation runs, and capped by the
+public contract's 250-event limit
+([validation.ts](../../../battle-plan/src/services/agentProtocol/validation.ts)).
+
 Portable entity identities are part of the same correctness model. Local numeric
 Dexie keys are not wire identities. Tasks, Projects, and WorkLogs receive stable,
 immutable `publicId` values; the unique indexes are introduced only after a
@@ -64,6 +75,14 @@ preceding migration repairs missing or duplicate legacy values. WorkLog
 `publicId` remains separate from its existing Drive merge identity, `syncId`, so
 protocol identity migration cannot silently change Drive synchronization
 semantics ([db.ts](../../../battle-plan/src/db.ts)).
+
+Legacy identity repair and unique-index activation need separate schema
+versions. A direct upgrade from a database that already reports the old ledger
+version may still contain duplicate public IDs. The repair version therefore
+keeps indexes non-unique while deterministically replacing duplicates; the next
+version introduces unique indexes only after that transaction succeeds. Tests
+must cover direct legacy upgrades, numeric local-key preservation, reopen, and
+rollback on a failed repair.
 
 Polling coordination is only a local efficiency layer. The shared in-flight
 promise and optional Web Lock in
@@ -83,6 +102,15 @@ mutating twice.
 Persisting full events and result payloads also makes restart recovery and Hermes
 conformance testable from storage alone. Stable public identities prevent local
 row numbers from leaking into the cross-device contract.
+
+Snapshot recovery is a security and atomicity boundary, not a boolean
+precondition. The full U1 verifier authenticates the signed snapshot, pairing,
+workspace, producer, stream target, and content digest, then mints an immutable
+in-process proof that callers cannot manufacture structurally. Installing the
+verified projection and advancing the consumer cursor share one IndexedDB
+transaction. A crash or incomplete projection leaves both the prior domain state
+and `requiresSnapshot` cursor state intact; a high-water mark may never move the
+cursor backward.
 
 ## When to Apply
 
@@ -112,6 +140,8 @@ verify envelope and pairing
 Required regression coverage includes same-digest replay after reopening the
 database, conflicting-digest replay producing exactly one result, caller-input
 mutation during an asynchronous claim, expired lease fencing, crash rollback,
+manifest-exact result and event rejection, the 250-event batch boundary,
+cryptographically verified snapshot installation with crash rollback,
 outbox/event recovery after restart, duplicate portable identities during
 migration, poll rejection cleanup, and operation without Web Locks. The focused
 U3 suites live beside

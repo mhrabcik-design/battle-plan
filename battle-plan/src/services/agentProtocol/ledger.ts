@@ -16,6 +16,12 @@ import {
     type ProtocolRevision,
     type ResultPayload,
 } from './contracts.ts';
+import {
+    isVerifiedSnapshotProof,
+    validateEventBatchPayloadContract,
+    validateResultPayloadContract,
+    type VerifiedSnapshotProof,
+} from './validation.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 export const TERMINAL_RECEIPT_RETENTION_MS = PROTOCOL_RETENTION.idempotencyDays * DAY_MS;
@@ -110,7 +116,8 @@ export type FinalizeCommandResult =
 const RECEIPT_SEPARATOR = '\0';
 const DECIMAL_COUNTER = /^(0|[1-9][0-9]*)$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
-const IDENTITY = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/;
+const UUID = /^(?:[Uu][Rr][Nn]:[Uu][Uu][Ii][Dd]:)?[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$/;
+const IDENTITY = /^[a-z][a-z0-9._:-]{2,127}$/;
 
 function receiptId(receiverId: string, commandId: string): string {
     return `${receiverId}${RECEIPT_SEPARATOR}${commandId}`;
@@ -138,7 +145,7 @@ function historyEntry(
 }
 
 function validClaimInput(input: ClaimCommandInput): boolean {
-    return IDENTITY.test(input.commandId)
+    return UUID.test(input.commandId)
         && IDENTITY.test(input.producerId)
         && IDENTITY.test(input.targetReceiverId)
         && IDENTITY.test(input.localReceiverId)
@@ -149,12 +156,47 @@ function validClaimInput(input: ClaimCommandInput): boolean {
         && input.leaseDurationMs > 0;
 }
 
+function validResultPayload(
+    payload: unknown,
+    input: FinalizeCommandInput,
+): payload is ResultPayload {
+    if (!validateResultPayloadContract(payload)) return false;
+    const result = payload;
+    if (result.command_id !== input.claim.commandId || result.state !== input.lifecycle) return false;
+
+    switch (result.state) {
+        case 'awaiting_approval':
+            return input.lifecycle === 'awaiting_approval' && input.errorCode == null;
+        case 'applied':
+            return input.lifecycle === 'applied'
+                && input.result?.entityPublicId === result.entity_public_id
+                && input.result.revision?.revision_id === result.revision.revision_id
+                && input.result.revision.base_revision === result.revision.base_revision
+                && input.result.revision.mutation_id === result.revision.mutation_id
+                && input.errorCode == null;
+        case 'retry_scheduled': {
+            const retryAt = Date.parse(result.retry_at);
+            return input.lifecycle === 'retry_scheduled'
+                && result.error_code === 'transport_retryable'
+                && Number.isFinite(retryAt)
+                && retryAt === input.retryAt;
+        }
+        case 'blocked':
+        case 'stale':
+        case 'expired':
+        case 'rejected':
+            return result.state === input.lifecycle && result.error_code === input.errorCode;
+    }
+}
+
 function validFinalizeInput(input: FinalizeCommandInput): boolean {
-    const resultRows = (input.outbox ?? []).filter((row) => row.family === 'result');
+    const outbox = input.outbox ?? [];
+    if (outbox.some((row) => row.family === 'event')) return false;
+    if (outbox.some((row) => !row.id || !UUID.test(row.messageId) || !row.payload)) return false;
+    if ((input.events?.length ?? 0) > 250) return false;
+    const resultRows = outbox.filter((row) => row.family === 'result');
     const resultPayload = resultRows.length === 1 ? resultRows[0]!.payload : undefined;
-    if (!resultPayload
-        || resultPayload.command_id !== input.claim.commandId
-        || resultPayload.state !== input.lifecycle) return false;
+    if (!validResultPayload(resultPayload, input)) return false;
     const payloadErrorCode = 'error_code' in resultPayload ? resultPayload.error_code : undefined;
     if (payloadErrorCode !== input.errorCode) return false;
 
@@ -213,6 +255,24 @@ async function terminalizeUnownedReceipt(
         updatedAt: now,
     });
     return terminalReceipt;
+}
+
+function freshUnownedReceipt(input: ClaimCommandInput, now: number): AgentCommandReceiptRow {
+    return {
+        id: receiptId(input.localReceiverId, input.commandId),
+        commandId: input.commandId,
+        payloadDigest: input.payloadDigest,
+        producerId: input.producerId,
+        receiverId: input.localReceiverId,
+        lifecycle: 'executing',
+        effectState: 'none',
+        fencingToken: 0,
+        attempts: 0,
+        historyCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        retainUntil: now + TERMINAL_RECEIPT_RETENTION_MS,
+    };
 }
 
 export class AgentProtocolLedger {
@@ -298,27 +358,30 @@ export class AgentProtocolLedger {
                 const canReclaim = canReclaimExpiredLease || canRunScheduledRetry;
                 if (existing && !canReclaim) return { status: 'replay', receipt: existing } as const;
                 if (command.expiresAt <= now) {
-                    return existing
-                        ? {
-                            status: 'replay',
-                            receipt: await terminalizeUnownedReceipt(
-                                this.db, existing, 'expired', 'message_expired', now,
-                            ),
-                        } as const
-                        : { status: 'quarantined', reason: 'message_expired' } as const;
+                    return {
+                        status: 'replay',
+                        receipt: await terminalizeUnownedReceipt(
+                            this.db,
+                            existing ?? freshUnownedReceipt(command, now),
+                            'expired',
+                            'message_expired',
+                            now,
+                        ),
+                    } as const;
                 }
 
                 const receiver = await this.db.agentReceiverCapabilities.get(command.localReceiverId);
                 if (!receiver?.enabled || receiver.status !== 'ready') {
-                    if (existing) {
-                        return {
-                            status: 'replay',
-                            receipt: await terminalizeUnownedReceipt(
-                                this.db, existing, 'blocked', 'capability_blocked', now,
-                            ),
-                        } as const;
-                    }
-                    return { status: 'quarantined', reason: 'receiver_disabled' } as const;
+                    return {
+                        status: 'replay',
+                        receipt: await terminalizeUnownedReceipt(
+                            this.db,
+                            existing ?? freshUnownedReceipt(command, now),
+                            'blocked',
+                            'capability_blocked',
+                            now,
+                        ),
+                    } as const;
                 }
 
                 const fencingToken = (existing?.fencingToken ?? 0) + 1;
@@ -414,8 +477,6 @@ export class AgentProtocolLedger {
                     throw new TypeError('retry_scheduled requires a future retryAt');
                 }
 
-                const value = await mutation();
-
                 const effectState = finalization.effects?.length ? 'pending' : current.effectState;
                 const receipt: AgentCommandReceiptRow = {
                     ...current,
@@ -476,6 +537,52 @@ export class AgentProtocolLedger {
                     });
                 }
 
+                const eventsByStream = new Map<string, AgentProtocolEventRow[]>();
+                for (const event of eventRows) {
+                    const batch = eventsByStream.get(event.streamId) ?? [];
+                    batch.push(event);
+                    eventsByStream.set(event.streamId, batch);
+                }
+                for (const [streamId, events] of eventsByStream) {
+                    const first = events[0]!;
+                    const last = events[events.length - 1]!;
+                    const payload: EventBatchPayload = {
+                        stream_id: streamId,
+                        sequence_from: first.sequence,
+                        sequence_to: last.sequence,
+                        events: events.map((event) => ({
+                            event_id: event.eventId,
+                            sequence: event.sequence,
+                            event_type: event.eventType,
+                            entity_kind: event.entityKind,
+                            entity_public_id: event.entityPublicId,
+                            revision: event.revision,
+                            ...(event.conflictHeads ? { conflict_heads: event.conflictHeads } : {}),
+                            occurred_at: event.occurredAt,
+                            actor: event.actor,
+                            origin: event.origin,
+                            cause_id: event.causeId,
+                            projection: event.projection,
+                        })),
+                    };
+                    if (!validateEventBatchPayloadContract(payload)) {
+                        throw new TypeError('Generated event batch violates the public protocol contract');
+                    }
+                    outboxRows.push({
+                        id: `event-batch${RECEIPT_SEPARATOR}${current.id}${RECEIPT_SEPARATOR}${current.fencingToken}${RECEIPT_SEPARATOR}${streamId}${RECEIPT_SEPARATOR}${first.sequence}-${last.sequence}`,
+                        family: 'event',
+                        messageId: crypto.randomUUID(),
+                        payload,
+                        commandReceiptId: current.id,
+                        fencingToken: current.fencingToken,
+                        status: 'pending',
+                        attempts: 0,
+                        createdAt: now,
+                        updatedAt: now,
+                    });
+                }
+
+                const value = await mutation();
                 await this.db.agentCommandReceipts.put(receipt);
                 await this.db.agentCommandReceiptHistory.add(historyEntry(
                     receipt,
@@ -530,7 +637,8 @@ export class AgentProtocolLedger {
             const observed = BigInt(input.sequence);
             if (observed <= last) return { status: 'replay' } as const;
             const expected = last + 1n;
-            if (current?.requiresSnapshot || observed !== expected) {
+            const inactive = current != null && current.inactiveAfter <= now;
+            if (current?.requiresSnapshot || inactive || observed !== expected) {
                 const state: AgentConsumerStateRow = {
                     id,
                     consumerId: input.consumerId,
@@ -555,6 +663,51 @@ export class AgentProtocolLedger {
                 updatedAt: now,
             });
             return { status: 'advanced' } as const;
+        });
+    }
+
+    /** Installs one verifier-bound projection and releases its cursor atomically. */
+    async installVerifiedConsumerSnapshot<T>(input: {
+        consumerId: string;
+        proof: VerifiedSnapshotProof;
+        domainTables: Table[];
+        installProjection: (payload: VerifiedSnapshotProof['payload']) => Promise<{
+            value: T;
+            installedEntityCount: number;
+        }>;
+    }): Promise<{ consumerState: AgentConsumerStateRow; value: T }> {
+        if (!IDENTITY.test(input.consumerId)
+            || !isVerifiedSnapshotProof(input.proof)
+            || !IDENTITY.test(input.proof.targetStreamId)
+            || !DECIMAL_COUNTER.test(input.proof.payload.high_water_mark)
+            || typeof input.installProjection !== 'function'
+            || (!input.domainTables.length && input.proof.payload.entities.length > 0)) {
+            throw new TypeError('Verified snapshot recovery capability was not satisfied');
+        }
+        const proof = input.proof;
+        const id = consumerStateId(input.consumerId, proof.targetStreamId);
+        return this.db.transaction('rw', [this.db.agentConsumerStates, ...input.domainTables], async () => {
+            const now = this.readNow();
+            const current = await this.db.agentConsumerStates.get(id);
+            if (BigInt(proof.payload.high_water_mark) < BigInt(current?.lastSequence ?? '0')) {
+                throw new TypeError('Snapshot high-water mark cannot move backward');
+            }
+            const installation = await input.installProjection(structuredClone(proof.payload));
+            if (!Number.isSafeInteger(installation.installedEntityCount)
+                || installation.installedEntityCount !== proof.payload.entities.length) {
+                throw new TypeError('Snapshot projection did not install every verified entity');
+            }
+            const recovered: AgentConsumerStateRow = {
+                id,
+                consumerId: input.consumerId,
+                streamId: proof.targetStreamId,
+                lastSequence: proof.payload.high_water_mark,
+                requiresSnapshot: false,
+                inactiveAfter: now + CONSUMER_INACTIVITY_MS,
+                updatedAt: now,
+            };
+            await this.db.agentConsumerStates.put(recovered);
+            return { consumerState: recovered, value: installation.value };
         });
     }
 }

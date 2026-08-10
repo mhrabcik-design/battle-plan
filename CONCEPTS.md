@@ -61,6 +61,8 @@ An ordered, per-producer sequence of safe domain-change projections that lets He
 
 Consumers advance their cursor only after durable ingestion. A sequence gap or lost cursor requires a protocol snapshot before incremental consumption resumes.
 
+Snapshot recovery resumes only from a cryptographically authenticated snapshot whose projection installation and cursor advancement commit atomically. A failed or incomplete installation leaves the consumer in snapshot-required state.
+
 ### Shared Audio AI Pipeline
 The browser-side voice-processing layer shared by task voice and WorkLog voice flows for recording, audio normalization, Gemini request preparation, retry/error handling, and missing-key messaging.
 

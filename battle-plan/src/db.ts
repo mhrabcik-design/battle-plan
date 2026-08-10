@@ -143,7 +143,7 @@ export interface AgentCommandReceiptRow {
     retryAt?: number;
     fencingToken: number;
     attempts: number;
-    result?: { entityPublicId?: string; revisionId?: `sha256:${string}`; errorCode?: ProtocolErrorCode };
+    result?: { entityPublicId?: string; revision?: ProtocolRevision; errorCode?: ProtocolErrorCode };
     historyCount: number;
     createdAt: number;
     updatedAt: number;
@@ -275,6 +275,7 @@ export interface AgentReceiverCapabilityRow {
 }
 
 const createPortableId = (kind: 'task' | 'project' | 'worklog'): string => `${kind}_${crypto.randomUUID()}`;
+const portableIdentityRepairTransactions = new WeakSet<Transaction>();
 
 async function backfillPortableIdentities(transaction: Transaction): Promise<void> {
     const tasks = transaction.table<Task, number>('tasks');
@@ -322,11 +323,16 @@ async function backfillPortableIdentities(transaction: Transaction): Promise<voi
             changedWorkLogs.push({ ...workLog, publicId, syncId });
         }
     }
-    await Promise.all([
-        changedTasks.length ? tasks.bulkPut(changedTasks) : Promise.resolve(),
-        changedProjects.length ? projects.bulkPut(changedProjects) : Promise.resolve(),
-        changedWorkLogs.length ? workLogs.bulkPut(changedWorkLogs) : Promise.resolve(),
-    ]);
+    portableIdentityRepairTransactions.add(transaction);
+    try {
+        await Promise.all([
+            changedTasks.length ? tasks.bulkPut(changedTasks) : Promise.resolve(),
+            changedProjects.length ? projects.bulkPut(changedProjects) : Promise.resolve(),
+            changedWorkLogs.length ? workLogs.bulkPut(changedWorkLogs) : Promise.resolve(),
+        ]);
+    } finally {
+        portableIdentityRepairTransactions.delete(transaction);
+    }
 }
 
 export class BattlePlanDB extends Dexie {
@@ -452,9 +458,31 @@ export class BattlePlanDB extends Dexie {
             agentReceiverCapabilities: 'receiverId, enabled, status, persistenceStatus, updatedAt',
         }).upgrade(backfillPortableIdentities);
 
-        // Unique indexes are introduced only after v11 has repaired legacy
-        // duplicates, so index creation cannot abort before the backfill runs.
+        // v12 is an explicit repair stage for direct v11 upgrades. A database
+        // can already report v11 while still containing duplicate public IDs,
+        // so keep these indexes non-unique until the repair transaction ends.
         this.version(12).stores({
+            tasks: '++id, publicId, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+            settings: 'id',
+            workLogs: '++id, publicId, syncId, date, projectId, hours, createdAt',
+            projects: '++id, publicId, name, isActive, createdAt',
+            agentInbox: 'id, action, entity_type, applied_at, received_at',
+            agentCommandReceipts: 'id, commandId, receiverId, lifecycle, leaseExpiresAt, retainUntil, updatedAt',
+            agentCommandReceiptHistory: 'id, receiptId, entryIndex, lifecycle, at',
+            agentCommandConflicts: 'id, commandId, receiverId, createdAt, retainUntil',
+            agentEventStreams: 'streamId, producerId, updatedAt',
+            agentProtocolEvents: 'id, eventId, streamId, producerId, entityKind, entityPublicId, createdAt, publishedAt',
+            agentProtocolOutbox: 'id, family, messageId, commandReceiptId, status, nextAttemptAt, createdAt',
+            agentProtocolEffects: 'id, commandReceiptId, kind, state, nextAttemptAt, updatedAt',
+            agentConsumerStates: 'id, consumerId, streamId, requiresSnapshot, inactiveAfter, updatedAt',
+            agentSigningKeyRefs: 'keyId, receiverId, pairingEpoch, status, updatedAt',
+            agentPairingKeys: 'id, workspaceId, producerId, receiverId, keyId, pairingEpoch, status, retainUntil',
+            agentReceiverCapabilities: 'receiverId, enabled, status, persistenceStatus, updatedAt',
+        }).upgrade(backfillPortableIdentities);
+
+        // v13 creates unique indexes only after every supported upgrade path
+        // has completed the non-unique repair stage.
+        this.version(13).stores({
             tasks: '++id, &publicId, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
             settings: 'id',
             workLogs: '++id, &publicId, syncId, date, projectId, hours, createdAt',
@@ -479,6 +507,7 @@ export class BattlePlanDB extends Dexie {
             task.publicId ??= createPortableId('task');
         });
         this.tasks.hook('updating', (changes, _primaryKey, task) => {
+            if (Dexie.currentTransaction && portableIdentityRepairTransactions.has(Dexie.currentTransaction)) return;
             if (!task.publicId) return { publicId: createPortableId('task') };
             if ('publicId' in changes && changes.publicId !== task.publicId) return { publicId: task.publicId };
         });
@@ -486,6 +515,7 @@ export class BattlePlanDB extends Dexie {
             project.publicId ??= createPortableId('project');
         });
         this.projects.hook('updating', (changes, _primaryKey, project) => {
+            if (Dexie.currentTransaction && portableIdentityRepairTransactions.has(Dexie.currentTransaction)) return;
             if (!project.publicId) return { publicId: createPortableId('project') };
             if ('publicId' in changes && changes.publicId !== project.publicId) return { publicId: project.publicId };
         });
@@ -494,6 +524,7 @@ export class BattlePlanDB extends Dexie {
             workLog.syncId ??= crypto.randomUUID();
         });
         this.workLogs.hook('updating', (changes, _primaryKey, workLog) => {
+            if (Dexie.currentTransaction && portableIdentityRepairTransactions.has(Dexie.currentTransaction)) return;
             const protectedChanges: Partial<WorkLog> = {};
             if (!workLog.publicId) protectedChanges.publicId = createPortableId('worklog');
             else if ('publicId' in changes && changes.publicId !== workLog.publicId) protectedChanges.publicId = workLog.publicId;

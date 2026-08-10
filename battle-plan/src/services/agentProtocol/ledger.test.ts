@@ -6,20 +6,38 @@ import Dexie from 'dexie';
 
 import { BattlePlanDB } from '../../db.ts';
 import {
+    calculateEd25519PublicKeyFingerprint,
+    calculateProtocolRevisionId,
+    createDetachedSignature,
+    verifySnapshotForInstall,
+    type VerifiedSnapshotProof,
+} from './validation.ts';
+import type { ProtocolSignedMessage, ProtocolWireMessage } from './contracts.ts';
+import {
     AgentProtocolLedger,
+    CONSUMER_INACTIVITY_MS,
     type ClaimCommandInput,
     type FinalizeCommandInput,
     type PendingOutboxInput,
 } from './ledger.ts';
 
 const RECEIVER_ID = 'battleplan-receiver-a';
+const COMMAND_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000401';
+const DISABLED_COMMAND_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000403';
+const FRESH_DISABLED_COMMAND_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000404';
+const EVENT_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000405';
+const CAUSE_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000406';
 const DIGEST_A = `sha256:${'a'.repeat(64)}` as const;
 const DIGEST_B = `sha256:${'b'.repeat(64)}` as const;
-const REVISION = { revision_id: DIGEST_B, base_revision: null, mutation_id: 'mutation-1' } as const;
+const REVISION = {
+    revision_id: DIGEST_B,
+    base_revision: null,
+    mutation_id: '018f6f5e-2d88-7f2a-8f90-d6ad23000402',
+} as const;
 
 function input(overrides: Partial<ClaimCommandInput> = {}): ClaimCommandInput {
     return {
-        commandId: 'command-1',
+        commandId: COMMAND_ID,
         payloadDigest: DIGEST_A,
         producerId: 'hermes-agent',
         targetReceiverId: RECEIVER_ID,
@@ -41,9 +59,9 @@ function appliedResultOutbox(id = 'result-command-1'): PendingOutboxInput {
     return {
         id,
         family: 'result',
-        messageId: id,
+        messageId: crypto.randomUUID(),
         payload: {
-            command_id: 'command-1',
+            command_id: COMMAND_ID,
             state: 'applied',
             entity_public_id: 'task_public_1',
             revision: REVISION,
@@ -59,6 +77,73 @@ async function ready(db: BattlePlanDB): Promise<void> {
         persistenceStatus: 'granted',
         updatedAt: 1,
     });
+}
+
+async function verifiedSnapshotProof(highWaterMark = '10'): Promise<VerifiedSnapshotProof> {
+    const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const rawPublicKey = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey));
+    const projection = { title: 'Snapshot task', status: 'pending' };
+    const revision = {
+        revision_id: calculateProtocolRevisionId({
+            entity_kind: 'task',
+            entity_public_id: 'task_snapshot_1',
+            base_revision: null,
+            mutation_id: CAUSE_ID,
+            projection,
+            tombstone: false,
+        }),
+        base_revision: null,
+        mutation_id: CAUSE_ID,
+    } as const;
+    const signed: Extract<ProtocolSignedMessage, { message_type: 'snapshot' }> = {
+        protocol_version: '2.0.0',
+        message_type: 'snapshot',
+        message_id: '018f6f5e-2d88-7f2a-8f90-d6ad23000407',
+        workspace_id: '018f6f5e-2d88-7f2a-8f90-d6ad23000408',
+        producer_id: 'hermes-agent',
+        target: { kind: 'stream', id: 'battleplan-events' },
+        created_at: '2026-08-10T12:00:00Z',
+        correlation_id: null,
+        causation_id: null,
+        signing_key_id: 'ed25519:hermes-test',
+        pairing_epoch: 1,
+        payload: {
+            stream_id: 'battleplan-events',
+            high_water_mark: highWaterMark,
+            generated_at: '2026-08-10T12:00:00Z',
+            entities: [{
+                state: 'resolved',
+                entity_kind: 'task',
+                entity_public_id: 'task_snapshot_1',
+                revision,
+                projection,
+                tombstone: false,
+            }],
+        },
+    };
+    const message: ProtocolWireMessage = {
+        signed,
+        signature: await createDetachedSignature(signed, keys.privateKey),
+    };
+    const verification = await verifySnapshotForInstall(message, {
+        trustedPairing: {
+            status: 'active',
+            workspaceId: signed.workspace_id,
+            producerId: signed.producer_id,
+            targetId: signed.target.id,
+            keyId: signed.signing_key_id,
+            pairingEpoch: signed.pairing_epoch,
+            rawPublicKey: Buffer.from(rawPublicKey).toString('base64url'),
+            fingerprint: calculateEd25519PublicKeyFingerprint(rawPublicKey),
+        },
+        trustedContractArtifact: {
+            id: 'battleplan-hermes-protocol',
+            version: '2.0.0',
+            sha256: DIGEST_A,
+        },
+    });
+    if (!verification.ok) assert.fail(`${verification.error.code}: ${verification.error.message}`);
+    return verification.proof;
 }
 
 test('ten concurrent claims across independent Dexie connections yield one fenced owner and one receipt', async () => {
@@ -104,7 +189,7 @@ test('identical replay returns the durable lifecycle while a different digest re
         const finalized = await ledger.finalizeCommand({
             claim: first.claim,
             lifecycle: 'applied',
-            result: { entityPublicId: 'task_public_1', revisionId: DIGEST_B },
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
             outbox: [appliedResultOutbox()],
         });
         assert.equal(finalized.status, 'finalized');
@@ -168,6 +253,7 @@ test('expired lease is reclaimed with a higher fence and stale worker cannot fin
         const expiredOwner = await firstLedger.finalizeCommand({
             claim: first.claim,
             lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
             outbox: [appliedResultOutbox('result-expired-owner')],
         });
         assert.equal(expiredOwner.status, 'fence_lost');
@@ -182,9 +268,10 @@ test('expired lease is reclaimed with a higher fence and stale worker cannot fin
         const stale = await firstLedger.finalizeCommand({
             claim: first.claim,
             lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
             outbox: [{
-                id: 'result-command-1-stale', family: 'result', messageId: 'result-command-1',
-                payload: { command_id: 'command-1', state: 'applied', entity_public_id: 'task_public_1', revision: REVISION },
+                id: 'result-command-1-stale', family: 'result', messageId: crypto.randomUUID(),
+                payload: { command_id: COMMAND_ID, state: 'applied', entity_public_id: 'task_public_1', revision: REVISION },
             }],
         });
         assert.equal(stale.status, 'fence_lost');
@@ -194,20 +281,28 @@ test('expired lease is reclaimed with a higher fence and stale worker cannot fin
         const current = await secondLedger.finalizeCommand({
             claim: second.claim,
             lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
             outbox: [{
-                id: 'result-command-1-current', family: 'result', messageId: 'result-command-1',
-                payload: { command_id: 'command-1', state: 'applied', entity_public_id: 'task_public_1', revision: REVISION },
+                id: 'result-command-1-current', family: 'result', messageId: crypto.randomUUID(),
+                payload: { command_id: COMMAND_ID, state: 'applied', entity_public_id: 'task_public_1', revision: REVISION },
             }],
             events: [{
-                eventId: 'event-command-1', streamId: 'battleplan-events', producerId: 'battleplan-producer',
+                eventId: EVENT_ID, streamId: 'battleplan-events', producerId: 'battleplan-producer',
                 eventType: 'entity_created', entityKind: 'task', entityPublicId: 'task_public_1',
                 revision: REVISION, payloadDigest: DIGEST_A, occurredAt: '2026-08-10T12:00:00Z',
-                actor: 'battleplan-user', origin: 'ui', causeId: 'mutation-1',
+                actor: 'battleplan-user', origin: 'ui', causeId: CAUSE_ID,
                 projection: { title: 'Safe title' },
             }],
         });
         assert.equal(current.status, 'finalized');
-        assert.equal(await firstDb.agentProtocolOutbox.count(), 1);
+        assert.equal(await firstDb.agentProtocolOutbox.count(), 2);
+        const eventOutbox = (await firstDb.agentProtocolOutbox.toArray()).find((row) => row.family === 'event');
+        assert.equal(eventOutbox?.family, 'event');
+        if (eventOutbox?.family === 'event') {
+            assert.equal(eventOutbox.payload.sequence_from, '1');
+            assert.equal(eventOutbox.payload.sequence_to, '1');
+            assert.equal(eventOutbox.payload.events[0]?.event_id, EVENT_ID);
+        }
         assert.equal((await firstDb.agentProtocolEvents.toCollection().first())?.sequence, '1');
         firstDb.close();
         secondDb.close();
@@ -217,8 +312,8 @@ test('expired lease is reclaimed with a higher fence and stale worker cannot fin
         assert.deepEqual(persistedEvent?.revision, REVISION);
         assert.equal(persistedEvent?.occurredAt, '2026-08-10T12:00:00Z');
         assert.equal(persistedEvent?.actor, 'battleplan-user');
-        assert.equal(persistedEvent?.causeId, 'mutation-1');
-        const persistedOutbox = await reopened.agentProtocolOutbox.toCollection().first();
+        assert.equal(persistedEvent?.causeId, CAUSE_ID);
+        const persistedOutbox = (await reopened.agentProtocolOutbox.toArray()).find((row) => row.family === 'result');
         assert.equal(persistedOutbox?.family, 'result');
         if (persistedOutbox?.family === 'result') assert.equal(persistedOutbox.payload.state, 'applied');
         reopened.close();
@@ -249,7 +344,7 @@ test('claim snapshots caller-owned input before the asynchronous transaction bou
         assert.equal(result.status, 'claimed');
         if (result.status === 'claimed') {
             assert.equal(result.claim.receiverId, RECEIVER_ID);
-            assert.equal(result.claim.commandId, 'command-1');
+            assert.equal(result.claim.commandId, COMMAND_ID);
         }
         assert.equal(await db.agentCommandReceipts.where('receiverId').equals('battleplan-receiver-attacker').count(), 0);
     } finally {
@@ -279,9 +374,97 @@ test('trusted clock and lifecycle validation fail closed before mutation', async
         await assert.rejects(ledger.finalizeCommand({
             claim: claimed.claim,
             lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
             outbox: [appliedResultOutbox('result-invalid-clock')],
         }), /finite timestamp/);
         assert.equal((await db.agentCommandReceipts.get(claimed.claim.receiptId))?.lifecycle, 'executing');
+
+        clock.now = 1_100;
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [{
+                id: 'incomplete-result', family: 'result', messageId: crypto.randomUUID(),
+                payload: { command_id: COMMAND_ID, state: 'applied' } as never,
+            }],
+        }), /Invalid command lifecycle transition/);
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [{
+                id: 'inconsistent-result', family: 'result', messageId: crypto.randomUUID(),
+                payload: {
+                    command_id: COMMAND_ID, state: 'applied', entity_public_id: 'task_public_other',
+                    revision: REVISION,
+                },
+            }],
+        }), /Invalid command lifecycle transition/);
+        for (const payload of [
+            {
+                command_id: COMMAND_ID,
+                state: 'applied',
+                entity_public_id: 'INVALID PUBLIC ID',
+                revision: REVISION,
+            },
+            {
+                command_id: COMMAND_ID,
+                state: 'applied',
+                entity_public_id: 'task_public_1',
+                revision: { ...REVISION, mutation_id: CAUSE_ID },
+            },
+            {
+                command_id: COMMAND_ID,
+                state: 'applied',
+                entity_public_id: 'task_public_1',
+                revision: REVISION,
+                effects: [{ effect_id: 'not-a-uuid', kind: 'drive', state: 'pending' }],
+            },
+        ]) {
+            await assert.rejects(ledger.finalizeCommand({
+                claim: claimed.claim,
+                lifecycle: 'applied',
+                result: { entityPublicId: 'task_public_1', revision: REVISION },
+                outbox: [{
+                    id: 'adversarial-result', family: 'result', messageId: crypto.randomUUID(), payload,
+                } as never],
+            }), /Invalid command lifecycle transition/);
+        }
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [{ ...appliedResultOutbox('invalid-envelope-id'), messageId: 'not-a-uuid' }],
+        }), /Invalid command lifecycle transition/);
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'retry_scheduled',
+            errorCode: 'transport_retryable',
+            retryAt: 2_000,
+            outbox: [{
+                id: 'inconsistent-retry', family: 'result', messageId: crypto.randomUUID(),
+                payload: {
+                    command_id: COMMAND_ID, state: 'retry_scheduled',
+                    error_code: 'transport_retryable', retry_at: '1970-01-01T00:00:03Z',
+                },
+            }],
+        }), /Invalid command lifecycle transition/);
+        const normalizedImpossibleDate = Date.parse('2026-02-31T00:00:00Z');
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'retry_scheduled',
+            errorCode: 'transport_retryable',
+            retryAt: normalizedImpossibleDate,
+            outbox: [{
+                id: 'impossible-retry-date', family: 'result', messageId: crypto.randomUUID(),
+                payload: {
+                    command_id: COMMAND_ID, state: 'retry_scheduled',
+                    error_code: 'transport_retryable', retry_at: '2026-02-31T00:00:00Z',
+                },
+            }],
+        }), /Invalid command lifecycle transition/);
+        assert.equal(await db.agentProtocolOutbox.count(), 0);
     } finally {
         await db.delete();
     }
@@ -305,9 +488,10 @@ test('an injected crash rolls domain state, receipt transition, and outbox back 
                 {
                     claim: claimed.claim,
                     lifecycle: 'applied',
+                    result: { entityPublicId: 'task_public_1', revision: REVISION },
                     outbox: [{
-                        id: 'result-command-crash', family: 'result', messageId: 'result-command-crash',
-                        payload: { command_id: 'command-1', state: 'applied', entity_public_id: 'task_public_1', revision: REVISION },
+                        id: 'result-command-crash', family: 'result', messageId: crypto.randomUUID(),
+                        payload: { command_id: COMMAND_ID, state: 'applied', entity_public_id: 'task_public_1', revision: REVISION },
                     }],
                 },
                 [db.tasks],
@@ -347,9 +531,9 @@ test('retry lifecycle is replayed before retryAt and reclaimed afterward under a
             retryAt: 2_000,
             errorCode: 'transport_retryable',
             outbox: [{
-                id: 'result-command-retry', family: 'result', messageId: 'result-command-retry',
+                id: 'result-command-retry', family: 'result', messageId: crypto.randomUUID(),
                 payload: {
-                    command_id: 'command-1', state: 'retry_scheduled',
+                    command_id: COMMAND_ID, state: 'retry_scheduled',
                     error_code: 'transport_retryable', retry_at: '1970-01-01T00:00:02Z',
                 },
             }],
@@ -387,14 +571,14 @@ test('an unowned receipt becomes terminal when its command expires or receiver i
         clock.now = 2_000;
         await db.agentReceiverCapabilities.update(RECEIVER_ID, { enabled: true, status: 'ready' });
         const disabling = await ledger.claimCommand(input({
-            commandId: 'command-disabled',
+            commandId: DISABLED_COMMAND_ID,
             leaseDurationMs: 100,
         }));
         assert.equal(disabling.status, 'claimed');
         clock.now = 2_101;
         await db.agentReceiverCapabilities.update(RECEIVER_ID, { enabled: false, status: 'disabled' });
         const blocked = await ledger.claimCommand(input({
-            commandId: 'command-disabled',
+            commandId: DISABLED_COMMAND_ID,
             leaseOwner: 'recovery-owner',
             leaseDurationMs: 100,
         }));
@@ -406,7 +590,7 @@ test('an unowned receipt becomes terminal when its command expires or receiver i
     }
 });
 
-test('wrong receiver, expiry, and disabled capability stay quarantined before receipt creation', async () => {
+test('authenticated fresh expiry and disabled capability create durable terminal evidence', async () => {
     const databaseName = `BattlePlan-ledger-preconditions-${Date.now()}-${Math.random()}`;
     const db = new BattlePlanDB(databaseName);
     await db.open();
@@ -417,13 +601,17 @@ test('wrong receiver, expiry, and disabled capability stay quarantined before re
         const wrong = await ledger.claimCommand(input({ targetReceiverId: 'other-receiver' }));
         assert.deepEqual(wrong, { status: 'quarantined', reason: 'target_mismatch' });
         const expired = await ledger.claimCommand(input({ expiresAt: 999 }));
-        assert.deepEqual(expired, { status: 'quarantined', reason: 'message_expired' });
+        assert.equal(expired.status, 'replay');
+        if (expired.status === 'replay') assert.equal(expired.receipt.lifecycle, 'expired');
         await db.agentReceiverCapabilities.update(RECEIVER_ID, { enabled: false, status: 'disabled' });
-        const disabled = await ledger.claimCommand(input());
-        assert.deepEqual(disabled, { status: 'quarantined', reason: 'receiver_disabled' });
+        const disabled = await ledger.claimCommand(input({ commandId: FRESH_DISABLED_COMMAND_ID }));
+        assert.equal(disabled.status, 'replay');
+        if (disabled.status === 'replay') assert.equal(disabled.receipt.lifecycle, 'blocked');
         const malformed = await ledger.claimCommand(input({ payloadDigest: 'sha256:not-a-digest' as typeof DIGEST_A }));
         assert.deepEqual(malformed, { status: 'quarantined', reason: 'schema_invalid' });
-        assert.equal(await db.agentCommandReceipts.count(), 0);
+        assert.equal(await db.agentCommandReceipts.count(), 2);
+        assert.equal(await db.agentCommandReceiptHistory.count(), 2);
+        assert.equal(await db.agentProtocolOutbox.count(), 2);
     } finally {
         await db.delete();
     }
@@ -466,6 +654,156 @@ test('consumer sequence state stops on a gap and preserves the durable expected 
         assert.equal(state?.gapExpected, '2');
         assert.equal(state?.gapObserved, '3');
         assert.equal(state?.requiresSnapshot, true);
+    } finally {
+        await db.delete();
+    }
+});
+
+test('inactive consumer requires a verified snapshot before accepting the next incremental event', async () => {
+    const db = new BattlePlanDB(`BattlePlan-ledger-inactive-${Date.now()}-${Math.random()}`);
+    await db.open();
+    const clock = { now: 1 };
+    const ledger = ledgerFor(db, clock);
+    try {
+        assert.equal((await ledger.ingestConsumerSequence({
+            consumerId: 'hermes', streamId: 'battleplan-events', sequence: '1',
+        })).status, 'advanced');
+        clock.now = 1 + CONSUMER_INACTIVITY_MS;
+        const inactive = await ledger.ingestConsumerSequence({
+            consumerId: 'hermes', streamId: 'battleplan-events', sequence: '2',
+        });
+        assert.deepEqual(inactive, { status: 'gap', expected: '2', observed: '2' });
+
+        await assert.rejects(ledger.installVerifiedConsumerSnapshot({
+            consumerId: 'hermes',
+            proof: { targetStreamId: 'battleplan-events', payload: { high_water_mark: '10', entities: [] } } as never,
+            domainTables: [],
+            installProjection: async () => ({ value: undefined, installedEntityCount: 0 }),
+        }), /capability was not satisfied/);
+        assert.equal((await db.agentConsumerStates.get('hermes\0battleplan-events'))?.requiresSnapshot, true);
+
+        const proof = await verifiedSnapshotProof();
+        await assert.rejects(ledger.installVerifiedConsumerSnapshot({
+            consumerId: 'hermes',
+            proof,
+            domainTables: [db.tasks],
+            installProjection: async (payload) => {
+                const entity = payload.entities[0]!;
+                if (entity.state !== 'resolved') throw new Error('expected resolved snapshot entity');
+                await db.tasks.put({
+                    publicId: entity.entity_public_id,
+                    title: String(entity.projection.title),
+                    type: 'task', urgency: 2, status: 'pending', updatedAt: 1, createdAt: 1,
+                });
+                throw new Error('simulated snapshot install crash');
+            },
+        }), /simulated snapshot install crash/);
+        assert.equal(await db.tasks.where('publicId').equals('task_snapshot_1').count(), 0);
+        assert.equal((await db.agentConsumerStates.get('hermes\0battleplan-events'))?.requiresSnapshot, true);
+
+        const installed = await ledger.installVerifiedConsumerSnapshot({
+            consumerId: 'hermes',
+            proof,
+            domainTables: [db.tasks],
+            installProjection: async (payload) => {
+                const entity = payload.entities[0]!;
+                if (entity.state !== 'resolved') throw new Error('expected resolved snapshot entity');
+                await db.tasks.put({
+                    publicId: entity.entity_public_id,
+                    title: String(entity.projection.title),
+                    type: 'task', urgency: 2, status: 'pending', updatedAt: 1, createdAt: 1,
+                });
+                return { value: 'installed', installedEntityCount: payload.entities.length };
+            },
+        });
+        assert.equal(installed.value, 'installed');
+        const recovered = await db.agentConsumerStates.get('hermes\0battleplan-events');
+        assert.equal(recovered?.lastSequence, '10');
+        assert.equal(recovered?.requiresSnapshot, false);
+        assert.equal(recovered?.gapExpected, undefined);
+        assert.equal(recovered?.gapObserved, undefined);
+        assert.equal((await db.tasks.where('publicId').equals('task_snapshot_1').first())?.title, 'Snapshot task');
+
+        await assert.rejects(ledger.installVerifiedConsumerSnapshot({
+            consumerId: 'hermes',
+            proof: await verifiedSnapshotProof('9'),
+            domainTables: [db.tasks],
+            installProjection: async (payload) => ({ value: undefined, installedEntityCount: payload.entities.length }),
+        }), /cannot move backward/);
+
+        clock.now += 1;
+        assert.equal((await ledger.ingestConsumerSequence({
+            consumerId: 'hermes', streamId: 'battleplan-events', sequence: '11',
+        })).status, 'advanced');
+    } finally {
+        await db.delete();
+    }
+});
+
+test('event commits generate their matching outbox and reject caller-supplied event publication', async () => {
+    const db = new BattlePlanDB(`BattlePlan-ledger-event-outbox-${Date.now()}-${Math.random()}`);
+    await db.open();
+    await ready(db);
+    const clock = { now: 1_000 };
+    const ledger = ledgerFor(db, clock);
+    try {
+        const claimed = await ledger.claimCommand(input());
+        assert.equal(claimed.status, 'claimed');
+        if (claimed.status !== 'claimed') return;
+        clock.now = 1_100;
+        const event = {
+            eventId: EVENT_ID, streamId: 'battleplan-events', producerId: 'battleplan-producer',
+            eventType: 'entity_created' as const, entityKind: 'task' as const, entityPublicId: 'task_public_1',
+            revision: REVISION, payloadDigest: DIGEST_A, occurredAt: '2026-08-10T12:00:00Z',
+            actor: 'battleplan-user', origin: 'ui' as const, causeId: CAUSE_ID,
+            projection: { title: 'Safe title' },
+        };
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [appliedResultOutbox(), {
+                id: 'caller-event', family: 'event', messageId: crypto.randomUUID(),
+                payload: { stream_id: 'wrong', sequence_from: '99', sequence_to: '99', events: [] },
+            }],
+            events: [event],
+        }), /Invalid command lifecycle transition/);
+        assert.equal(await db.agentProtocolEvents.count(), 0);
+        assert.equal(await db.agentProtocolOutbox.count(), 0);
+
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [appliedResultOutbox()],
+            events: [{ ...event, eventId: 'not-a-uuid' }],
+        }), /public protocol contract/);
+        await assert.rejects(ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [appliedResultOutbox()],
+            events: Array.from({ length: 251 }, () => event),
+        }), /Invalid command lifecycle transition/);
+        assert.equal(await db.agentProtocolEvents.count(), 0);
+        assert.equal(await db.agentProtocolOutbox.count(), 0);
+
+        const finalized = await ledger.finalizeCommand({
+            claim: claimed.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [appliedResultOutbox()],
+            events: [event],
+        });
+        assert.equal(finalized.status, 'finalized');
+        assert.equal(await db.agentProtocolEvents.count(), 1);
+        const eventOutboxes = await db.agentProtocolOutbox.where('family').equals('event').toArray();
+        assert.equal(eventOutboxes.length, 1);
+        const eventOutbox = eventOutboxes[0];
+        assert.equal(eventOutbox?.family, 'event');
+        if (eventOutbox?.family === 'event') {
+            assert.equal(eventOutbox.payload.events[0]?.sequence, '1');
+        }
     } finally {
         await db.delete();
     }

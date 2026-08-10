@@ -16,6 +16,25 @@ const V9_STORES = {
 
 const V10_STORES = V9_STORES;
 
+const V11_STORES = {
+    tasks: '++id, publicId, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+    settings: 'id',
+    workLogs: '++id, publicId, syncId, date, projectId, hours, createdAt',
+    projects: '++id, publicId, name, isActive, createdAt',
+    agentInbox: 'id, action, entity_type, applied_at, received_at',
+    agentCommandReceipts: 'id, commandId, receiverId, lifecycle, leaseExpiresAt, retainUntil, updatedAt',
+    agentCommandReceiptHistory: 'id, receiptId, entryIndex, lifecycle, at',
+    agentCommandConflicts: 'id, commandId, receiverId, createdAt, retainUntil',
+    agentEventStreams: 'streamId, producerId, updatedAt',
+    agentProtocolEvents: 'id, eventId, streamId, producerId, entityKind, entityPublicId, createdAt, publishedAt',
+    agentProtocolOutbox: 'id, family, messageId, commandReceiptId, status, nextAttemptAt, createdAt',
+    agentProtocolEffects: 'id, commandReceiptId, kind, state, nextAttemptAt, updatedAt',
+    agentConsumerStates: 'id, consumerId, streamId, requiresSnapshot, inactiveAfter, updatedAt',
+    agentSigningKeyRefs: 'keyId, receiverId, pairingEpoch, status, updatedAt',
+    agentPairingKeys: 'id, workspaceId, producerId, receiverId, keyId, pairingEpoch, status, retainUntil',
+    agentReceiverCapabilities: 'receiverId, enabled, status, persistenceStatus, updatedAt',
+};
+
 test('v10 upgrade reconciles duplicate projects and preserves WorkLog snapshots', async () => {
     const databaseName = `BattlePlanDB-v9-upgrade-${Date.now()}-${Math.random()}`;
     const legacy = new Dexie(databaseName);
@@ -59,7 +78,7 @@ test('v10 upgrade reconciles duplicate projects and preserves WorkLog snapshots'
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 12);
+        assert.equal(upgraded.verno, 13);
         assert.equal(await upgraded.projects.count(), 1);
         assert.deepEqual(
             (await upgraded.workLogs.orderBy('date').toArray()).map((workLog) => ({
@@ -108,7 +127,7 @@ test('v11 upgrade backfills stable public identities without replacing local key
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 12);
+        assert.equal(upgraded.verno, 13);
         const task = await upgraded.tasks.get(taskId);
         const project = await upgraded.projects.get(projectId);
         const logs = await upgraded.workLogs.orderBy('id').toArray();
@@ -161,5 +180,60 @@ test('v11 upgrade backfills stable public identities without replacing local key
         }
     } finally {
         await Dexie.delete(databaseName);
+    }
+});
+
+test('direct v11 upgrade repairs duplicate public identities before creating unique indexes', async () => {
+    const databaseName = `BattlePlanDB-v11-duplicate-upgrade-${Date.now()}-${Math.random()}`;
+    const legacy = new Dexie(databaseName);
+    legacy.version(11).stores(V11_STORES);
+    await legacy.open();
+
+    const projectIds = await legacy.table('projects').bulkAdd([
+        { name: 'Existing project', publicId: 'project_keep', isActive: true, createdAt: 10 },
+        { name: 'Duplicate project A', publicId: 'project_duplicate', isActive: true, createdAt: 11 },
+        { name: 'Duplicate project B', publicId: 'project_duplicate', isActive: true, createdAt: 12 },
+    ], { allKeys: true }) as number[];
+    const taskIds = await legacy.table('tasks').bulkAdd([
+        { title: 'Existing task', publicId: 'task_keep', type: 'task', urgency: 2, status: 'pending', createdAt: 20 },
+        { title: 'Duplicate task A', publicId: 'task_duplicate', type: 'task', urgency: 2, status: 'pending', createdAt: 21 },
+        { title: 'Duplicate task B', publicId: 'task_duplicate', type: 'task', urgency: 2, status: 'pending', createdAt: 22 },
+    ], { allKeys: true }) as number[];
+    const workLogIds = await legacy.table('workLogs').bulkAdd([
+        {
+            publicId: 'worklog_keep', syncId: 'sync-keep', date: '2026-08-10', projectId: projectIds[0],
+            projectName: 'Existing project', people: 'Martin', hours: 1, source: 'manual', createdAt: 30,
+        },
+        {
+            publicId: 'worklog_duplicate', syncId: 'sync-a', date: '2026-08-11', projectId: projectIds[0],
+            projectName: 'Existing project', people: 'Martin', hours: 2, source: 'manual', createdAt: 31,
+        },
+        {
+            publicId: 'worklog_duplicate', syncId: 'sync-b', date: '2026-08-12', projectId: projectIds[0],
+            projectName: 'Existing project', people: 'Martin', hours: 3, source: 'manual', createdAt: 32,
+        },
+    ], { allKeys: true }) as number[];
+    legacy.close();
+
+    const upgraded = new BattlePlanDB(databaseName);
+    await upgraded.open();
+    try {
+        assert.equal(upgraded.verno, 13);
+        const projects = await upgraded.projects.orderBy('id').toArray();
+        const tasks = await upgraded.tasks.orderBy('id').toArray();
+        const workLogs = await upgraded.workLogs.orderBy('id').toArray();
+
+        assert.deepEqual(projects.map((row) => row.id), projectIds);
+        assert.deepEqual(tasks.map((row) => row.id), taskIds);
+        assert.deepEqual(workLogs.map((row) => row.id), workLogIds);
+        assert.equal(projects[0]?.publicId, 'project_keep');
+        assert.equal(tasks[0]?.publicId, 'task_keep');
+        assert.equal(workLogs[0]?.publicId, 'worklog_keep');
+        assert.deepEqual(workLogs.map((row) => row.syncId), ['sync-keep', 'sync-a', 'sync-b']);
+        assert.equal(new Set(projects.map((row) => row.publicId)).size, projects.length);
+        assert.equal(new Set(tasks.map((row) => row.publicId)).size, tasks.length);
+        assert.equal(new Set(workLogs.map((row) => row.publicId)).size, workLogs.length);
+    } finally {
+        await upgraded.delete();
     }
 });
