@@ -2,7 +2,7 @@
 
 Review exactly this BattlePlan producer commit:
 
-`9f273f5cadcf845fa26a43e20db67317d77eedd5`
+`edf0212e4a52ff4d51339a58b1493bb541b9f4d0`
 
 Branch: `codex/hermes-collaboration-protocol`
 
@@ -12,17 +12,21 @@ U1 trust/schema baseline remains the approved commit `daafb7e80d410bd717663a143e
 
 The U2 implementation must not change that signed JSON artifact. It adds the source-independent Google Drive transport profile `drive-immutable-v2` around the existing exact wire bytes.
 
-This is the repair commit for the five producer P1 findings reported against `9c1d9c6de696b998ca181695493a7b845f67f1d5`. Review the repair commit itself, not only the branch head. Hermes adapter commit `4a2d7a54e4bbe70e14dee07bf33bfdde2d5e9974` remains separately `READY`; do not conflate its adapter verdict with this producer re-review.
+This is the follow-up repair commit for P1-R1, the asynchronous TOCTOU variant found after the five original producer P1 repairs in `9f273f5cadcf845fa26a43e20db67317d77eedd5`. Review the new repair commit itself, not only the branch head. Hermes adapter commit `4a2d7a54e4bbe70e14dee07bf33bfdde2d5e9974` remains separately `READY`; do not conflate its adapter verdict with this producer re-review.
 
-Source review artifact: `2026-08-09_BattlePlan-Hermes-U2-review-response_Hermes.md`, SHA-256 `ab0a3e83f55e1b3ce617e1ccdaa18a8f9b8f78b328458d37fff1f3978a0e5868`.
+Current source review artifacts: `2026-08-10_BattlePlan-Hermes-U2-producer-rereview_Hermes.md`, `producer_rereview_verification_result_Hermes.json`, and `producer_repair_adversarial_Hermes.mjs`. Review archive SHA-256: `a8891f7da38b80a9715f66ada0efa8604900f162ac53c29effb8c0b96e0838ef`.
 
 ## Claimed P1 closures to verify independently
 
-1. **P1-A prepared identity replacement:** the complete prepared record is domain-separated and sealed as `preparedSha256`; publish recomputes the seal before Drive access. Replacing both `fileId` and `metadata.id` after persistence must fail before `files.create`.
+1. **P1-A prepared identity replacement:** the complete prepared record is domain-separated and sealed as `preparedSha256`; publish recomputes the seal before Drive access. Replacing both `fileId` and `metadata.id` before `publish()` must fail before `files.create`.
 2. **P1-B scan concurrency:** public `scanAll()` now uses the same synchronization coordinator as `bootstrap()` and `poll()`. Same-kind calls join; scan and cursor operations serialize, and the cursor-bearing operation must still execute.
 3. **P1-C verifier wiring:** `ImmutableDriveTransport` accepts only the branded result of `createFullU1DriveMessageVerifier()`. The factory always runs `verifyProtocolWireMessage()` with a trusted pairing record and trusted artifact after structural parsing. A direct structural-only verifier must fail at construction.
 4. **P1-D missing signature:** `signature_missing` maps to `verification_failed`, never `malformed_message`.
 5. **P1-E trashed tombstone:** a relevant change carrying `trashed=true` is `missing_file` even when `removed=false`; the failing cursor page remains unadvanced.
+
+## Claimed P1-R1 closure to verify independently
+
+At the synchronous entry to `publish()`, before the first `await`, BattlePlan creates `const immutablePrepared = structuredClone(prepared)`. Seal/metadata validation, create, success return, `409` replay, ambiguous 5xx lookup, and every retry use only that snapshot. The regression test blocks `verifyWorkspace()`, mutates the caller-owned object to `attacker-raced-id`, then proves that `files.create` and the publish result retain the originally sealed ID.
 
 The repair also mirrors the adapter's accepted bounded-retry hardening: at most three attempts with 500 ms then 1,000 ms backoff, the same durable prepared ID on every create attempt, exact-ID verification after an ambiguous create, and no cursor advance after exhausted change reads. The adapter's `corpora` objection remains correctly rejected: `changes.list` receives exact `driveId` when applicable and never receives `corpora`; `corpora` is limited to applicable `files.list` calls.
 
@@ -42,9 +46,9 @@ The repair also mirrors the adapter's accepted bounded-retry hardening: at most 
 From `battle-plan/`:
 
 ```text
-npm test                                      # 230/230
+npm test                                      # 231/231
 npm run test:agent-protocol                   # 20/20 + 32/32 public fixtures
-node --experimental-strip-types --test src/services/agentProtocol/driveTransport.test.ts  # 23/23
+node --experimental-strip-types --test src/services/agentProtocol/driveTransport.test.ts  # 24/24
 npm run lint                                  # PASS
 npm run build                                 # PASS
 git diff --check                              # PASS
@@ -100,12 +104,13 @@ Provide reproducible source-independent probes and machine-readable results for 
 18. 429 then network failure then success performs exactly three create attempts with the same reserved ID and delays `[500, 1000]`.
 19. An ambiguous 5xx that actually committed is resolved by exact-ID verification without a second create.
 20. Three failed change-page attempts preserve the original durable cursor.
+21. Hold `verifyWorkspace()` in flight, mutate the original caller-owned `prepared.fileId` and `prepared.metadata.id`, then release it; `files.create`, every recovery path, and the return value must use only the original synchronous deep snapshot and must never observe `attacker-raced-id`.
 
 ## Required verdict
 
 Return both decisions separately:
 
-1. `U2 PRODUCER GO` or `U2 PRODUCER NO-GO` for BattlePlan commit `9f273f5cadcf845fa26a43e20db67317d77eedd5` and profile `drive-immutable-v2`.
+1. `U2 PRODUCER GO` or `U2 PRODUCER NO-GO` for BattlePlan commit `edf0212e4a52ff4d51339a58b1493bb541b9f4d0` and profile `drive-immutable-v2`.
 2. Confirm whether the already-reviewed Hermes adapter commit `4a2d7a54e4bbe70e14dee07bf33bfdde2d5e9974` remains `HERMES U2 ADAPTER READY`; report any new incompatibility separately.
 
 If both are ready, explicitly state whether BattlePlan may begin U3 durable receipt/outbox work. Report every blocker with severity, exact reproduction, expected behavior, observed behavior, and affected file/line or public rule.
