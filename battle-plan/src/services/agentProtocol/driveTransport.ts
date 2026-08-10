@@ -4,7 +4,12 @@ import {
     type ProtocolValidationResult,
     type ProtocolWireMessage,
 } from './contracts.ts';
-import { validateProtocolWireMessage } from './validation.ts';
+import {
+    canonicalizeProtocolJson,
+    validateProtocolWireMessage,
+    verifyProtocolWireMessage,
+    type VerifyProtocolOptions,
+} from './validation.ts';
 
 export const DRIVE_PROTOCOL_JSON_MIME_TYPE = 'application/json' as const;
 export const DRIVE_PROTOCOL_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder' as const;
@@ -210,6 +215,7 @@ export interface PreparedDriveProtocolMessage {
     bodySha256: `sha256:${string}`;
     contentSha256: `sha256:${string}`;
     metadata: DriveProtocolFileMetadata;
+    preparedSha256: `sha256:${string}`;
 }
 
 export interface VerifiedDriveProtocolMessage {
@@ -220,15 +226,47 @@ export interface VerifiedDriveProtocolMessage {
     contentSha256: `sha256:${string}`;
 }
 
-export type DriveMessageVerifier = (rawCanonicalJson: string) => Promise<ProtocolValidationResult>;
+export type DriveVerificationOptionsResolver = (
+    structurallyValidMessage: ProtocolWireMessage,
+) => Promise<VerifyProtocolOptions | null> | VerifyProtocolOptions | null;
+
+const FULL_U1_VERIFIER = Symbol('BattlePlan-Hermes/full-u1-verifier');
+
+export interface FullU1DriveMessageVerifier {
+    readonly verify: (rawCanonicalJson: string) => Promise<ProtocolValidationResult>;
+    readonly [FULL_U1_VERIFIER]: true;
+}
+
+/** The only supported production verifier factory; it always executes full U1 verification. */
+export function createFullU1DriveMessageVerifier(
+    resolveOptions: DriveVerificationOptionsResolver,
+): FullU1DriveMessageVerifier {
+    return Object.freeze({
+        [FULL_U1_VERIFIER]: true as const,
+        verify: async (rawCanonicalJson: string): Promise<ProtocolValidationResult> => {
+            const structural = validateProtocolWireMessage(rawCanonicalJson);
+            if (!structural.ok) return structural;
+            const options = await resolveOptions(structural.message);
+            if (!options) {
+                return {
+                    ok: false,
+                    error: { code: 'key_unknown', message: 'No trusted pairing record exists for this Drive message' },
+                };
+            }
+            return verifyProtocolWireMessage(rawCanonicalJson, options);
+        },
+    });
+}
 
 export interface ImmutableDriveTransportOptions {
     api: DriveProtocolApi;
     binding: DriveWorkspaceBinding;
     cursorStore: DriveTransportCursorStore;
     bindingCache?: DriveWorkspaceBindingCache;
-    /** Must perform complete signature/trust/address/artifact verification in production. */
-    verifyMessage: DriveMessageVerifier;
+    /** Branded factory product that always performs complete U1 verification. */
+    verifier: FullU1DriveMessageVerifier;
+    /** Test seam only; production uses real bounded backoff delays. */
+    sleep?: (delayMs: number) => Promise<void>;
 }
 
 function encoderBytes(value: string): Uint8Array {
@@ -295,7 +333,14 @@ function normalizeDriveError(error: unknown, action: string): DriveTransportErro
     if (status !== null && status >= 500) {
         return new DriveTransportError('transport_retryable', `${action} failed transiently (${status})${suffix}`, error);
     }
+    if (error instanceof TypeError) {
+        return new DriveTransportError('transport_retryable', `${action} failed because the network request did not complete${suffix}`, error);
+    }
     return new DriveTransportError('transport_error', `${action} failed${suffix}`, error);
+}
+
+function isRetryableTransportError(error: DriveTransportError): boolean {
+    return error.code === 'rate_limited' || error.code === 'transport_retryable';
 }
 
 function assertSoleParent(metadata: DriveProtocolFileMetadata, expectedParentId: string, code: DriveTransportErrorCode): void {
@@ -359,28 +404,36 @@ function classifyValidationFailure(error: { code: ProtocolErrorCode; message: st
     if (error.code === 'unsupported_major' || error.code === 'unknown_message_type' || error.code === 'unknown_action') {
         return new DriveTransportError('unsupported_message', `${error.code}: ${error.message}`);
     }
-    if (['invalid_json', 'duplicate_json_key', 'non_canonical_json', 'payload_too_large', 'schema_invalid', 'signature_missing'].includes(error.code)) {
+    if (['invalid_json', 'duplicate_json_key', 'non_canonical_json', 'payload_too_large', 'schema_invalid'].includes(error.code)) {
         return new DriveTransportError('malformed_message', `${error.code}: ${error.message}`);
     }
     return new DriveTransportError('verification_failed', `${error.code}: ${error.message}`);
 }
 
 const MAX_DRIVE_PAGES = 10_000;
+const DRIVE_RETRY_DELAYS_MS = [500, 1_000] as const;
+const PREPARED_RECORD_DOMAIN = 'BattlePlan-Hermes/drive-prepared/v2\0' as const;
+type SynchronizationKind = 'scan' | 'cursor';
 
 export class ImmutableDriveTransport {
     private readonly api: DriveProtocolApi;
     private readonly binding: DriveWorkspaceBinding;
     private readonly cursorStore: DriveTransportCursorStore;
     private readonly bindingCache?: DriveWorkspaceBindingCache;
-    private readonly verifyMessage: DriveMessageVerifier;
-    private synchronizationInFlight: Promise<void> | null = null;
+    private readonly verifier: FullU1DriveMessageVerifier;
+    private readonly sleep: (delayMs: number) => Promise<void>;
+    private synchronizationInFlight: { kind: SynchronizationKind; promise: Promise<void> } | null = null;
 
     constructor(options: ImmutableDriveTransportOptions) {
         this.api = options.api;
         this.binding = structuredClone(options.binding);
         this.cursorStore = options.cursorStore;
         this.bindingCache = options.bindingCache;
-        this.verifyMessage = options.verifyMessage;
+        if (options.verifier?.[FULL_U1_VERIFIER] !== true) {
+            throw new DriveTransportError('verification_failed', 'Immutable Drive transport requires the production full-U1 verifier factory');
+        }
+        this.verifier = options.verifier;
+        this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
     }
 
     async verifyWorkspace(): Promise<DriveProtocolFileMetadata> {
@@ -394,16 +447,13 @@ export class ImmutableDriveTransport {
         const candidates: DriveProtocolFileMetadata[] = [];
         let pageToken: string | null = null;
         for (let page = 0; page < MAX_DRIVE_PAGES; page += 1) {
-            let result: DriveProtocolFilePage;
-            try {
-                result = await this.api.listFoldersByName({
+            const result = await this.withRetry('Drive workspace folder lookup', () =>
+                this.api.listFoldersByName({
                     name: this.binding.folderName,
                     expectedParentId: this.binding.expectedParentId,
                     pageToken,
-                });
-            } catch (error) {
-                throw normalizeDriveError(error, 'Drive workspace folder lookup');
-            }
+                }),
+            );
             if (result.incompleteSearch) {
                 throw new DriveTransportError('incomplete_search', 'Drive returned incompleteSearch while resolving the protocol workspace');
             }
@@ -420,12 +470,10 @@ export class ImmutableDriveTransport {
             throw new DriveTransportError('workspace_ambiguous', 'Drive workspace folder name is ambiguous or does not match the pinned folder ID');
         }
 
-        let folder: DriveProtocolFileMetadata;
-        try {
-            folder = await this.api.getFile(this.binding.folderId);
-        } catch (error) {
-            throw normalizeDriveError(error, 'Pinned Drive workspace metadata read');
-        }
+        const folder = await this.withRetry(
+            'Pinned Drive workspace metadata read',
+            () => this.api.getFile(this.binding.folderId),
+        );
         if (folder.name !== this.binding.folderName
             || folder.mimeType !== DRIVE_PROTOCOL_FOLDER_MIME_TYPE
             || folder.trashed) {
@@ -444,15 +492,10 @@ export class ImmutableDriveTransport {
         if (validation.message.signed.workspace_id !== this.binding.workspaceId) {
             throw new DriveTransportError('metadata_mismatch', 'Outbound message workspace does not match the paired Drive binding');
         }
-        let fileId: string;
-        try {
-            fileId = await this.api.generateFileId();
-        } catch (error) {
-            throw normalizeDriveError(error, 'Drive file ID generation');
-        }
+        const fileId = await this.withRetry('Drive file ID generation', () => this.api.generateFileId());
         const bodySha256 = await sha256(body);
         const properties = expectedProperties(validation.message, validation.contentSha256, bodySha256);
-        return {
+        const prepared = {
             fileId,
             body,
             bodySha256,
@@ -469,41 +512,42 @@ export class ImmutableDriveTransport {
                 size: String(encoderBytes(body).byteLength),
             },
         };
+        return { ...prepared, preparedSha256: await this.calculatePreparedRecordSha256(prepared) };
     }
 
     async publish(prepared: PreparedDriveProtocolMessage): Promise<{ kind: 'published'; fileId: string; replayed: boolean }> {
         await this.assertPreparedRecord(prepared);
         await this.verifyWorkspace();
-        try {
-            await this.api.createImmutableFile(prepared);
-            return { kind: 'published', fileId: prepared.fileId, replayed: false };
-        } catch (error) {
-            if (httpStatus(error) !== 409) throw normalizeDriveError(error, 'Immutable Drive message create');
-        }
+        for (let attempt = 0; attempt <= DRIVE_RETRY_DELAYS_MS.length; attempt += 1) {
+            try {
+                await this.api.createImmutableFile(prepared);
+                return { kind: 'published', fileId: prepared.fileId, replayed: false };
+            } catch (error) {
+                if (httpStatus(error) === 409) {
+                    await this.verifyPreparedExisting(prepared);
+                    return { kind: 'published', fileId: prepared.fileId, replayed: true };
+                }
+                const normalized = normalizeDriveError(error, 'Immutable Drive message create');
+                if (!isRetryableTransportError(normalized)) throw normalized;
 
-        try {
-            const existingMetadata = await this.api.getFile(prepared.fileId);
-            assertExpectedMetadata(existingMetadata, prepared.metadata, 'immutable_file_conflict');
-            const existingBody = await this.api.downloadFile(prepared.fileId);
-            if (existingBody !== prepared.body || await sha256(existingBody) !== prepared.bodySha256) {
-                throw new DriveTransportError('immutable_file_conflict', `Drive file ${prepared.fileId} exists with different immutable bytes`);
+                const existing = await this.findPreparedExisting(prepared);
+                if (existing) return { kind: 'published', fileId: prepared.fileId, replayed: true };
+                if (attempt === DRIVE_RETRY_DELAYS_MS.length) throw normalized;
+                await this.sleep(DRIVE_RETRY_DELAYS_MS[attempt]);
             }
-        } catch (error) {
-            if (error instanceof DriveTransportError) throw error;
-            throw normalizeDriveError(error, 'Ambiguous Drive create replay verification');
         }
-        return { kind: 'published', fileId: prepared.fileId, replayed: true };
+        throw new DriveTransportError('transport_retryable', 'Immutable Drive message create exhausted its bounded retry budget');
     }
 
     async readVerified(fileId: string): Promise<VerifiedDriveProtocolMessage> {
-        let metadata: DriveProtocolFileMetadata;
-        let body: string;
-        try {
-            metadata = await this.api.getFile(fileId);
-            body = await this.api.downloadFile(fileId);
-        } catch (error) {
-            throw normalizeDriveError(error, `Drive protocol file ${fileId} read`);
-        }
+        const metadata = await this.withRetry(
+            `Drive protocol file ${fileId} metadata read`,
+            () => this.api.getFile(fileId),
+        );
+        const body = await this.withRetry(
+            `Drive protocol file ${fileId} media read`,
+            () => this.api.downloadFile(fileId),
+        );
         if (metadata.mimeType !== DRIVE_PROTOCOL_JSON_MIME_TYPE || metadata.trashed) {
             throw new DriveTransportError('metadata_mismatch', `Drive protocol file ${fileId} is trashed or has the wrong MIME type`);
         }
@@ -512,7 +556,7 @@ export class ImmutableDriveTransport {
             throw new DriveTransportError('metadata_mismatch', `Drive protocol file ${fileId} size does not match downloaded bytes`);
         }
 
-        const verified = await this.verifyMessage(body);
+        const verified = await this.verifier.verify(body);
         if (!verified.ok) throw classifyValidationFailure(verified.error);
         if (verified.message.signed.workspace_id !== this.binding.workspaceId) {
             throw new DriveTransportError('metadata_mismatch', `Drive protocol file ${fileId} belongs to another workspace`);
@@ -540,26 +584,26 @@ export class ImmutableDriveTransport {
     }
 
     async scanAll(consume: (message: VerifiedDriveProtocolMessage) => Promise<void>): Promise<void> {
-        await this.verifyWorkspace();
-        await this.scanAllInternal(consume, new Set());
+        return this.runSynchronization('scan', async () => {
+            await this.verifyWorkspace();
+            await this.scanAllInternal(consume, new Set());
+        });
     }
 
     async bootstrap(consume: (message: VerifiedDriveProtocolMessage) => Promise<void>): Promise<void> {
-        return this.runSynchronization(() => this.bootstrapOnce(consume));
+        return this.runSynchronization('cursor', () => this.bootstrapOnce(consume));
     }
 
     async poll(consume: (message: VerifiedDriveProtocolMessage) => Promise<void>): Promise<void> {
-        return this.runSynchronization(() => this.pollOnce(consume));
+        return this.runSynchronization('cursor', () => this.pollOnce(consume));
     }
 
     private async bootstrapOnce(consume: (message: VerifiedDriveProtocolMessage) => Promise<void>): Promise<void> {
         await this.verifyWorkspace();
-        let startToken: string;
-        try {
-            startToken = await this.api.getStartPageToken();
-        } catch (error) {
-            throw normalizeDriveError(error, 'Drive start page token capture');
-        }
+        const startToken = await this.withRetry(
+            'Drive start page token capture',
+            () => this.api.getStartPageToken(),
+        );
         const seen = new Set<string>();
         await this.scanAllInternal(consume, seen);
         const finalToken = await this.consumeChangePages(startToken, consume, seen, false);
@@ -576,12 +620,19 @@ export class ImmutableDriveTransport {
         await this.consumeChangePages(cursor, consume, new Set(), true);
     }
 
-    private runSynchronization(work: () => Promise<void>): Promise<void> {
-        if (this.synchronizationInFlight) return this.synchronizationInFlight;
+    private runSynchronization(kind: SynchronizationKind, work: () => Promise<void>): Promise<void> {
+        const current = this.synchronizationInFlight;
+        if (current) {
+            if (current.kind === kind) return current.promise;
+            return current.promise.then(
+                () => this.runSynchronization(kind, work),
+                () => this.runSynchronization(kind, work),
+            );
+        }
         const pending = work().finally(() => {
-            if (this.synchronizationInFlight === pending) this.synchronizationInFlight = null;
+            if (this.synchronizationInFlight?.promise === pending) this.synchronizationInFlight = null;
         });
-        this.synchronizationInFlight = pending;
+        this.synchronizationInFlight = { kind, promise: pending };
         return pending;
     }
 
@@ -591,16 +642,13 @@ export class ImmutableDriveTransport {
     ): Promise<void> {
         let pageToken: string | null = null;
         for (let page = 0; page < MAX_DRIVE_PAGES; page += 1) {
-            let result: DriveProtocolFilePage;
-            try {
-                result = await this.api.listMessageFiles({
+            const result = await this.withRetry('Drive protocol folder scan', () =>
+                this.api.listMessageFiles({
                     folderId: this.binding.folderId,
                     workspaceId: this.binding.workspaceId,
                     pageToken,
-                });
-            } catch (error) {
-                throw normalizeDriveError(error, 'Drive protocol folder scan');
-            }
+                }),
+            );
             if (result.incompleteSearch) {
                 throw new DriveTransportError('incomplete_search', 'Drive returned incompleteSearch during protocol message scan');
             }
@@ -624,15 +672,13 @@ export class ImmutableDriveTransport {
     ): Promise<string> {
         let pageToken = initialToken;
         for (let page = 0; page < MAX_DRIVE_PAGES; page += 1) {
-            let result: DriveProtocolChangePage;
-            try {
-                result = await this.api.listChanges(pageToken);
-            } catch (error) {
-                throw normalizeDriveError(error, 'Drive protocol change-page read');
-            }
+            const result = await this.withRetry(
+                'Drive protocol change-page read',
+                () => this.api.listChanges(pageToken),
+            );
             for (const change of result.changes) {
-                if (change.removed) {
-                    if (change.file && this.isBoundProtocolFile(change.file)) {
+                if (change.removed || change.file?.trashed) {
+                    if (change.file && this.isBoundProtocolIdentity(change.file)) {
                         throw new DriveTransportError('missing_file', `Immutable Drive protocol file ${change.fileId} was removed`);
                     }
                     continue;
@@ -658,8 +704,11 @@ export class ImmutableDriveTransport {
     }
 
     private isBoundProtocolFile(metadata: DriveProtocolFileMetadata): boolean {
-        return !metadata.trashed
-            && metadata.mimeType === DRIVE_PROTOCOL_JSON_MIME_TYPE
+        return !metadata.trashed && this.isBoundProtocolIdentity(metadata);
+    }
+
+    private isBoundProtocolIdentity(metadata: DriveProtocolFileMetadata): boolean {
+        return metadata.mimeType === DRIVE_PROTOCOL_JSON_MIME_TYPE
             && metadata.parents.length === 1
             && metadata.parents[0] === this.binding.folderId
             && metadata.properties[DRIVE_PROTOCOL_PROPERTIES.protocolMajor] === String(PROTOCOL_MAJOR)
@@ -667,6 +716,16 @@ export class ImmutableDriveTransport {
     }
 
     private async assertPreparedRecord(prepared: PreparedDriveProtocolMessage): Promise<void> {
+        const expectedPreparedSha256 = await this.calculatePreparedRecordSha256({
+            fileId: prepared.fileId,
+            body: prepared.body,
+            bodySha256: prepared.bodySha256,
+            contentSha256: prepared.contentSha256,
+            metadata: prepared.metadata,
+        });
+        if (prepared.preparedSha256 !== expectedPreparedSha256) {
+            throw new DriveTransportError('immutable_file_conflict', 'Persisted prepared Drive record does not match its preparation seal');
+        }
         const validation = validateProtocolWireMessage(prepared.body);
         if (!validation.ok) throw classifyValidationFailure(validation.error);
         if (validation.message.signed.workspace_id !== this.binding.workspaceId) {
@@ -688,5 +747,49 @@ export class ImmutableDriveTransport {
             size: String(encoderBytes(prepared.body).byteLength),
         };
         assertExpectedMetadata(prepared.metadata, expected, 'immutable_file_conflict');
+    }
+
+    private async calculatePreparedRecordSha256(
+        prepared: Omit<PreparedDriveProtocolMessage, 'preparedSha256'>,
+    ): Promise<`sha256:${string}`> {
+        return sha256(`${PREPARED_RECORD_DOMAIN}${canonicalizeProtocolJson(prepared)}`);
+    }
+
+    private async findPreparedExisting(prepared: PreparedDriveProtocolMessage): Promise<boolean> {
+        try {
+            await this.verifyPreparedExisting(prepared);
+            return true;
+        } catch (error) {
+            if (error instanceof DriveTransportError && error.code === 'missing_file') return false;
+            throw error;
+        }
+    }
+
+    private async verifyPreparedExisting(prepared: PreparedDriveProtocolMessage): Promise<void> {
+        const existingMetadata = await this.withRetry(
+            'Ambiguous Drive create metadata verification',
+            () => this.api.getFile(prepared.fileId),
+        );
+        assertExpectedMetadata(existingMetadata, prepared.metadata, 'immutable_file_conflict');
+        const existingBody = await this.withRetry(
+            'Ambiguous Drive create body verification',
+            () => this.api.downloadFile(prepared.fileId),
+        );
+        if (existingBody !== prepared.body || await sha256(existingBody) !== prepared.bodySha256) {
+            throw new DriveTransportError('immutable_file_conflict', `Drive file ${prepared.fileId} exists with different immutable bytes`);
+        }
+    }
+
+    private async withRetry<T>(action: string, operation: () => Promise<T>): Promise<T> {
+        for (let attempt = 0; attempt <= DRIVE_RETRY_DELAYS_MS.length; attempt += 1) {
+            try {
+                return await operation();
+            } catch (error) {
+                const normalized = normalizeDriveError(error, action);
+                if (!isRetryableTransportError(normalized) || attempt === DRIVE_RETRY_DELAYS_MS.length) throw normalized;
+                await this.sleep(DRIVE_RETRY_DELAYS_MS[attempt]);
+            }
+        }
+        throw new DriveTransportError('transport_retryable', `${action} exhausted its bounded retry budget`);
     }
 }

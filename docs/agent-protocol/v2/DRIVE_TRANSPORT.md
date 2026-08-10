@@ -67,9 +67,10 @@ Preparation is deterministic except for the reserved Drive ID:
 3. Compute `bpv2_content_sha256` from the domain-separated canonical `signed` bytes.
 4. Compute `bpv2_body_sha256` from the exact complete canonical wire bytes.
 5. Materialize a serializable prepared record containing file ID, exact body, both digests, filename, MIME type, sole parent, properties, and byte size.
-6. Persist that record in the sender's durable outbox before upload. BattlePlan's outbox is implemented in a later milestone; Hermes must provide its own durable equivalent.
+6. Seal that complete record as `prepared_sha256 = SHA-256("BattlePlan-Hermes/drive-prepared/v2\0" || JCS(prepared record without prepared_sha256))`.
+7. Persist the record and its seal in the sender's durable outbox before upload. BattlePlan's outbox is implemented in a later milestone; Hermes must provide its own durable equivalent.
 
-Publish the prepared record with one create call. A successful response must return the reserved ID.
+Before any publish request, recompute and compare the preparation seal, then enforce that the top-level file ID and `metadata.id` both equal the originally sealed ID. This explicitly rejects simultaneous post-persistence replacement of both ID fields. Publish the prepared record with one create call. A successful response must return the reserved ID.
 
 If the create response is ambiguous because of timeout or returns HTTP `409`, do not allocate another ID. Fetch the reserved ID and require all of the following:
 
@@ -90,7 +91,7 @@ For each candidate file ID:
 5. Compare every required public property to the authenticated body and recomputed values.
 6. Only then deliver the typed message to the durable consumer callback.
 
-The transport must not provide a structural-only production verifier. A schema-valid message with a bad signature is `verification_failed` and is never delivered.
+The transport must accept only a verifier produced by the exported full-U1 verifier factory. It must reject direct structural-only callback wiring at construction. A schema-valid message with a bad signature is `verification_failed` and is never delivered. `signature_missing` is also `verification_failed`, not `malformed_message`, because absence of the detached signature is an authentication failure.
 
 ## 5. Pagination and initial synchronization
 
@@ -106,13 +107,13 @@ Gap-free bootstrap is start-token-first:
 
 Normal polling loads the account/workspace cursor and consumes changes from it. A `nextPageToken` may be persisted only after every relevant file on that page has durably committed. The final `newStartPageToken` follows the same rule. A malformed, unsupported, untrusted, missing, or failed relevant file leaves the failing page unadvanced.
 
-A removal change whose supplied metadata identifies a bound protocol file is `missing_file` and leaves the page unadvanced; immutable protocol files are never validly deleted in this profile. A removal with no protocol metadata is ignored because an account-wide owner change feed also contains unrelated Drive objects. Retention and authorized GC are defined separately and cannot masquerade as an ordinary immutable-message deletion.
+A removal change whose supplied metadata identifies a bound protocol file is `missing_file` and leaves the page unadvanced; the same rule applies when `removed=false` but the supplied relevant metadata says `trashed=true`. Immutable protocol files are never validly deleted in this profile. A removal with no protocol metadata is ignored because an account-wide owner change feed also contains unrelated Drive objects. Retention and authorized GC are defined separately and cannot masquerade as an ordinary immutable-message deletion.
 
-Overlapping startup/focus/visibility/interval triggers in one process join one in-flight synchronization promise. Cross-tab and crash-safe application idempotency belongs to the durable receipt/ledger milestone and cannot be replaced by this optimization.
+Overlapping startup/focus/visibility/interval triggers in one process join one in-flight synchronization promise. The public `scanAll()` entry point and cursor-bearing `bootstrap()`/`poll()` operations use the same shared synchronization coordinator: same-kind calls join, while scan and cursor operations serialize so that cursor semantics are never skipped. Cross-tab and crash-safe application idempotency belongs to the durable receipt/ledger milestone and cannot be replaced by this optimization.
 
 ## 6. Required Google Drive requests
 
-All applicable requests set `supportsAllDrives=true`; list/change calls set `includeItemsFromAllDrives=true`. Shared-drive bindings additionally set exact `driveId` and `corpora=drive`; owner bindings use `corpora=user`.
+All applicable requests set `supportsAllDrives=true`; list/change calls set `includeItemsFromAllDrives=true`. Shared-drive bindings additionally set exact `driveId`. `corpora=drive` or `corpora=user` is used only by applicable `files.list` requests; `changes.list` does not accept `corpora`.
 
 - `files.get(fileId, fields=id,name,mimeType,parents,trashed,owners(permissionId),driveId,properties,size)`
 - `files.list(q=..., pageSize=1000, pageToken=..., fields=nextPageToken,incompleteSearch,files(...))`
@@ -129,8 +130,8 @@ The intended OAuth scope is exactly `https://www.googleapis.com/auth/drive.file`
 | Condition | Outcome | Cursor rule |
 | --- | --- | --- |
 | HTTP 401/403 | `authorization_failed` | Do not advance. |
-| HTTP 429 | `rate_limited` | Bounded retry with the same prepared ID; do not advance. |
-| HTTP 5xx | `transport_retryable` | Bounded retry with the same prepared ID; do not advance. |
+| HTTP 429 | `rate_limited` | At most three attempts with 500 ms then 1,000 ms backoff, using the same prepared ID; do not advance. |
+| HTTP 5xx or incomplete network request | `transport_retryable` | At most three attempts with 500 ms then 1,000 ms backoff, using the same prepared ID; do not advance. |
 | Expected file HTTP 404 | `missing_file` | Do not advance. |
 | Zero paired folders | `workspace_missing` | Disable transport. |
 | Duplicate/name-ID mismatch | `workspace_ambiguous` | Disable transport. |
@@ -145,6 +146,8 @@ The intended OAuth scope is exactly `https://www.googleapis.com/auth/drive.file`
 
 No transport outcome creates a command result receipt before command validation and durable claim. This profile performs no Task, WorkLog, Project, Settings, Calendar, or Google Tasks mutation.
 
+The bounded retry budget applies independently to each Drive operation. Before retrying an ambiguously failed immutable create, the sender reads the reserved ID and accepts it only after the complete replay comparison from section 3. A matching object ends the flight successfully; a missing object permits the next create attempt; a conflicting object fails terminally. Exhausting any read/list/change retry leaves the current durable cursor unchanged.
+
 ## 8. Source-independent adapter checklist
 
 An adapter is U2-conformant only if it proves all of these with fakes plus the later live probe:
@@ -157,7 +160,7 @@ An adapter is U2-conformant only if it proves all of these with fakes plus the l
 - page-token persistence after durable consumer commit only;
 - complete cryptographic verifier before property comparison and delivery;
 - distinct auth, rate, retry, missing, malformed, unsupported, trust, and metadata failures;
-- one-process single-flight for overlapping poll triggers;
+- one-process single-flight/shared serialization across public scan, bootstrap, and poll triggers;
 - no command execution, shadow traffic, or v1 cutover side effect.
 
 ## 9. Google API reference basis

@@ -5,9 +5,17 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import type { ProtocolValidationResult } from './contracts.ts';
-import { canonicalizeProtocolJson, validateProtocolWireMessage } from './validation.ts';
+import type {
+    ProtocolContractArtifact,
+    ProtocolWireMessage,
+} from './contracts.ts';
 import {
+    calculateEd25519PublicKeyFingerprint,
+    canonicalizeProtocolJson,
+    createDetachedSignature,
+} from './validation.ts';
+import {
+    createFullU1DriveMessageVerifier,
     DRIVE_PROTOCOL_PROPERTIES,
     DriveTransportError,
     ImmutableDriveTransport,
@@ -19,15 +27,69 @@ import {
     type DriveProtocolFilePage,
     type DriveTransportCursorStore,
     type DriveWorkspaceBinding,
+    type FullU1DriveMessageVerifier,
 } from './driveTransport.ts';
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const protocolRoot = path.resolve(moduleDir, '../../../../docs/agent-protocol/v2');
 
+const trustedArtifact: ProtocolContractArtifact = {
+    id: 'battleplan-hermes-protocol',
+    version: '2.0.0',
+    sha256: 'sha256:fa0496524c56796ff8eec77f5ccd013b4b6d404836d673b1cb8dcc70ae96d7d7',
+};
+
+async function createTestSigningContext() {
+    const keys = await globalThis.crypto.subtle.generateKey(
+        { name: 'Ed25519' },
+        true,
+        ['sign', 'verify'],
+    ) as CryptoKeyPair;
+    const rawPublicKeyBytes = new Uint8Array(await globalThis.crypto.subtle.exportKey('raw', keys.publicKey));
+    const rawPublicKey = Buffer.from(rawPublicKeyBytes).toString('base64url');
+    return {
+        keys,
+        rawPublicKey,
+        fingerprint: calculateEd25519PublicKeyFingerprint(rawPublicKeyBytes),
+    };
+}
+
+const testSigningContext = createTestSigningContext();
+
 async function canonicalFixture(name = 'hello'): Promise<string> {
-    const fixture = JSON.parse(await readFile(path.join(protocolRoot, `fixtures/valid/${name}.json`), 'utf8')) as unknown;
+    const context = await testSigningContext;
+    const fixture = JSON.parse(
+        await readFile(path.join(protocolRoot, `fixtures/valid/${name}.json`), 'utf8'),
+    ) as ProtocolWireMessage;
+    fixture.signed.signing_key_id = 'ed25519:transport-test';
+    fixture.signed.pairing_epoch = 1;
+    if (fixture.signed.message_type === 'hello') {
+        fixture.signed.payload.public_key.key_id = fixture.signed.signing_key_id;
+        fixture.signed.payload.public_key.pairing_epoch = fixture.signed.pairing_epoch;
+        fixture.signed.payload.public_key.raw_public_key = context.rawPublicKey;
+        fixture.signed.payload.public_key.fingerprint = context.fingerprint;
+    }
+    fixture.signature = await createDetachedSignature(fixture.signed, context.keys.privateKey);
     return canonicalizeProtocolJson(fixture);
 }
+
+const fullU1Verifier: FullU1DriveMessageVerifier = createFullU1DriveMessageVerifier(async (message) => {
+    const context = await testSigningContext;
+    return {
+        trustedPairing: {
+            status: 'active',
+            workspaceId: message.signed.workspace_id,
+            producerId: message.signed.producer_id,
+            targetId: message.signed.target.id,
+            keyId: message.signed.signing_key_id,
+            pairingEpoch: message.signed.pairing_epoch,
+            rawPublicKey: context.rawPublicKey,
+            fingerprint: context.fingerprint,
+        },
+        trustedContractArtifact: trustedArtifact,
+        now: new Date('2026-08-09T10:05:00.000Z'),
+    };
+});
 
 const binding: DriveWorkspaceBinding = {
     accountId: 'user@example.com',
@@ -132,12 +194,16 @@ class FakeDriveApi implements DriveProtocolApi {
     }
 }
 
-function verifier(raw: string): Promise<ProtocolValidationResult> {
-    return Promise.resolve(validateProtocolWireMessage(raw));
+function transport(api: FakeDriveApi, cursor = new MemoryCursorStore()): ImmutableDriveTransport {
+    return new ImmutableDriveTransport({ api, binding, cursorStore: cursor, verifier: fullU1Verifier });
 }
 
-function transport(api: FakeDriveApi, cursor = new MemoryCursorStore()): ImmutableDriveTransport {
-    return new ImmutableDriveTransport({ api, binding, cursorStore: cursor, verifyMessage: verifier });
+function transportWithSleep(
+    api: FakeDriveApi,
+    sleep: (delayMs: number) => Promise<void>,
+    cursor = new MemoryCursorStore(),
+): ImmutableDriveTransport {
+    return new ImmutableDriveTransport({ api, binding, cursorStore: cursor, verifier: fullU1Verifier, sleep });
 }
 
 test('workspace bootstrap rejects duplicate same-name folders and stale account-scoped binding cache', async () => {
@@ -166,7 +232,7 @@ test('workspace bootstrap rejects duplicate same-name folders and stale account-
         binding,
         cursorStore: new MemoryCursorStore(),
         bindingCache: cache,
-        verifyMessage: verifier,
+        verifier: fullU1Verifier,
     });
     await assert.rejects(
         () => withStaleCache.verifyWorkspace(),
@@ -218,6 +284,39 @@ test('publish rejects a corrupted durable prepared record before any create requ
         (error: unknown) => error instanceof DriveTransportError && error.code === 'immutable_file_conflict',
     );
     assert.equal(createCalls, 0);
+});
+
+test('persisted preparation seal rejects simultaneous replacement of fileId and metadata.id', async () => {
+    const api = new FakeDriveApi();
+    const client = transport(api);
+    const prepared = await client.prepare(await canonicalFixture());
+    prepared.fileId = 'replacement-file-id';
+    prepared.metadata.id = 'replacement-file-id';
+    let createCalls = 0;
+    api.createImmutableFile = async () => { createCalls += 1; };
+
+    await assert.rejects(
+        () => client.publish(prepared),
+        (error: unknown) => error instanceof DriveTransportError && error.code === 'immutable_file_conflict',
+    );
+    assert.equal(createCalls, 0);
+});
+
+test('constructor rejects a structural-only verifier that did not come from the full-U1 factory', () => {
+    const api = new FakeDriveApi();
+    const structuralOnly = {
+        verify: async () => assert.fail('structural-only verifier must never be invoked'),
+    } as unknown as FullU1DriveMessageVerifier;
+
+    assert.throws(
+        () => new ImmutableDriveTransport({
+            api,
+            binding,
+            cursorStore: new MemoryCursorStore(),
+            verifier: structuralOnly,
+        }),
+        (error: unknown) => error instanceof DriveTransportError && error.code === 'verification_failed',
+    );
 });
 
 test('folder scan consumes every page and verifies body-backed public properties', async () => {
@@ -296,10 +395,61 @@ test('poll does not advance a durable cursor when verification or consumption fa
         nextPageToken: null,
         newStartPageToken: 'cursor-2',
     });
-
     await assert.rejects(
         () => client.poll(async () => assert.fail('malformed messages must not be delivered')),
         (error: unknown) => error instanceof DriveTransportError && error.code === 'malformed_message',
+    );
+    assert.equal(cursor.value, 'cursor-1');
+    assert.deepEqual(cursor.saves, []);
+});
+
+test('full-U1 transport verifier rejects a schema-valid message with an invalid signature', async () => {
+    const api = new FakeDriveApi();
+    const cursor = new MemoryCursorStore();
+    cursor.value = 'cursor-1';
+    const client = transport(api, cursor);
+    const invalid = JSON.parse(await canonicalFixture()) as ProtocolWireMessage;
+    invalid.signature.value = 'AA';
+    const prepared = await client.prepare(canonicalizeProtocolJson(invalid));
+    api.files.set(prepared.fileId, { metadata: prepared.metadata, body: prepared.body });
+    api.changePages.set('cursor-1', {
+        changes: [{ fileId: prepared.fileId, removed: false, file: prepared.metadata }],
+        nextPageToken: null,
+        newStartPageToken: 'cursor-2',
+    });
+
+    await assert.rejects(
+        () => client.poll(async () => assert.fail('invalid signatures must not be delivered')),
+        (error: unknown) => error instanceof DriveTransportError && error.code === 'verification_failed',
+    );
+    assert.equal(cursor.value, 'cursor-1');
+    assert.deepEqual(cursor.saves, []);
+});
+
+test('signature_missing is classified as verification_failed and leaves the cursor unchanged', async () => {
+    const api = new FakeDriveApi();
+    const cursor = new MemoryCursorStore();
+    cursor.value = 'cursor-1';
+    const client = transport(api, cursor);
+    const prepared = await client.prepare(await canonicalFixture());
+    const missingSignature = JSON.parse(prepared.body) as Partial<ProtocolWireMessage>;
+    delete missingSignature.signature;
+    const body = canonicalizeProtocolJson(missingSignature);
+    api.files.set(prepared.fileId, {
+        metadata: { ...prepared.metadata, size: String(new TextEncoder().encode(body).byteLength) },
+        body,
+    });
+    api.changePages.set('cursor-1', {
+        changes: [{ fileId: prepared.fileId, removed: false, file: prepared.metadata }],
+        nextPageToken: null,
+        newStartPageToken: 'cursor-2',
+    });
+
+    await assert.rejects(
+        () => client.poll(async () => assert.fail('unsigned messages must not be delivered')),
+        (error: unknown) => error instanceof DriveTransportError
+            && error.code === 'verification_failed'
+            && error.message.startsWith('signature_missing:'),
     );
     assert.equal(cursor.value, 'cursor-1');
     assert.deepEqual(cursor.saves, []);
@@ -314,7 +464,7 @@ test('quota/auth/missing failures stay distinguishable and never collapse into s
     ] as const;
     for (const expected of cases) {
         const api = new FakeDriveApi();
-        const client = transport(api);
+        const client = transportWithSleep(api, async () => {});
         const prepared = await client.prepare(await canonicalFixture());
         api.createError = Object.assign(new Error(`HTTP ${expected.status}`), { status: expected.status });
         await assert.rejects(
@@ -323,6 +473,71 @@ test('quota/auth/missing failures stay distinguishable and never collapse into s
             String(expected.status),
         );
     }
+});
+
+test('publish retries 429 and network failures at most three times with the same prepared Drive ID', async () => {
+    const api = new FakeDriveApi();
+    const delays: number[] = [];
+    const client = transportWithSleep(api, async (delayMs) => { delays.push(delayMs); });
+    const prepared = await client.prepare(await canonicalFixture());
+    const attemptedIds: string[] = [];
+    const failures = [
+        Object.assign(new Error('rate limited'), { status: 429 }),
+        new TypeError('network disconnected'),
+    ];
+    api.createImmutableFile = async (input) => {
+        attemptedIds.push(input.fileId);
+        const failure = failures.shift();
+        if (failure) throw failure;
+        api.files.set(input.fileId, { metadata: structuredClone(input.metadata), body: input.body });
+    };
+
+    assert.deepEqual(await client.publish(prepared), {
+        kind: 'published', fileId: prepared.fileId, replayed: false,
+    });
+    assert.deepEqual(attemptedIds, [prepared.fileId, prepared.fileId, prepared.fileId]);
+    assert.deepEqual(delays, [500, 1_000]);
+});
+
+test('ambiguous 5xx create verifies the reserved ID before retrying create', async () => {
+    const api = new FakeDriveApi();
+    const delays: number[] = [];
+    const client = transportWithSleep(api, async (delayMs) => { delays.push(delayMs); });
+    const prepared = await client.prepare(await canonicalFixture());
+    let createCalls = 0;
+    api.createImmutableFile = async (input) => {
+        createCalls += 1;
+        api.files.set(input.fileId, { metadata: structuredClone(input.metadata), body: input.body });
+        throw Object.assign(new Error('server response lost'), { status: 503 });
+    };
+
+    assert.deepEqual(await client.publish(prepared), {
+        kind: 'published', fileId: prepared.fileId, replayed: true,
+    });
+    assert.equal(createCalls, 1);
+    assert.deepEqual(delays, []);
+});
+
+test('exhausted change-page retries keep the durable cursor unchanged', async () => {
+    const api = new FakeDriveApi();
+    const cursor = new MemoryCursorStore();
+    cursor.value = 'cursor-1';
+    const delays: number[] = [];
+    const client = transportWithSleep(api, async (delayMs) => { delays.push(delayMs); }, cursor);
+    let changeCalls = 0;
+    api.listChanges = async () => {
+        changeCalls += 1;
+        throw Object.assign(new Error('Drive unavailable'), { status: 503 });
+    };
+
+    await assert.rejects(
+        () => client.poll(async () => assert.fail('no change can be delivered')),
+        (error: unknown) => error instanceof DriveTransportError && error.code === 'transport_retryable',
+    );
+    assert.equal(changeCalls, 3);
+    assert.deepEqual(delays, [500, 1_000]);
+    assert.equal(cursor.value, 'cursor-1');
+    assert.deepEqual(cursor.saves, []);
 });
 
 test('overlapping poll triggers join one in-flight change consumption', async () => {
@@ -352,6 +567,48 @@ test('overlapping poll triggers join one in-flight change consumption', async ()
     await Promise.all([first, second]);
 
     assert.equal(deliveries, 1);
+    assert.deepEqual(api.changeCalls, ['cursor-1']);
+    assert.deepEqual(cursor.saves, ['cursor-2']);
+});
+
+test('public scanAll serializes with poll through the shared synchronization coordinator', async () => {
+    const api = new FakeDriveApi();
+    const cursor = new MemoryCursorStore();
+    cursor.value = 'cursor-1';
+    const client = transport(api, cursor);
+    const prepared = await client.prepare(await canonicalFixture());
+    api.files.set(prepared.fileId, { metadata: prepared.metadata, body: prepared.body });
+    api.changePages.set('cursor-1', {
+        changes: [{ fileId: prepared.fileId, removed: false, file: prepared.metadata }],
+        nextPageToken: null,
+        newStartPageToken: 'cursor-2',
+    });
+    api.listFoldersByName = async () => ({
+        files: [structuredClone(api.files.get(binding.folderId)!.metadata)],
+        nextPageToken: null,
+        incompleteSearch: false,
+    });
+    let releaseScan!: () => void;
+    let markScanStarted!: () => void;
+    const scanStarted = new Promise<void>((resolve) => { markScanStarted = resolve; });
+    const scanGate = new Promise<void>((resolve) => { releaseScan = resolve; });
+    api.listMessageFiles = async (input) => {
+        api.listMessageCalls.push(input);
+        markScanStarted();
+        await scanGate;
+        return { files: [], nextPageToken: null, incompleteSearch: false };
+    };
+    const delivered: string[] = [];
+
+    const scan = client.scanAll(async () => assert.fail('empty scan must not deliver'));
+    await scanStarted;
+    const poll = client.poll(async (message) => { delivered.push(message.fileId); });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(api.changeCalls, [], 'poll must not overlap the active scan');
+    releaseScan();
+    await Promise.all([scan, poll]);
+
+    assert.deepEqual(delivered, [prepared.fileId]);
     assert.deepEqual(api.changeCalls, ['cursor-1']);
     assert.deepEqual(cursor.saves, ['cursor-2']);
 });
@@ -409,6 +666,30 @@ test('a relevant immutable-file tombstone is not silently skipped or checkpointe
     assert.equal(cursor.value, 'cursor-1');
 });
 
+test('a relevant trashed=true tombstone is not skipped when Drive removed is false', async () => {
+    const api = new FakeDriveApi();
+    const cursor = new MemoryCursorStore();
+    cursor.value = 'cursor-1';
+    const client = transport(api, cursor);
+    const prepared = await client.prepare(await canonicalFixture());
+    api.changePages.set('cursor-1', {
+        changes: [{
+            fileId: prepared.fileId,
+            removed: false,
+            file: { ...prepared.metadata, trashed: true },
+        }],
+        nextPageToken: null,
+        newStartPageToken: 'cursor-2',
+    });
+
+    await assert.rejects(
+        () => client.poll(async () => assert.fail('trashed messages cannot be delivered')),
+        (error: unknown) => error instanceof DriveTransportError && error.code === 'missing_file',
+    );
+    assert.equal(cursor.value, 'cursor-1');
+    assert.deepEqual(cursor.saves, []);
+});
+
 test('normative Drive transport documentation contains every implemented property and stable outcome', async () => {
     const documentation = await readFile(path.join(protocolRoot, 'DRIVE_TRANSPORT.md'), 'utf8');
     assert.match(documentation, /drive-immutable-v2/);
@@ -424,4 +705,9 @@ test('normative Drive transport documentation contains every implemented propert
         assert.match(documentation, new RegExp(`\\b${code}\\b`), code);
     }
     assert.match(documentation, /https:\/\/www\.googleapis\.com\/auth\/drive\.file/);
+    assert.match(documentation, /three attempts with 500 ms then 1,000 ms backoff/);
+    assert.match(documentation, /BattlePlan-Hermes\/drive-prepared\/v2/);
+    assert.match(documentation, /full-U1 verifier factory/);
+    assert.match(documentation, /scanAll\(\).*shared synchronization coordinator/);
+    assert.match(documentation, /trashed=true/);
 });
