@@ -1,6 +1,14 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Briefcase, Table2, Calendar as CalendarIcon, Filter, CopyCheck } from 'lucide-react';
+import {
+    Plus,
+    Briefcase,
+    Table2,
+    Calendar as CalendarIcon,
+    Filter,
+    CopyCheck,
+    FolderKanban,
+} from 'lucide-react';
 import { db, type WorkLog } from '../db';
 import { WorkLogForm } from '../components/worklogs/WorkLogForm';
 import { WorkLogCard } from '../components/worklogs/WorkLogCard';
@@ -22,6 +30,7 @@ import {
     WorkLogDuplicateRepairStaleError,
 } from '../services/workLogDuplicateRepair';
 import { mergeLocalToCloud } from '../services/workLogsSync';
+import { toggleWorkLogsPanel, type WorkLogsPanel } from './workLogsPageUi';
 
 interface WorkLogsPageProps {
     onAddLog?: (message: string, type?: 'info' | 'error') => void;
@@ -31,9 +40,11 @@ interface WorkLogsPageProps {
 type View = 'cards' | 'calendar' | 'table';
 
 export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPageProps) {
-    const [showForm, setShowForm] = useState(false);
+    const [openPanel, setOpenPanel] = useState<WorkLogsPanel | null>(null);
     const [view, setView] = useState<View>('cards');
     const [repairingFingerprint, setRepairingFingerprint] = useState<string | null>(null);
+    const showForm = openPanel === 'new-entry';
+    const showProjects = openPanel === 'projects';
 
     const logs = useLiveQuery(async () => {
         return await db.workLogs.orderBy('date').reverse().toArray();
@@ -66,9 +77,16 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
     const handleSaved = useCallback(
         (log: WorkLog) => {
             onAddLog?.(`Činnost uložena: ${log.projectName} (${log.hours} h)`, 'info');
-            setShowForm(false);
         },
         [onAddLog],
+    );
+
+    const handleFormSaved = useCallback(
+        (log: WorkLog) => {
+            handleSaved(log);
+            setOpenPanel(null);
+        },
+        [handleSaved],
     );
 
     const handleVoiceError = useCallback(
@@ -199,7 +217,11 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
 
                     <button
                         type="button"
-                        onClick={() => setShowForm((s) => !s)}
+                        onClick={() => setOpenPanel((current) => (
+                            toggleWorkLogsPanel(current, 'new-entry')
+                        ))}
+                        aria-expanded={showForm}
+                        aria-controls="new-work-log-panel"
                         className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black uppercase tracking-widest rounded-xl transition-all"
                     >
                         {showForm ? 'Zavřít' : (
@@ -209,10 +231,34 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
                             </>
                         )}
                     </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setOpenPanel((current) => (
+                            toggleWorkLogsPanel(current, 'projects')
+                        ))}
+                        aria-expanded={showProjects}
+                        aria-controls="project-management-panel"
+                        className={`flex items-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl border transition-all ${
+                            showProjects
+                                ? 'border-indigo-400 bg-indigo-600 text-white ring-2 ring-indigo-400/30'
+                                : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-indigo-500/70 hover:text-white'
+                        }`}
+                    >
+                        <FolderKanban className="w-4 h-4" />
+                        Projekty
+                    </button>
                 </div>
             </div>
 
-            <ProjectManager onMessage={onAddLog} />
+            <div
+                id="project-management-panel"
+                role="region"
+                aria-label="Správa projektů"
+                hidden={!showProjects}
+            >
+                <ProjectManager onMessage={onAddLog} />
+            </div>
 
             {duplicateGroups.length > 0 && (
                 <section
@@ -265,10 +311,12 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
 
             {/* Formulář */}
             {showForm && (
-                <WorkLogForm
-                    onSaved={handleSaved}
-                    onCancel={() => setShowForm(false)}
-                />
+                <div id="new-work-log-panel">
+                    <WorkLogForm
+                        onSaved={handleFormSaved}
+                        onCancel={() => setOpenPanel(null)}
+                    />
+                </div>
             )}
 
             {/* Pohled */}
