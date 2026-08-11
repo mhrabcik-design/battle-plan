@@ -14,6 +14,8 @@ Absorbed and previous names remain on the survivor as synchronized alias tombsto
 ### WorkLog
 A record of completed work on a project, distinct from a task or meeting because it represents labor that can be reported by date, project, people, and hours.
 
+Each WorkLog has a portable sync identity that remains stable between devices. Content-equivalent WorkLogs remain separate records unless a person explicitly confirms that they are copies to merge.
+
 ### Person-Hours
 The reportable labor total for crew work: the number of people multiplied by the hours per person.
 

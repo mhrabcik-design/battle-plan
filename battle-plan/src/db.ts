@@ -1,5 +1,6 @@
 import Dexie, { type Table, type Transaction } from 'dexie';
 import { reconcileProjectIdentities } from './utils/projectIdentityReconciliation.ts';
+import { createLegacyWorkLogSyncId } from './utils/workLogSyncIdentity.ts';
 import type {
     CapabilityPayload,
     EventBatchPayload,
@@ -302,6 +303,10 @@ async function backfillPortableIdentities(transaction: Transaction): Promise<voi
     const changedTasks: Task[] = [];
     const changedProjects: Project[] = [];
     const changedWorkLogs: WorkLog[] = [];
+    const usedWorkLogSyncIds = new Set(
+        workLogRows.flatMap((workLog) => workLog.syncId ? [workLog.syncId] : []),
+    );
+    const legacyIdentityOccurrences = new Map<string, number>();
     for (const task of taskRows) {
         if (task.publicId && !used.has(task.publicId)) used.add(task.publicId);
         else {
@@ -329,7 +334,18 @@ async function backfillPortableIdentities(transaction: Transaction): Promise<voi
             while (used.has(publicId)) publicId = createPortableId('worklog');
         }
         used.add(publicId);
-        const syncId = workLog.syncId ?? crypto.randomUUID();
+        let syncId = workLog.syncId;
+        if (!syncId) {
+            const baseSyncId = createLegacyWorkLogSyncId(workLog);
+            let occurrence = (legacyIdentityOccurrences.get(baseSyncId) ?? 0) + 1;
+            syncId = occurrence === 1 ? baseSyncId : `${baseSyncId}-${occurrence}`;
+            while (usedWorkLogSyncIds.has(syncId)) {
+                occurrence++;
+                syncId = `${baseSyncId}-${occurrence}`;
+            }
+            legacyIdentityOccurrences.set(baseSyncId, occurrence);
+            usedWorkLogSyncIds.add(syncId);
+        }
         if (publicId !== workLog.publicId || syncId !== workLog.syncId) {
             changedWorkLogs.push({ ...workLog, publicId, syncId });
         }

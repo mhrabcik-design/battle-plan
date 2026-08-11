@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Briefcase, Table2, Calendar as CalendarIcon, Filter } from 'lucide-react';
+import { Plus, Briefcase, Table2, Calendar as CalendarIcon, Filter, CopyCheck } from 'lucide-react';
 import { db, type WorkLog } from '../db';
 import { WorkLogForm } from '../components/worklogs/WorkLogForm';
 import { WorkLogCard } from '../components/worklogs/WorkLogCard';
@@ -9,7 +9,19 @@ import { WorkLogCalendar } from '../components/worklogs/WorkLogCalendar';
 import { WorkLogVoiceBar, type WorkLogVoiceController } from '../components/worklogs/WorkLogVoiceBar';
 import { ProjectManager } from '../components/worklogs/ProjectManager';
 import { filterWorkLogsForPrace } from '../utils/workLogFilter';
-import { createWorkLogProjectIndex } from '../utils/workLogProjectGrouping';
+import {
+    createWorkLogProjectIndex,
+    resolveWorkLogProjectDisplay,
+} from '../utils/workLogProjectGrouping';
+import {
+    findExactWorkLogDuplicateGroups,
+    type ExactWorkLogDuplicateGroup,
+} from '../utils/workLogSyncIdentity';
+import {
+    confirmWorkLogDuplicateRepair,
+    WorkLogDuplicateRepairStaleError,
+} from '../services/workLogDuplicateRepair';
+import { mergeLocalToCloud } from '../services/workLogsSync';
 
 interface WorkLogsPageProps {
     onAddLog?: (message: string, type?: 'info' | 'error') => void;
@@ -21,6 +33,7 @@ type View = 'cards' | 'calendar' | 'table';
 export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPageProps) {
     const [showForm, setShowForm] = useState(false);
     const [view, setView] = useState<View>('cards');
+    const [repairingFingerprint, setRepairingFingerprint] = useState<string | null>(null);
 
     const logs = useLiveQuery(async () => {
         return await db.workLogs.orderBy('date').reverse().toArray();
@@ -45,6 +58,11 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
         [effectiveLogs],
     );
 
+    const duplicateGroups = useMemo(
+        () => findExactWorkLogDuplicateGroups(effectiveLogs),
+        [effectiveLogs],
+    );
+
     const handleSaved = useCallback(
         (log: WorkLog) => {
             onAddLog?.(`Činnost uložena: ${log.projectName} (${log.hours} h)`, 'info');
@@ -62,6 +80,51 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
         (msg: string) => onAddLog?.(msg, 'info'),
         [onAddLog],
     );
+
+    const handleDuplicateRepair = useCallback(async (
+        group: ExactWorkLogDuplicateGroup,
+    ) => {
+        const log = group.survivor;
+        const projectName = resolveWorkLogProjectDisplay(log, projectIndex).name;
+        const confirmed = window.confirm(
+            `Sloučit ${group.rows.length} obsahově stejných záznamů „${projectName}“ `
+            + `ze dne ${log.date} do jednoho? Ponechá se nejnovější záznam.`,
+        );
+        if (!confirmed) return;
+
+        setRepairingFingerprint(group.fingerprint);
+        try {
+            const result = await confirmWorkLogDuplicateRepair({
+                fingerprint: group.fingerprint,
+                rowIds: group.rows.map((row) => row.id),
+            });
+            // Pull unrelated cloud changes, but do not re-import the exact
+            // sync identities that the user has just confirmed as copies.
+            let cloudPublished = false;
+            try {
+                cloudPublished = await mergeLocalToCloud({
+                    excludedWorkLogSyncIds: result.removedSyncIds,
+                });
+            } catch {
+                cloudPublished = false;
+            }
+            onAddLog?.(
+                cloudPublished
+                    ? `Sloučeno: ${projectName}. Odstraněno kopií: ${result.removed}.`
+                    : `Lokálně sloučeno: ${projectName}, ale Drive se nepodařilo aktualizovat. Při další synchronizaci se mohou kopie dočasně vrátit.`,
+                cloudPublished ? 'info' : 'error',
+            );
+        } catch (error) {
+            onAddLog?.(
+                error instanceof WorkLogDuplicateRepairStaleError
+                    ? 'Záznamy se mezitím změnily. Zkontrolujte nabídku znovu.'
+                    : 'Sloučení kopií se nepodařilo. Žádný záznam nebyl odstraněn.',
+                'error',
+            );
+        } finally {
+            setRepairingFingerprint(null);
+        }
+    }, [onAddLog, projectIndex]);
 
     return (
         <div className="space-y-6">
@@ -150,6 +213,55 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
             </div>
 
             <ProjectManager onMessage={onAddLog} />
+
+            {duplicateGroups.length > 0 && (
+                <section
+                    aria-label="Možné duplicitní pracovní záznamy"
+                    className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-3"
+                >
+                    <div className="flex items-start gap-3">
+                        <CopyCheck className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+                        <div>
+                            <h3 className="text-sm font-black text-amber-100 uppercase tracking-wide">
+                                Nalezeny možné kopie záznamů
+                            </h3>
+                            <p className="text-xs text-amber-200/70 mt-1">
+                                Zkontrolujte je a potvrďte sloučení. Bez potvrzení se nic nemaže.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        {duplicateGroups.map((group) => {
+                            const log = group.survivor;
+                            const projectName = resolveWorkLogProjectDisplay(log, projectIndex).name;
+                            const isRepairing = repairingFingerprint === group.fingerprint;
+                            return (
+                                <div
+                                    key={group.fingerprint}
+                                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-slate-950/40 p-3"
+                                >
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-bold text-white truncate" title={projectName}>
+                                            {projectName}
+                                        </p>
+                                        <p className="text-xs text-slate-400 mt-1">
+                                            {log.date} · {log.hours.toFixed(2)} h · {group.rows.length} stejné záznamy
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        disabled={repairingFingerprint !== null}
+                                        onClick={() => void handleDuplicateRepair(group)}
+                                        className="shrink-0 rounded-lg bg-amber-500 px-3 py-2 text-xs font-black uppercase tracking-wide text-slate-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {isRepairing ? 'Slučuji…' : `Sloučit ${group.rows.length} na 1`}
+                                    </button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </section>
+            )}
 
             {/* Formulář */}
             {showForm && (
