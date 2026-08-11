@@ -276,8 +276,11 @@ export interface AgentReceiverCapabilityRow {
 
 const createPortableId = (kind: 'task' | 'project' | 'worklog'): string => `${kind}_${crypto.randomUUID()}`;
 const portableIdentityRepairTransactions = new WeakSet<Transaction>();
+const completedPortableIdentityBackfills = new WeakSet<Transaction>();
 
 async function backfillPortableIdentities(transaction: Transaction): Promise<void> {
+    if (completedPortableIdentityBackfills.has(transaction)) return;
+
     const tasks = transaction.table<Task, number>('tasks');
     const projects = transaction.table<Project, number>('projects');
     const workLogs = transaction.table<WorkLog, number>('workLogs');
@@ -330,6 +333,7 @@ async function backfillPortableIdentities(transaction: Transaction): Promise<voi
             changedProjects.length ? projects.bulkPut(changedProjects) : Promise.resolve(),
             changedWorkLogs.length ? workLogs.bulkPut(changedWorkLogs) : Promise.resolve(),
         ]);
+        completedPortableIdentityBackfills.add(transaction);
     } finally {
         portableIdentityRepairTransactions.delete(transaction);
     }
@@ -480,25 +484,23 @@ export class BattlePlanDB extends Dexie {
             agentReceiverCapabilities: 'receiverId, enabled, status, persistenceStatus, updatedAt',
         }).upgrade(backfillPortableIdentities);
 
-        // v13 creates unique indexes only after every supported upgrade path
-        // has completed the non-unique repair stage.
-        this.version(13).stores({
+        // v13 remains non-unique for compatibility with databases created by
+        // a previous v13 schema. Some databases can report v12/v13 while
+        // rows are still missing portable identities, so a later version must
+        // repair the data before uniqueness is enforced again.
+        this.version(13).stores({});
+
+        // v14 is the compatibility repair boundary for already-created v12
+        // and v13 databases. Keep indexes non-unique for the whole repair
+        // transaction so duplicate and missing identities can be replaced.
+        this.version(14).stores({}).upgrade(backfillPortableIdentities);
+
+        // v15 creates the unique indexes only after the v14 repair transaction
+        // has succeeded for every supported upgrade path.
+        this.version(15).stores({
             tasks: '++id, &publicId, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
-            settings: 'id',
             workLogs: '++id, &publicId, syncId, date, projectId, hours, createdAt',
             projects: '++id, &publicId, name, isActive, createdAt',
-            agentInbox: 'id, action, entity_type, applied_at, received_at',
-            agentCommandReceipts: 'id, commandId, receiverId, lifecycle, leaseExpiresAt, retainUntil, updatedAt',
-            agentCommandReceiptHistory: 'id, receiptId, entryIndex, lifecycle, at',
-            agentCommandConflicts: 'id, commandId, receiverId, createdAt, retainUntil',
-            agentEventStreams: 'streamId, producerId, updatedAt',
-            agentProtocolEvents: 'id, eventId, streamId, producerId, entityKind, entityPublicId, createdAt, publishedAt',
-            agentProtocolOutbox: 'id, family, messageId, commandReceiptId, status, nextAttemptAt, createdAt',
-            agentProtocolEffects: 'id, commandReceiptId, kind, state, nextAttemptAt, updatedAt',
-            agentConsumerStates: 'id, consumerId, streamId, requiresSnapshot, inactiveAfter, updatedAt',
-            agentSigningKeyRefs: 'keyId, receiverId, pairingEpoch, status, updatedAt',
-            agentPairingKeys: 'id, workspaceId, producerId, receiverId, keyId, pairingEpoch, status, retainUntil',
-            agentReceiverCapabilities: 'receiverId, enabled, status, persistenceStatus, updatedAt',
         });
 
         // Keep identities present and immutable until all mutation paths share
