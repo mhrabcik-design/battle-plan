@@ -41,6 +41,14 @@ async function resetDb(): Promise<void> {
     await db.projects.clear();
 }
 
+function withoutProjectPublicId(project: Project | undefined): Omit<Project, 'publicId'> | undefined {
+    if (!project) return undefined;
+    assert.match(project.publicId ?? '', /^project_[0-9a-f-]{36}$/);
+    const legacyProject = { ...project };
+    delete legacyProject.publicId;
+    return legacyProject;
+}
+
 test('buildWorkLogsFileMetadata puts a new file into the BattlePlan Drive folder', () => {
     assert.deepEqual(
         buildWorkLogsFileMetadata('folder-123', null),
@@ -123,7 +131,7 @@ test('Drive merge matches trim-equivalent project names through catalog normaliz
     assert.equal(result.projectsAdded, 0);
     assert.equal(result.projectsUpdated, 1);
     assert.equal(await db.projects.count(), 1);
-    assert.deepEqual(await db.projects.get(projectId), {
+    assert.deepEqual(withoutProjectPublicId(await db.projects.get(projectId)), {
         id: projectId,
         name: 'PLAZA',
         color: 'rose',
@@ -154,7 +162,7 @@ test('Drive merge reconciles legacy normalized project matches before applying c
     assert.equal(result.projectsAdded, 0);
     assert.equal(result.projectsUpdated, 1);
     assert.equal(await db.projects.count(), 1);
-    assert.deepEqual(await db.projects.get(firstId), {
+    assert.deepEqual(withoutProjectPublicId(await db.projects.get(firstId)), {
         id: firstId,
         name: 'PLAZA',
         color: 'rose',
@@ -332,7 +340,7 @@ test('Drive merge cannot resurrect a stale source owned as a survivor alias', as
         updatedAt: 999,
     }]);
 
-    assert.deepEqual(await db.projects.toArray(), [{
+    assert.deepEqual((await db.projects.toArray()).map(withoutProjectPublicId), [{
         id: survivorId,
         name: 'Komerční Banka',
         aliases: ['KB Plaza', 'Komerční banka Plaza'],
@@ -355,7 +363,10 @@ test('Drive alias convergence is independent of cloud project order and idempote
         });
         await mergeCloudToLocal([], projects);
         await mergeCloudToLocal([], [...projects].reverse());
-        return (await db.projects.toArray()).map((project) => ({ ...project, id: 0 }));
+        return (await db.projects.toArray()).map((project) => ({
+            ...withoutProjectPublicId(project)!,
+            id: 0,
+        }));
     }
 
     const cloudProjects: Project[] = [

@@ -910,9 +910,10 @@ test('U7: agentInbox is a Dexie Table and recordings is no longer declared in th
     assert.ok(names.includes('settings'), 'settings must be present');
     // The full removal of the recordings table from the class and all
     // version().stores() chains is a release-rollout concern; the test
-    // pins the v10 endpoint (agentInbox + 4 other tables). Cleaning the
-    // v1+v2 chains is a follow-up migration (no production data).
-    assert.equal(await db.verno, 10);
+    // v11 retains the legacy inbox while adding isolated protocol-v2 stores;
+    // v14 repairs portable identities before v15 makes them unique; v16
+    // fail-closes legacy protocol receipts that lack authenticated expiry.
+    assert.equal(await db.verno, 16);
 });
 
 

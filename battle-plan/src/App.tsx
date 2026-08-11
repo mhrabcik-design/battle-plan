@@ -8,6 +8,10 @@ import { useSuggestionsBadge } from './hooks/useSuggestionsBadge';
 import { useAgentBridgePolling } from './hooks/useAgentBridgePolling';
 import { useTaskCommands } from './hooks/useTaskCommands';
 import { useGlobalVoiceProcessing } from './hooks/useGlobalVoiceProcessing';
+import {
+  useAgentProtocolDeviceIdentity,
+  type SettledAgentProtocolDeviceIdentityState,
+} from './hooks/useAgentProtocolDeviceIdentity';
 import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
@@ -98,6 +102,34 @@ function App() {
     const time = new Date().toLocaleTimeString('cs-CZ');
     setDebugLogs(prev => [{ t: time, m: message, type }, ...prev].slice(0, 50));
   }, []);
+
+  const observeAgentProtocolIdentity = useCallback((state: SettledAgentProtocolDeviceIdentityState) => {
+    if (state.phase === 'failed') {
+      addLog(`Hermes receiver identity: inicializace selhala (${state.error}); protokol zůstává vypnutý`, 'error');
+      updateSyncHealth('agentProtocol', {
+        label: 'Hermes receiver identity',
+        state: 'error',
+        detail: 'Inicializace stabilní identity selhala; protokol je vypnutý',
+        lastError: state.error,
+      });
+      return;
+    }
+
+    const persistenceGranted = state.persistenceStatus === 'granted';
+    const detail = persistenceGranted
+      ? `Receiver ${state.receiverId}; persistentní úložiště potvrzeno; protokol je vypnutý`
+      : `Receiver ${state.receiverId}; persistence ${state.persistenceStatus}; protokol je vypnutý`;
+    addLog(`Hermes receiver identity: ${detail}`, persistenceGranted ? 'info' : 'error');
+    updateSyncHealth('agentProtocol', {
+      label: 'Hermes receiver identity',
+      state: persistenceGranted ? 'idle' : 'error',
+      detail,
+      lastSuccess: persistenceGranted ? new Date().toLocaleString('cs-CZ') : null,
+      lastError: persistenceGranted ? null : `Persistence: ${state.persistenceStatus}`,
+    });
+  }, [addLog, updateSyncHealth]);
+
+  useAgentProtocolDeviceIdentity({ onSettled: observeAgentProtocolIdentity });
 
   useEffect(() => {
     let cancelled = false;
