@@ -218,6 +218,68 @@ test('Drive merge turns repeated orphaned WorkLog names into one reusable projec
     );
 });
 
+test('Drive merge preserves separate rows when their sync identities differ', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({
+        name: 'Komerční Banka', color: 'amber', isActive: true, createdAt: 10, updatedAt: 10,
+    });
+    const sharedFields = {
+        date: '2026-06-22',
+        projectId,
+        projectName: 'Komerční Banka',
+        people: 'Martin, Sergej, Sergejův bratr',
+        hours: 30,
+        source: 'voice' as const,
+        createdAt: 20,
+        updatedAt: 20,
+    };
+    await db.workLogs.add({ ...sharedFields, syncId: 'device-a' });
+
+    const result = await mergeCloudToLocal([
+        { ...sharedFields, id: 101, syncId: 'device-b' },
+        { ...sharedFields, id: 102, syncId: 'device-c' },
+        { ...sharedFields, id: 103, syncId: 'device-d' },
+    ], []);
+
+    const workLogs = await db.workLogs.toArray();
+    assert.equal(workLogs.length, 4);
+    assert.equal(workLogs.reduce((sum, workLog) => sum + workLog.hours, 0), 120);
+    assert.equal(result.workLogsAdded, 3);
+});
+
+test('Drive keeps distinct sync identities after cloud alias reconciliation', async () => {
+    await resetDb();
+    const survivorId = await db.projects.add({
+        name: 'Komerční Banka', color: 'amber', isActive: true, createdAt: 10, updatedAt: 10,
+    });
+    const sourceId = await db.projects.add({
+        name: 'Komerční banka Plaza', color: 'slate', isActive: true, createdAt: 11, updatedAt: 11,
+    });
+    const sharedFields = {
+        date: '2026-06-22', projectId: sourceId, projectName: 'Komerční banka Plaza',
+        people: 'Martin, Sergej, Sergejův bratr', hours: 30, source: 'voice' as const,
+        createdAt: 20, updatedAt: 20,
+    };
+    await db.workLogs.add({ ...sharedFields, syncId: 'device-a' });
+
+    const result = await mergeCloudToLocal([
+        { ...sharedFields, id: 101, projectId: 999, syncId: 'device-b' },
+    ], [{
+        id: 900,
+        name: 'Komerční Banka',
+        aliases: ['Komerční banka Plaza'],
+        color: 'amber',
+        isActive: true,
+        createdAt: 10,
+        updatedAt: 30,
+    }]);
+
+    const workLogs = await db.workLogs.toArray();
+    assert.equal(workLogs.length, 2);
+    assert.deepEqual([...new Set(workLogs.map((workLog) => workLog.projectId))], [survivorId]);
+    assert.equal(result.workLogsAdded, 1);
+});
+
 test('Drive merge does not attach an imported orphan to an unrelated local project id', async () => {
     await resetDb();
     const unrelatedId = await db.projects.add({
@@ -433,6 +495,57 @@ test('mergeLocalToCloud aborts without writing when the Drive pull fails', async
 
         assert.equal(await mergeLocalToCloud(), false);
         assert.equal(saveCalls, 0);
+    } finally {
+        sync.isInitialized = originalInitialized;
+        sync.loadAllDetailed = originalLoad;
+        sync.saveAll = originalSave;
+    }
+});
+
+test('confirmed duplicate repair excludes removed sync identities but still pulls unrelated cloud work', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({
+        name: 'Komerční Banka', color: 'amber', isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    const sharedFields = {
+        date: '2026-06-22', projectId, projectName: 'Komerční Banka', people: 'Martin',
+        hours: 8, source: 'manual' as const, createdAt: 10, updatedAt: 10,
+    };
+    await db.workLogs.add({ ...sharedFields, syncId: 'keep-me' });
+
+    const sync = workLogsSync as {
+        isInitialized: boolean;
+        loadAllDetailed: () => Promise<unknown>;
+        saveAll: (payload: { workLogs: Array<{ syncId?: string }> }) => Promise<number | null>;
+    };
+    const originalInitialized = sync.isInitialized;
+    const originalLoad = sync.loadAllDetailed;
+    const originalSave = sync.saveAll;
+    let savedSyncIds: Array<string | undefined> = [];
+    try {
+        sync.isInitialized = true;
+        sync.loadAllDetailed = async () => ({
+            kind: 'loaded',
+            data: {
+                timestamp: 20,
+                projects: [],
+                workLogs: [
+                    { ...sharedFields, id: 101, syncId: 'remove-me' },
+                    { ...sharedFields, id: 102, syncId: 'unrelated', date: '2026-06-23' },
+                ],
+            },
+        });
+        sync.saveAll = async (payload) => {
+            savedSyncIds = payload.workLogs.map((workLog) => workLog.syncId).sort();
+            return 21;
+        };
+
+        assert.equal(await mergeLocalToCloud({ excludedWorkLogSyncIds: ['remove-me'] }), true);
+        assert.deepEqual(savedSyncIds, ['keep-me', 'unrelated']);
+        assert.deepEqual(
+            (await db.workLogs.toArray()).map((workLog) => workLog.syncId).sort(),
+            ['keep-me', 'unrelated'],
+        );
     } finally {
         sync.isInitialized = originalInitialized;
         sync.loadAllDetailed = originalLoad;

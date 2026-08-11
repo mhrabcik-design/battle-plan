@@ -285,7 +285,6 @@ export async function mergeCloudToLocal(
         let needsOrphanReconciliation = false;
         for (const cw of cloudWorkLogs) {
             const key = getWorkLogSyncKey(cw);
-            const local = localWorkLogsByCompositeKey.get(key);
             const identity = resolveProjectIdentityFromIndex(identityIndex, cw.projectName);
             if (identity.outcome === 'conflict') {
                 // Reconciliation above normally makes this unreachable, but
@@ -294,28 +293,41 @@ export async function mergeCloudToLocal(
                 throw new Error(`conflicting project identity: ${normalizeProjectName(cw.projectName)}`);
             }
             const localProject = identity.outcome === 'resolved' ? identity.project : undefined;
+            const resolvedProjectId = localProject?.id ?? -1;
+            const local = localWorkLogsByCompositeKey.get(key);
             if (!local) {
                 // Cloud-only → přidej (s novým ID)
                 const withoutId = { ...cw };
                 delete withoutId.id;
-                await db.workLogs.add({
+                const addedWorkLog: WorkLog = {
                     ...withoutId,
-                    projectId: localProject?.id ?? -1,
+                    projectId: resolvedProjectId,
                     source: withoutId.source ?? 'voice',
                     createdAt: withoutId.createdAt ?? Date.now(),
                     updatedAt: withoutId.updatedAt ?? Date.now(),
-                });
+                };
+                const id = await db.workLogs.add(addedWorkLog);
+                const storedWorkLog = { ...addedWorkLog, id: id as number };
+                localWorkLogsByCompositeKey.set(getWorkLogSyncKey(storedWorkLog), storedWorkLog);
                 needsOrphanReconciliation ||= localProject === undefined;
                 result.workLogsAdded++;
             } else if ((cw.updatedAt ?? 0) > (local.updatedAt ?? 0)) {
                 // Cloud novější → update (zachováme local id)
-                await db.workLogs.update(local.id!, {
+                const changes: Partial<WorkLog> = {
                     ...cw,
                     id: local.id, // nepřepisujeme ID
                     projectId: localProject?.id ?? local.projectId,
                     createdAt: local.createdAt, // createdAt je posvátné
                     updatedAt: cw.updatedAt ?? Date.now(),
-                });
+                };
+                await db.workLogs.update(local.id!, changes);
+                const updatedWorkLog: WorkLog = {
+                    ...local,
+                    ...changes,
+                    publicId: local.publicId,
+                    syncId: local.syncId,
+                };
+                localWorkLogsByCompositeKey.set(getWorkLogSyncKey(updatedWorkLog), updatedWorkLog);
                 needsOrphanReconciliation ||= localProject === undefined;
                 result.workLogsUpdated++;
             }
@@ -337,7 +349,13 @@ export async function mergeCloudToLocal(
  * Odešle kompletní payload z IndexedDB do cloudu. Jednoduchý "celé to tam hoď" přístup.
  * Později (F7+) můžeme dělat deltas, ale pro F6 stačí celý payload.
  */
-export async function mergeLocalToCloud(): Promise<boolean> {
+interface MergeLocalToCloudOptions {
+    excludedWorkLogSyncIds?: readonly string[];
+}
+
+export async function mergeLocalToCloud(
+    options: MergeLocalToCloudOptions = {},
+): Promise<boolean> {
     if (!workLogsSync.initialized) {
         await workLogsSync.init();
         if (!workLogsSync.initialized) return false;
@@ -347,7 +365,13 @@ export async function mergeLocalToCloud(): Promise<boolean> {
         return false;
     }
     if (cloudResult.kind === 'loaded' && cloudResult.data.timestamp > 0) {
-        await mergeCloudToLocal(cloudResult.data.workLogs, cloudResult.data.projects);
+        const excludedSyncIds = new Set(options.excludedWorkLogSyncIds ?? []);
+        const cloudWorkLogs = excludedSyncIds.size === 0
+            ? cloudResult.data.workLogs
+            : cloudResult.data.workLogs.filter(
+                (workLog) => !workLog.syncId || !excludedSyncIds.has(workLog.syncId),
+            );
+        await mergeCloudToLocal(cloudWorkLogs, cloudResult.data.projects);
     }
     const allWorkLogs = await db.workLogs.toArray();
     const allProjects = await db.projects.toArray();

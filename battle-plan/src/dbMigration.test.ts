@@ -152,7 +152,7 @@ test('v11 upgrade backfills stable public identities without replacing local key
         assert.deepEqual(logs.map((log) => log.id), [firstLogId, secondLogId]);
         assert.deepEqual(logs.map((log) => log.projectId), [projectId, projectId]);
         assert.equal(logs[0]?.syncId, existingSyncId);
-        assert.match(logs[1]?.syncId ?? '', /^[0-9a-f-]{36}$/);
+        assert.match(logs[1]?.syncId ?? '', /^legacy-[0-9a-f]{32}$/);
         assert.match(logs[0]?.publicId ?? '', /^worklog_[0-9a-f-]{36}$/);
         assert.match(logs[1]?.publicId ?? '', /^worklog_[0-9a-f-]{36}$/);
         assert.equal(new Set([task?.publicId, project?.publicId, ...logs.map((log) => log.publicId)]).size, 4);
@@ -443,6 +443,74 @@ test('v16 upgrade makes legacy command receipts without authenticated expiry fai
     try {
         assert.equal(upgraded.verno, 16);
         assert.equal((await upgraded.agentCommandReceipts.get(receiptId))?.commandExpiresAt, 0);
+    } finally {
+        await upgraded.delete();
+    }
+});
+
+test('legacy WorkLog backfill assigns the same sync identity on independent devices', async () => {
+    const databaseNames = [0, 1].map((index) => (
+        `BattlePlanDB-v10-cross-device-${Date.now()}-${index}-${Math.random()}`
+    ));
+    const syncIds: string[] = [];
+
+    try {
+        for (const databaseName of databaseNames) {
+            const legacy = new Dexie(databaseName);
+            legacy.version(10).stores(V10_STORES);
+            await legacy.open();
+            const projectId = await legacy.table('projects').add({
+                name: 'Komerční Banka', color: 'amber', isActive: true,
+                createdAt: 10, updatedAt: 10,
+            });
+            await legacy.table('workLogs').add({
+                date: '2026-06-22', projectId, projectName: 'Komerční Banka',
+                people: 'Martin, Sergej, Sergejův bratr', hours: 30,
+                source: 'voice', createdAt: 20, updatedAt: 20,
+            });
+            legacy.close();
+
+            const upgraded = new BattlePlanDB(databaseName);
+            await upgraded.open();
+            syncIds.push((await upgraded.workLogs.toArray())[0]?.syncId ?? '');
+            upgraded.close();
+        }
+
+        assert.match(syncIds[0] ?? '', /^legacy-[0-9a-f]{32}$/);
+        assert.equal(syncIds[0], syncIds[1]);
+    } finally {
+        for (const databaseName of databaseNames) await Dexie.delete(databaseName);
+    }
+});
+
+test('legacy upgrade preserves intentionally identical rows with deterministic distinct sync identities', async () => {
+    const databaseName = `BattlePlanDB-v13-identical-worklogs-${Date.now()}-${Math.random()}`;
+    const legacy = new Dexie(databaseName);
+    legacy.version(13).stores(LEGACY_V13_UNIQUE_STORES);
+    await legacy.open();
+    const projectId = await legacy.table('projects').add({
+        publicId: 'project_kb', name: 'Komerční Banka', color: 'amber', isActive: true,
+        createdAt: 10, updatedAt: 10,
+    });
+    const sharedFields = {
+        date: '2026-06-22', projectId, projectName: 'Komerční Banka',
+        people: 'Martin, Sergej, Sergejův bratr', hours: 30, source: 'voice', createdAt: 20,
+    };
+    await legacy.table('workLogs').bulkAdd([
+        { ...sharedFields, extractionBatchId: 'voice-20', updatedAt: 20 },
+        { ...sharedFields, extractionBatchId: 'voice-20', updatedAt: 20 },
+    ]);
+    legacy.close();
+
+    const upgraded = new BattlePlanDB(databaseName);
+    await upgraded.open();
+    try {
+        assert.equal(upgraded.verno, 16);
+        const workLogs = await upgraded.workLogs.toArray();
+        assert.equal(workLogs.length, 2);
+        assert.match(workLogs[0]?.syncId ?? '', /^legacy-[0-9a-f]{32}$/);
+        assert.equal(workLogs[1]?.syncId, `${workLogs[0]?.syncId}-2`);
+        assert.equal(workLogs.reduce((sum, workLog) => sum + workLog.hours, 0), 60);
     } finally {
         await upgraded.delete();
     }
