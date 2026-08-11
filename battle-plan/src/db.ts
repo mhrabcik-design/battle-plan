@@ -5,6 +5,7 @@ import type {
     EventBatchPayload,
     ProtocolEffect,
     ProtocolErrorCode,
+    ProtocolContractArtifact,
     ProtocolRevision,
     ResponsePayload,
     ResultPayload,
@@ -136,6 +137,7 @@ export interface AgentCommandReceiptRow {
     payloadDigest: `sha256:${string}`;
     producerId: string;
     receiverId: string;
+    commandExpiresAt: number;
     lifecycle: AgentCommandLifecycle;
     effectState: AgentEffectState;
     leaseOwner?: string;
@@ -233,6 +235,10 @@ export interface AgentConsumerStateRow {
     gapExpected?: string;
     gapObserved?: string;
     requiresSnapshot: boolean;
+    lastSnapshotMessageId?: string;
+    lastSnapshotContentSha256?: `sha256:${string}`;
+    lastSnapshotPairingRecordId?: string;
+    lastSnapshotContractArtifactSha256?: `sha256:${string}`;
     inactiveAfter: number;
     updatedAt: number;
 }
@@ -256,6 +262,8 @@ export interface AgentPairingKeyRow {
     pairingEpoch: number;
     publicKey: string;
     fingerprint: string;
+    protocolVersion: ProtocolContractArtifact['version'];
+    contractArtifact: ProtocolContractArtifact;
     status: 'active' | 'retired' | 'revoked';
     createdAt: number;
     revokedAt?: number;

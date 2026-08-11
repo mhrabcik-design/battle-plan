@@ -3,6 +3,7 @@ import type {
     AgentCommandReceiptHistoryEntry,
     AgentCommandReceiptRow,
     AgentConsumerStateRow,
+    AgentPairingKeyRow,
     AgentProtocolEventRow,
     AgentProtocolEffectRow,
     AgentProtocolOutboxRow,
@@ -45,6 +46,7 @@ export interface CommandClaimToken {
     commandId: string;
     payloadDigest: Sha256Digest;
     receiverId: string;
+    commandExpiresAt: number;
     leaseOwner: string;
     fencingToken: number;
 }
@@ -111,6 +113,7 @@ export type FinalizeCommandInput = FinalizeCommandBase & (
 
 export type FinalizeCommandResult =
     | { status: 'finalized'; receipt: AgentCommandReceiptRow }
+    | { status: 'expired'; receipt: AgentCommandReceiptRow }
     | { status: 'fence_lost' };
 
 const RECEIPT_SEPARATOR = '\0';
@@ -125,6 +128,33 @@ function receiptId(receiverId: string, commandId: string): string {
 
 function consumerStateId(consumerId: string, streamId: string): string {
     return `${consumerId}${RECEIPT_SEPARATOR}${streamId}`;
+}
+
+function snapshotProvenance(current: AgentConsumerStateRow | undefined) {
+    return current ? {
+        lastSnapshotMessageId: current.lastSnapshotMessageId,
+        lastSnapshotContentSha256: current.lastSnapshotContentSha256,
+        lastSnapshotPairingRecordId: current.lastSnapshotPairingRecordId,
+        lastSnapshotContractArtifactSha256: current.lastSnapshotContractArtifactSha256,
+    } : {};
+}
+
+function pairingMatchesProof(
+    pairing: AgentPairingKeyRow | undefined,
+    proof: VerifiedSnapshotProof,
+): pairing is AgentPairingKeyRow {
+    return pairing?.status === 'active'
+        && pairing.workspaceId === proof.workspaceId
+        && pairing.producerId === proof.producerId
+        && pairing.receiverId === proof.receiverId
+        && pairing.keyId === proof.signingKeyId
+        && pairing.pairingEpoch === proof.pairingEpoch
+        && pairing.publicKey === proof.rawPublicKey
+        && pairing.fingerprint === proof.keyFingerprint
+        && pairing.protocolVersion === proof.protocolVersion
+        && pairing.contractArtifact?.id === proof.contractArtifact.id
+        && pairing.contractArtifact?.version === proof.contractArtifact.version
+        && pairing.contractArtifact?.sha256 === proof.contractArtifact.sha256;
 }
 
 function historyEntry(
@@ -190,6 +220,14 @@ function validResultPayload(
 }
 
 function validFinalizeInput(input: FinalizeCommandInput): boolean {
+    if (!UUID.test(input.claim.commandId)
+        || !IDENTITY.test(input.claim.receiverId)
+        || !input.claim.receiptId
+        || !SHA256.test(input.claim.payloadDigest)
+        || !Number.isFinite(input.claim.commandExpiresAt)
+        || !IDENTITY.test(input.claim.leaseOwner)
+        || !Number.isSafeInteger(input.claim.fencingToken)
+        || input.claim.fencingToken <= 0) return false;
     const outbox = input.outbox ?? [];
     if (outbox.some((row) => row.family === 'event')) return false;
     if (outbox.some((row) => !row.id || !UUID.test(row.messageId) || !row.payload)) return false;
@@ -219,7 +257,7 @@ function validFinalizeInput(input: FinalizeCommandInput): boolean {
     }
 }
 
-async function terminalizeUnownedReceipt(
+async function terminalizeReceipt(
     db: BattlePlanDB,
     receipt: AgentCommandReceiptRow,
     lifecycle: 'expired' | 'blocked',
@@ -264,6 +302,7 @@ function freshUnownedReceipt(input: ClaimCommandInput, now: number): AgentComman
         payloadDigest: input.payloadDigest,
         producerId: input.producerId,
         receiverId: input.localReceiverId,
+        commandExpiresAt: input.expiresAt,
         lifecycle: 'executing',
         effectState: 'none',
         fencingToken: 0,
@@ -356,27 +395,35 @@ export class AgentProtocolLedger {
                     && existing.retryAt != null
                     && existing.retryAt <= now;
                 const canReclaim = canReclaimExpiredLease || canRunScheduledRetry;
-                if (existing && !canReclaim) return { status: 'replay', receipt: existing } as const;
-                if (command.expiresAt <= now) {
+                const existingIsNonTerminal = existing?.lifecycle === 'executing'
+                    || existing?.lifecycle === 'retry_scheduled'
+                    || existing?.lifecycle === 'awaiting_approval';
+                if (existing && !existingIsNonTerminal) return { status: 'replay', receipt: existing } as const;
+                const commandExpiresAt = existing?.commandExpiresAt ?? command.expiresAt;
+                const normalizedExisting = existing && existing.commandExpiresAt == null
+                    ? { ...existing, commandExpiresAt }
+                    : existing;
+                if (commandExpiresAt <= now) {
                     return {
                         status: 'replay',
-                        receipt: await terminalizeUnownedReceipt(
+                        receipt: await terminalizeReceipt(
                             this.db,
-                            existing ?? freshUnownedReceipt(command, now),
+                            normalizedExisting ?? freshUnownedReceipt(command, now),
                             'expired',
                             'message_expired',
                             now,
                         ),
                     } as const;
                 }
+                if (existing && !canReclaim) return { status: 'replay', receipt: existing } as const;
 
                 const receiver = await this.db.agentReceiverCapabilities.get(command.localReceiverId);
                 if (!receiver?.enabled || receiver.status !== 'ready') {
                     return {
                         status: 'replay',
-                        receipt: await terminalizeUnownedReceipt(
+                        receipt: await terminalizeReceipt(
                             this.db,
-                            existing ?? freshUnownedReceipt(command, now),
+                            normalizedExisting ?? freshUnownedReceipt(command, now),
                             'blocked',
                             'capability_blocked',
                             now,
@@ -392,6 +439,7 @@ export class AgentProtocolLedger {
                     payloadDigest: command.payloadDigest,
                     producerId: command.producerId,
                     receiverId: command.localReceiverId,
+                    commandExpiresAt,
                     lifecycle: 'executing',
                     effectState: existing?.effectState ?? 'none',
                     leaseOwner: command.leaseOwner,
@@ -419,6 +467,7 @@ export class AgentProtocolLedger {
                         commandId: command.commandId,
                         payloadDigest: command.payloadDigest,
                         receiverId: command.localReceiverId,
+                        commandExpiresAt,
                         leaseOwner: command.leaseOwner,
                         fencingToken,
                     },
@@ -464,14 +513,30 @@ export class AgentProtocolLedger {
                 const current = await this.db.agentCommandReceipts.get(finalization.claim.receiptId);
                 if (!current
                     || current.lifecycle !== 'executing'
+                    || current.id !== receiptId(finalization.claim.receiverId, finalization.claim.commandId)
+                    || current.commandId !== finalization.claim.commandId
                     || current.payloadDigest !== finalization.claim.payloadDigest
                     || current.receiverId !== finalization.claim.receiverId
+                    || current.commandExpiresAt !== finalization.claim.commandExpiresAt
                     || current.leaseOwner !== finalization.claim.leaseOwner
                     || current.fencingToken !== finalization.claim.fencingToken
-                    || current.leaseExpiresAt == null
-                    || current.leaseExpiresAt <= now) {
+                    || current.leaseExpiresAt == null) {
                     return { status: 'fence_lost' } as const;
                 }
+
+                if (current.commandExpiresAt <= now) {
+                    return {
+                        status: 'expired',
+                        receipt: await terminalizeReceipt(
+                            this.db,
+                            current,
+                            'expired',
+                            'message_expired',
+                            now,
+                        ),
+                    } as const;
+                }
+                if (current.leaseExpiresAt <= now) return { status: 'fence_lost' } as const;
 
                 if (finalization.lifecycle === 'retry_scheduled' && finalization.retryAt <= now) {
                     throw new TypeError('retry_scheduled requires a future retryAt');
@@ -640,6 +705,7 @@ export class AgentProtocolLedger {
             const inactive = current != null && current.inactiveAfter <= now;
             if (current?.requiresSnapshot || inactive || observed !== expected) {
                 const state: AgentConsumerStateRow = {
+                    ...snapshotProvenance(current),
                     id,
                     consumerId: input.consumerId,
                     streamId: input.streamId,
@@ -654,6 +720,7 @@ export class AgentProtocolLedger {
                 return { status: 'gap', expected: state.gapExpected!, observed: state.gapObserved! } as const;
             }
             await this.db.agentConsumerStates.put({
+                ...snapshotProvenance(current),
                 id,
                 consumerId: input.consumerId,
                 streamId: input.streamId,
@@ -678,7 +745,9 @@ export class AgentProtocolLedger {
     }): Promise<{ consumerState: AgentConsumerStateRow; value: T }> {
         if (!IDENTITY.test(input.consumerId)
             || !isVerifiedSnapshotProof(input.proof)
+            || input.proof.receiverId !== input.consumerId
             || !IDENTITY.test(input.proof.targetStreamId)
+            || input.proof.targetStreamId !== input.proof.payload.stream_id
             || !DECIMAL_COUNTER.test(input.proof.payload.high_water_mark)
             || typeof input.installProjection !== 'function'
             || (!input.domainTables.length && input.proof.payload.entities.length > 0)) {
@@ -686,10 +755,25 @@ export class AgentProtocolLedger {
         }
         const proof = input.proof;
         const id = consumerStateId(input.consumerId, proof.targetStreamId);
-        return this.db.transaction('rw', [this.db.agentConsumerStates, ...input.domainTables], async () => {
+        return this.db.transaction('rw', [
+            this.db.agentConsumerStates,
+            this.db.agentPairingKeys,
+            ...input.domainTables,
+        ], async () => {
             const now = this.readNow();
-            const current = await this.db.agentConsumerStates.get(id);
-            if (BigInt(proof.payload.high_water_mark) < BigInt(current?.lastSequence ?? '0')) {
+            const [pairing, current] = await Promise.all([
+                this.db.agentPairingKeys.get(proof.pairingRecordId),
+                this.db.agentConsumerStates.get(id),
+            ]);
+            if (!pairingMatchesProof(pairing, proof)) {
+                throw new TypeError('Verified snapshot proof is not bound to its active durable pairing');
+            }
+            if (!current
+                || current.consumerId !== proof.receiverId
+                || current.streamId !== proof.targetStreamId) {
+                throw new TypeError('Verified snapshot proof is not bound to an existing consumer stream');
+            }
+            if (BigInt(proof.payload.high_water_mark) < BigInt(current.lastSequence)) {
                 throw new TypeError('Snapshot high-water mark cannot move backward');
             }
             const installation = await input.installProjection(structuredClone(proof.payload));
@@ -697,12 +781,20 @@ export class AgentProtocolLedger {
                 || installation.installedEntityCount !== proof.payload.entities.length) {
                 throw new TypeError('Snapshot projection did not install every verified entity');
             }
+            const pairingAfterInstallation = await this.db.agentPairingKeys.get(proof.pairingRecordId);
+            if (!pairingMatchesProof(pairingAfterInstallation, proof)) {
+                throw new TypeError('Verified snapshot pairing changed during installation');
+            }
             const recovered: AgentConsumerStateRow = {
                 id,
                 consumerId: input.consumerId,
                 streamId: proof.targetStreamId,
                 lastSequence: proof.payload.high_water_mark,
                 requiresSnapshot: false,
+                lastSnapshotMessageId: proof.messageId,
+                lastSnapshotContentSha256: proof.contentSha256,
+                lastSnapshotPairingRecordId: proof.pairingRecordId,
+                lastSnapshotContractArtifactSha256: proof.contractArtifact.sha256,
                 inactiveAfter: now + CONSUMER_INACTIVITY_MS,
                 updatedAt: now,
             };

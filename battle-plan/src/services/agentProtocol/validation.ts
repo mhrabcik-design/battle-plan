@@ -16,6 +16,7 @@ import {
     MAX_PROTOCOL_FILE_BYTES,
     MESSAGE_TYPES,
     PROTOCOL_MAJOR,
+    PROTOCOL_VERSION,
     REVISION_DOMAIN,
     SIGNING_DOMAIN,
     type ProtocolDetachedSignature,
@@ -555,10 +556,18 @@ export async function verifyProtocolWireMessage(
     input: unknown,
     options: VerifyProtocolOptions,
 ): Promise<ProtocolValidationResult> {
-    const validation = validateProtocolWireMessage(input);
+    let immutableInput: unknown;
+    let immutableOptions: VerifyProtocolOptions;
+    try {
+        immutableInput = structuredClone(input);
+        immutableOptions = structuredClone(options);
+    } catch {
+        return invalid('schema_invalid', 'Verifier inputs must be structured-cloneable protocol values');
+    }
+    const validation = validateProtocolWireMessage(immutableInput);
     if (!validation.ok) return validation;
-    if (!options?.trustedPairing) return invalid('key_unknown', 'A trusted pairing record is required');
-    const trust = options.trustedPairing;
+    if (!immutableOptions?.trustedPairing) return invalid('key_unknown', 'A trusted pairing record is required');
+    const trust = immutableOptions.trustedPairing;
     const signed = validation.message.signed;
     if (
         trust.keyId !== signed.signing_key_id
@@ -639,13 +648,14 @@ export async function verifyProtocolWireMessage(
     const advertisedArtifact = assertedContractArtifact(signed);
     if (
         advertisedArtifact
-        && (!options.trustedContractArtifact || !sameContractArtifact(advertisedArtifact, options.trustedContractArtifact))
+        && (!immutableOptions.trustedContractArtifact
+            || !sameContractArtifact(advertisedArtifact, immutableOptions.trustedContractArtifact))
     ) {
         return invalid('contract_artifact_mismatch', 'Authenticated control message advertises a different normative contract artifact');
     }
     if (signed.expires_at) {
         const expiresAt = Date.parse(signed.expires_at);
-        const now = (options.now ?? new Date()).getTime();
+        const now = (immutableOptions.now ?? new Date()).getTime();
         if (!Number.isFinite(expiresAt) || !Number.isFinite(now)) {
             return invalid('schema_invalid', 'Expiry and verifier clock must be safely comparable timestamps');
         }
@@ -655,13 +665,25 @@ export async function verifyProtocolWireMessage(
 }
 
 export interface VerifiedSnapshotProof {
+    readonly pairingRecordId: string;
+    readonly receiverId: string;
+    readonly messageId: string;
+    readonly protocolVersion: ProtocolContractArtifact['version'];
+    readonly contractArtifact: ProtocolContractArtifact;
     readonly contentSha256: `sha256:${string}`;
     readonly workspaceId: string;
     readonly producerId: string;
     readonly targetStreamId: string;
     readonly signingKeyId: string;
     readonly pairingEpoch: number;
+    readonly rawPublicKey: string;
+    readonly keyFingerprint: `sha256:${string}`;
     readonly payload: SnapshotPayload;
+}
+
+export interface VerifySnapshotForInstallOptions extends VerifyProtocolOptions {
+    pairingRecordId: string;
+    receiverId: string;
 }
 
 export type VerifySnapshotForInstallResult =
@@ -682,9 +704,23 @@ function deepFreezeProtocolValue<T>(value: T): T {
  */
 export async function verifySnapshotForInstall(
     input: unknown,
-    options: VerifyProtocolOptions,
+    options: VerifySnapshotForInstallOptions,
 ): Promise<VerifySnapshotForInstallResult> {
-    const verification = await verifyProtocolWireMessage(input, options);
+    let immutableOptions: VerifySnapshotForInstallOptions;
+    try {
+        immutableOptions = structuredClone(options);
+    } catch {
+        return invalid('schema_invalid', 'Snapshot recovery options must be structured-cloneable protocol values');
+    }
+    const artifact = immutableOptions?.trustedContractArtifact;
+    if (!immutableOptions?.pairingRecordId?.trim()
+        || !immutableOptions?.receiverId?.trim()
+        || artifact?.id !== 'battleplan-hermes-protocol'
+        || artifact.version !== PROTOCOL_VERSION
+        || !/^sha256:[a-f0-9]{64}$/.test(artifact.sha256)) {
+        return invalid('schema_invalid', 'Snapshot recovery requires durable pairing/receiver identities and a normative contract artifact');
+    }
+    const verification = await verifyProtocolWireMessage(input, immutableOptions);
     if (verification.ok === false) return verification;
     const signed = verification.message.signed;
     if (signed.message_type !== 'snapshot') {
@@ -694,12 +730,19 @@ export async function verifySnapshotForInstall(
         return invalid('target_mismatch', 'Snapshot target and payload stream must match');
     }
     const proof = deepFreezeProtocolValue<VerifiedSnapshotProof>({
+        pairingRecordId: immutableOptions.pairingRecordId,
+        receiverId: immutableOptions.receiverId,
+        messageId: signed.message_id,
+        protocolVersion: signed.protocol_version,
+        contractArtifact: structuredClone(immutableOptions.trustedContractArtifact),
         contentSha256: verification.contentSha256,
         workspaceId: signed.workspace_id,
         producerId: signed.producer_id,
         targetStreamId: signed.target.id,
         signingKeyId: signed.signing_key_id,
         pairingEpoch: signed.pairing_epoch,
+        rawPublicKey: immutableOptions.trustedPairing.rawPublicKey,
+        keyFingerprint: immutableOptions.trustedPairing.fingerprint,
         payload: structuredClone(signed.payload),
     });
     verifiedSnapshotProofs.add(proof);

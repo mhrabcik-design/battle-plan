@@ -10,6 +10,7 @@ import {
     calculateProtocolRevisionId,
     createDetachedSignature,
     verifySnapshotForInstall,
+    type VerifySnapshotForInstallOptions,
     type VerifiedSnapshotProof,
 } from './validation.ts';
 import type { ProtocolSignedMessage, ProtocolWireMessage } from './contracts.ts';
@@ -23,6 +24,7 @@ import {
 
 const RECEIVER_ID = 'battleplan-receiver-a';
 const COMMAND_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000401';
+const SECOND_COMMAND_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000409';
 const DISABLED_COMMAND_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000403';
 const FRESH_DISABLED_COMMAND_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000404';
 const EVENT_ID = '018f6f5e-2d88-7f2a-8f90-d6ad23000405';
@@ -79,7 +81,10 @@ async function ready(db: BattlePlanDB): Promise<void> {
     });
 }
 
-async function verifiedSnapshotProof(highWaterMark = '10'): Promise<VerifiedSnapshotProof> {
+async function verifiedSnapshotProof(
+    highWaterMark = '10',
+    mutateOptionsDuringVerification = false,
+): Promise<VerifiedSnapshotProof> {
     const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
     const rawPublicKey = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey));
     const projection = { title: 'Snapshot task', status: 'pending' };
@@ -125,7 +130,9 @@ async function verifiedSnapshotProof(highWaterMark = '10'): Promise<VerifiedSnap
         signed,
         signature: await createDetachedSignature(signed, keys.privateKey),
     };
-    const verification = await verifySnapshotForInstall(message, {
+    const options: VerifySnapshotForInstallOptions = {
+        pairingRecordId: 'snapshot-pairing-hermes',
+        receiverId: 'hermes',
         trustedPairing: {
             status: 'active',
             workspaceId: signed.workspace_id,
@@ -141,9 +148,52 @@ async function verifiedSnapshotProof(highWaterMark = '10'): Promise<VerifiedSnap
             version: '2.0.0',
             sha256: DIGEST_A,
         },
-    });
+    };
+    const pendingVerification = verifySnapshotForInstall(message, options);
+    if (mutateOptionsDuringVerification) {
+        const substitutedKey = new Uint8Array(32).fill(7);
+        signed.target.id = 'attacker-stream';
+        signed.payload.stream_id = 'attacker-stream';
+        options.pairingRecordId = 'snapshot-pairing-attacker';
+        options.receiverId = 'attacker';
+        options.trustedPairing.targetId = 'attacker-stream';
+        options.trustedPairing.rawPublicKey = Buffer.from(substitutedKey).toString('base64url');
+        options.trustedPairing.fingerprint = calculateEd25519PublicKeyFingerprint(substitutedKey);
+        options.trustedContractArtifact.sha256 = DIGEST_B;
+    }
+    const verification = await pendingVerification;
     if (!verification.ok) assert.fail(`${verification.error.code}: ${verification.error.message}`);
     return verification.proof;
+}
+
+test('snapshot proof keeps caller-owned wire and trust inputs immutable across WebCrypto awaits', async () => {
+    const proof = await verifiedSnapshotProof('10', true);
+    assert.equal(proof.pairingRecordId, 'snapshot-pairing-hermes');
+    assert.equal(proof.receiverId, 'hermes');
+    assert.equal(proof.targetStreamId, 'battleplan-events');
+    assert.equal(proof.contractArtifact.sha256, DIGEST_A);
+    assert.notEqual(proof.keyFingerprint, calculateEd25519PublicKeyFingerprint(new Uint8Array(32).fill(7)));
+});
+
+async function activateSnapshotPairing(
+    db: BattlePlanDB,
+    proof: VerifiedSnapshotProof,
+): Promise<void> {
+    await db.agentPairingKeys.put({
+        id: proof.pairingRecordId,
+        workspaceId: proof.workspaceId,
+        producerId: proof.producerId,
+        receiverId: proof.receiverId,
+        keyId: proof.signingKeyId,
+        pairingEpoch: proof.pairingEpoch,
+        publicKey: proof.rawPublicKey,
+        fingerprint: proof.keyFingerprint,
+        protocolVersion: proof.protocolVersion,
+        contractArtifact: proof.contractArtifact,
+        status: 'active',
+        createdAt: 1,
+        retainUntil: Number.MAX_SAFE_INTEGER,
+    });
 }
 
 test('ten concurrent claims across independent Dexie connections yield one fenced owner and one receipt', async () => {
@@ -321,6 +371,53 @@ test('expired lease is reclaimed with a higher fence and stale worker cannot fin
         firstDb.close();
         secondDb.close();
         await Dexie.delete(databaseName);
+    }
+});
+
+test('a receipt cannot finalize a result for a different command identity', async () => {
+    const db = new BattlePlanDB(`BattlePlan-ledger-command-binding-${Date.now()}-${Math.random()}`);
+    await db.open();
+    await ready(db);
+    const clock = { now: 1_000 };
+    const ledger = ledgerFor(db, clock);
+    try {
+        const claimed = await ledger.claimCommand(input());
+        assert.equal(claimed.status, 'claimed');
+        if (claimed.status !== 'claimed') return;
+
+        let mutationRan = false;
+        const result = await ledger.commitFencedMutation({
+            claim: { ...claimed.claim, commandId: SECOND_COMMAND_ID },
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_1', revision: REVISION },
+            outbox: [{
+                id: 'cross-command-result',
+                family: 'result',
+                messageId: crypto.randomUUID(),
+                payload: {
+                    command_id: SECOND_COMMAND_ID,
+                    state: 'applied',
+                    entity_public_id: 'task_public_1',
+                    revision: REVISION,
+                },
+            }],
+        }, [db.tasks], async () => {
+            mutationRan = true;
+            return db.tasks.add({
+                publicId: 'task_cross_command', title: 'Must not be written', type: 'task',
+                urgency: 2, status: 'pending', createdAt: clock.now, updatedAt: clock.now,
+            });
+        });
+        assert.equal(result.status, 'fence_lost');
+        assert.equal(mutationRan, false);
+        assert.equal((await db.agentCommandReceipts.get(claimed.claim.receiptId))?.lifecycle, 'executing');
+        assert.equal(await db.agentCommandReceiptHistory.count(), 1);
+        assert.equal(await db.agentProtocolOutbox.count(), 0);
+        assert.equal(await db.agentProtocolEffects.count(), 0);
+        assert.equal(await db.agentProtocolEvents.count(), 0);
+        assert.equal(await db.tasks.count(), 0);
+    } finally {
+        await db.delete();
     }
 });
 
@@ -590,6 +687,93 @@ test('an unowned receipt becomes terminal when its command expires or receiver i
     }
 });
 
+test('command expiry overrides an active lease, replay, and a late domain finalization', async () => {
+    const db = new BattlePlanDB(`BattlePlan-ledger-active-expiry-${Date.now()}-${Math.random()}`);
+    await db.open();
+    await ready(db);
+    const clock = { now: 1_000 };
+    const ledger = ledgerFor(db, clock);
+    try {
+        const replayClaim = await ledger.claimCommand(input({ expiresAt: 1_050, leaseDurationMs: 500 }));
+        assert.equal(replayClaim.status, 'claimed');
+        clock.now = 1_051;
+        const replay = await ledger.claimCommand(input({
+            expiresAt: 1_050,
+            leaseOwner: 'replay-after-expiry',
+            leaseDurationMs: 500,
+        }));
+        assert.equal(replay.status, 'replay');
+        if (replay.status === 'replay') assert.equal(replay.receipt.lifecycle, 'expired');
+        const repeatedReplay = await ledger.claimCommand(input({
+            expiresAt: 1_050,
+            leaseOwner: 'second-replay-after-expiry',
+            leaseDurationMs: 500,
+        }));
+        assert.equal(repeatedReplay.status, 'replay');
+        if (repeatedReplay.status === 'replay') assert.equal(repeatedReplay.receipt.lifecycle, 'expired');
+
+        clock.now = 2_000;
+        const lateClaim = await ledger.claimCommand(input({
+            commandId: SECOND_COMMAND_ID,
+            expiresAt: 2_050,
+            leaseOwner: 'late-finalizer',
+            leaseDurationMs: 500,
+        }));
+        assert.equal(lateClaim.status, 'claimed');
+        if (lateClaim.status !== 'claimed') return;
+        clock.now = 2_051;
+        const lateFinalize = await ledger.commitFencedMutation(
+            {
+                claim: lateClaim.claim,
+                lifecycle: 'applied',
+                result: { entityPublicId: 'task_public_2', revision: REVISION },
+                outbox: [{
+                    id: 'late-applied-result',
+                    family: 'result',
+                    messageId: crypto.randomUUID(),
+                    payload: {
+                        command_id: SECOND_COMMAND_ID,
+                        state: 'applied',
+                        entity_public_id: 'task_public_2',
+                        revision: REVISION,
+                    },
+                }],
+            },
+            [db.tasks],
+            async () => db.tasks.add({
+                publicId: 'task_public_2', title: 'Must not be committed', type: 'task',
+                urgency: 2, status: 'pending', createdAt: clock.now, updatedAt: clock.now,
+            }),
+        );
+        assert.equal(lateFinalize.status, 'expired');
+        assert.equal((await ledger.finalizeCommand({
+            claim: lateClaim.claim,
+            lifecycle: 'applied',
+            result: { entityPublicId: 'task_public_2', revision: REVISION },
+            outbox: [{
+                id: 'repeated-late-applied-result',
+                family: 'result',
+                messageId: crypto.randomUUID(),
+                payload: {
+                    command_id: SECOND_COMMAND_ID,
+                    state: 'applied',
+                    entity_public_id: 'task_public_2',
+                    revision: REVISION,
+                },
+            }],
+        })).status, 'fence_lost');
+        assert.equal(await db.tasks.count(), 0);
+        assert.equal((await db.agentCommandReceipts.get(lateClaim.claim.receiptId))?.lifecycle, 'expired');
+        const results = await db.agentProtocolOutbox.where('family').equals('result').toArray();
+        assert.equal(results.length, 2);
+        assert.ok(results.every((row) => row.family === 'result' && row.payload.state === 'expired'));
+        assert.equal(new Set(results.map((row) => row.commandReceiptId)).size, 2);
+        assert.equal(await db.agentCommandReceiptHistory.count(), 4);
+    } finally {
+        await db.delete();
+    }
+});
+
 test('authenticated fresh expiry and disabled capability create durable terminal evidence', async () => {
     const databaseName = `BattlePlan-ledger-preconditions-${Date.now()}-${Math.random()}`;
     const db = new BattlePlanDB(databaseName);
@@ -683,6 +867,37 @@ test('inactive consumer requires a verified snapshot before accepting the next i
         assert.equal((await db.agentConsumerStates.get('hermes\0battleplan-events'))?.requiresSnapshot, true);
 
         const proof = await verifiedSnapshotProof();
+        await activateSnapshotPairing(db, proof);
+        await assert.rejects(ledger.installVerifiedConsumerSnapshot({
+            consumerId: 'other-consumer',
+            proof,
+            domainTables: [db.tasks],
+            installProjection: async (payload) => ({ value: undefined, installedEntityCount: payload.entities.length }),
+        }), /capability was not satisfied/);
+        assert.equal(await db.tasks.count(), 0);
+
+        await db.agentPairingKeys.update(proof.pairingRecordId, { fingerprint: DIGEST_A });
+        await assert.rejects(ledger.installVerifiedConsumerSnapshot({
+            consumerId: 'hermes',
+            proof,
+            domainTables: [db.tasks],
+            installProjection: async (payload) => ({ value: undefined, installedEntityCount: payload.entities.length }),
+        }), /active durable pairing/);
+        assert.equal(await db.tasks.count(), 0);
+        await activateSnapshotPairing(db, proof);
+
+        await assert.rejects(ledger.installVerifiedConsumerSnapshot({
+            consumerId: 'hermes',
+            proof,
+            domainTables: [db.tasks],
+            installProjection: async (payload) => {
+                await db.agentPairingKeys.update(proof.pairingRecordId, { status: 'revoked' });
+                return { value: undefined, installedEntityCount: payload.entities.length };
+            },
+        }), /changed during installation/);
+        assert.equal((await db.agentPairingKeys.get(proof.pairingRecordId))?.status, 'active');
+        assert.equal((await db.agentConsumerStates.get('hermes\0battleplan-events'))?.requiresSnapshot, true);
+
         await assert.rejects(ledger.installVerifiedConsumerSnapshot({
             consumerId: 'hermes',
             proof,
@@ -720,13 +935,19 @@ test('inactive consumer requires a verified snapshot before accepting the next i
         const recovered = await db.agentConsumerStates.get('hermes\0battleplan-events');
         assert.equal(recovered?.lastSequence, '10');
         assert.equal(recovered?.requiresSnapshot, false);
+        assert.equal(recovered?.lastSnapshotMessageId, proof.messageId);
+        assert.equal(recovered?.lastSnapshotContentSha256, proof.contentSha256);
+        assert.equal(recovered?.lastSnapshotPairingRecordId, proof.pairingRecordId);
+        assert.equal(recovered?.lastSnapshotContractArtifactSha256, proof.contractArtifact.sha256);
         assert.equal(recovered?.gapExpected, undefined);
         assert.equal(recovered?.gapObserved, undefined);
         assert.equal((await db.tasks.where('publicId').equals('task_snapshot_1').first())?.title, 'Snapshot task');
 
+        const backwardProof = await verifiedSnapshotProof('9');
+        await activateSnapshotPairing(db, backwardProof);
         await assert.rejects(ledger.installVerifiedConsumerSnapshot({
             consumerId: 'hermes',
-            proof: await verifiedSnapshotProof('9'),
+            proof: backwardProof,
             domainTables: [db.tasks],
             installProjection: async (payload) => ({ value: undefined, installedEntityCount: payload.entities.length }),
         }), /cannot move backward/);
@@ -735,6 +956,11 @@ test('inactive consumer requires a verified snapshot before accepting the next i
         assert.equal((await ledger.ingestConsumerSequence({
             consumerId: 'hermes', streamId: 'battleplan-events', sequence: '11',
         })).status, 'advanced');
+        const advanced = await db.agentConsumerStates.get('hermes\0battleplan-events');
+        assert.equal(advanced?.lastSnapshotMessageId, proof.messageId);
+        assert.equal(advanced?.lastSnapshotContentSha256, proof.contentSha256);
+        assert.equal(advanced?.lastSnapshotPairingRecordId, proof.pairingRecordId);
+        assert.equal(advanced?.lastSnapshotContractArtifactSha256, proof.contractArtifact.sha256);
     } finally {
         await db.delete();
     }
