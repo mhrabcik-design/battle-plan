@@ -36,7 +36,10 @@ bind that receipt to the canonical payload digest. A replay with the same digest
 returns the stored lifecycle; reuse of the command ID with different content
 creates one durable conflict result without changing the original receipt. The
 implementation snapshots caller-owned input before its first asynchronous
-boundary and uses a trusted local clock for lease, expiry, and retry decisions
+boundary and persists the authenticated absolute expiry with the first receipt.
+Never reconstruct that value from a replay: an older receipt that lacks it must
+be migrated to a fail-closed sentinel or quarantined before it can be reclaimed.
+The ledger uses a trusted local clock for lease, expiry, and retry decisions
 ([ledger.ts](../../../battle-plan/src/services/agentProtocol/ledger.ts)).
 
 Use a lease owner plus a monotonically increasing fencing token for execution.

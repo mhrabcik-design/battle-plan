@@ -347,6 +347,13 @@ async function backfillPortableIdentities(transaction: Transaction): Promise<voi
     }
 }
 
+async function failClosedLegacyCommandExpiry(transaction: Transaction): Promise<void> {
+    const receipts = transaction.table<AgentCommandReceiptRow, string>('agentCommandReceipts');
+    await receipts.toCollection().modify((receipt) => {
+        if (!Number.isFinite(receipt.commandExpiresAt)) receipt.commandExpiresAt = 0;
+    });
+}
+
 export class BattlePlanDB extends Dexie {
     tasks!: Table<Task>;
     settings!: Table<Setting>;
@@ -510,6 +517,11 @@ export class BattlePlanDB extends Dexie {
             workLogs: '++id, &publicId, syncId, date, projectId, hours, createdAt',
             projects: '++id, &publicId, name, isActive, createdAt',
         });
+
+        // v16 cannot reconstruct an authenticated expires_at for receipts
+        // created before the durable field existed. Epoch zero makes every
+        // such row terminal on its next claim instead of trusting replay data.
+        this.version(16).stores({}).upgrade(failClosedLegacyCommandExpiry);
 
         // Keep identities present and immutable until all mutation paths share
         // the centralized domain-command transaction boundary.

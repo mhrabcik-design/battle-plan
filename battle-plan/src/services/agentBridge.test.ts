@@ -911,8 +911,9 @@ test('U7: agentInbox is a Dexie Table and recordings is no longer declared in th
     // The full removal of the recordings table from the class and all
     // version().stores() chains is a release-rollout concern; the test
     // v11 retains the legacy inbox while adding isolated protocol-v2 stores;
-    // v14 repairs portable identities before v15 makes them unique.
-    assert.equal(await db.verno, 15);
+    // v14 repairs portable identities before v15 makes them unique; v16
+    // fail-closes legacy protocol receipts that lack authenticated expiry.
+    assert.equal(await db.verno, 16);
 });
 
 

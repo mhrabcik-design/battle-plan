@@ -91,7 +91,7 @@ test('v10 upgrade reconciles duplicate projects and preserves WorkLog snapshots'
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 15);
+        assert.equal(upgraded.verno, 16);
         assert.equal(await upgraded.projects.count(), 1);
         assert.deepEqual(
             (await upgraded.workLogs.orderBy('date').toArray()).map((workLog) => ({
@@ -140,7 +140,7 @@ test('v11 upgrade backfills stable public identities without replacing local key
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 15);
+        assert.equal(upgraded.verno, 16);
         const task = await upgraded.tasks.get(taskId);
         const project = await upgraded.projects.get(projectId);
         const logs = await upgraded.workLogs.orderBy('id').toArray();
@@ -231,7 +231,7 @@ test('direct v11 upgrade repairs duplicate public identities before creating uni
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 15);
+        assert.equal(upgraded.verno, 16);
         const projects = await upgraded.projects.orderBy('id').toArray();
         const tasks = await upgraded.tasks.orderBy('id').toArray();
         const workLogs = await upgraded.workLogs.orderBy('id').toArray();
@@ -355,7 +355,7 @@ test('direct v13 upgrade repairs identities omitted under the previous unique sc
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 15);
+        assert.equal(upgraded.verno, 16);
         assertPortableIdentityIndexesAreUnique(upgraded);
         const tasks = await upgraded.tasks.orderBy('id').toArray();
         const projects = await upgraded.projects.orderBy('id').toArray();
@@ -405,10 +405,45 @@ test('an aborted v14 identity repair rolls back and succeeds on retry', async ()
     const recovered = new BattlePlanDB(databaseName);
     await recovered.open();
     try {
-        assert.equal(recovered.verno, 15);
+        assert.equal(recovered.verno, 16);
         assert.match((await recovered.tasks.get(taskId))?.publicId ?? '', /^task_[0-9a-f-]{36}$/);
         assertPortableIdentityIndexesAreUnique(recovered);
     } finally {
         await recovered.delete();
+    }
+});
+
+test('v16 upgrade makes legacy command receipts without authenticated expiry fail closed', async () => {
+    const databaseName = `BattlePlanDB-v15-command-expiry-upgrade-${Date.now()}-${Math.random()}`;
+    const legacy = new Dexie(databaseName);
+    legacy.version(15).stores(LEGACY_V13_UNIQUE_STORES);
+    await legacy.open();
+    const receiptId = ['battleplan-receiver-a', '018f6f5e-2d88-7f2a-8f90-d6ad23000401'].join('\0');
+    await legacy.table('agentCommandReceipts').add({
+        id: receiptId,
+        commandId: '018f6f5e-2d88-7f2a-8f90-d6ad23000401',
+        payloadDigest: `sha256:${'a'.repeat(64)}`,
+        producerId: 'hermes',
+        receiverId: 'battleplan-receiver-a',
+        lifecycle: 'executing',
+        effectState: 'none',
+        leaseOwner: 'legacy-owner',
+        leaseExpiresAt: 5_000,
+        fencingToken: 1,
+        attempts: 1,
+        historyCount: 1,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        retainUntil: 10_000,
+    });
+    legacy.close();
+
+    const upgraded = new BattlePlanDB(databaseName);
+    await upgraded.open();
+    try {
+        assert.equal(upgraded.verno, 16);
+        assert.equal((await upgraded.agentCommandReceipts.get(receiptId))?.commandExpiresAt, 0);
+    } finally {
+        await upgraded.delete();
     }
 });

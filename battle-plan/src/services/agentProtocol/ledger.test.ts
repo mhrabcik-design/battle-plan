@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 import Dexie from 'dexie';
 
-import { BattlePlanDB } from '../../db.ts';
+import { BattlePlanDB, type AgentCommandReceiptRow } from '../../db.ts';
 import {
     calculateEd25519PublicKeyFingerprint,
     calculateProtocolRevisionId,
@@ -769,6 +769,48 @@ test('command expiry overrides an active lease, replay, and a late domain finali
         assert.ok(results.every((row) => row.family === 'result' && row.payload.state === 'expired'));
         assert.equal(new Set(results.map((row) => row.commandReceiptId)).size, 2);
         assert.equal(await db.agentCommandReceiptHistory.count(), 4);
+    } finally {
+        await db.delete();
+    }
+});
+
+test('a legacy receipt without authenticated expiry cannot inherit a later replay expiry', async () => {
+    const db = new BattlePlanDB(`BattlePlan-ledger-legacy-expiry-${Date.now()}-${Math.random()}`);
+    await db.open();
+    await ready(db);
+    const clock = { now: 1_000 };
+    const ledger = ledgerFor(db, clock);
+    try {
+        const first = await ledger.claimCommand(input({ expiresAt: 1_050, leaseDurationMs: 500 }));
+        assert.equal(first.status, 'claimed');
+        if (first.status !== 'claimed') return;
+
+        const legacyReceipt = await db.agentCommandReceipts.get(first.claim.receiptId);
+        assert.ok(legacyReceipt);
+        const legacyWithoutExpiry = { ...legacyReceipt } as Partial<AgentCommandReceiptRow>;
+        delete legacyWithoutExpiry.commandExpiresAt;
+        await db.agentCommandReceipts.put(legacyWithoutExpiry as AgentCommandReceiptRow);
+
+        clock.now = 1_501;
+        const replay = await ledger.claimCommand(input({
+            expiresAt: 5_000,
+            leaseOwner: 'legacy-replay-owner',
+            leaseDurationMs: 500,
+        }));
+        assert.equal(replay.status, 'replay');
+        if (replay.status !== 'replay') return;
+        assert.equal(replay.receipt.lifecycle, 'expired');
+        assert.equal(replay.receipt.commandExpiresAt, 0);
+
+        const repeated = await ledger.claimCommand(input({
+            expiresAt: 9_000,
+            leaseOwner: 'second-legacy-replay-owner',
+            leaseDurationMs: 500,
+        }));
+        assert.equal(repeated.status, 'replay');
+        if (repeated.status === 'replay') assert.equal(repeated.receipt.lifecycle, 'expired');
+        assert.equal(await db.agentProtocolOutbox.where('family').equals('result').count(), 1);
+        assert.equal(await db.tasks.count(), 0);
     } finally {
         await db.delete();
     }

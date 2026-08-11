@@ -399,10 +399,11 @@ export class AgentProtocolLedger {
                     || existing?.lifecycle === 'retry_scheduled'
                     || existing?.lifecycle === 'awaiting_approval';
                 if (existing && !existingIsNonTerminal) return { status: 'replay', receipt: existing } as const;
-                const commandExpiresAt = existing?.commandExpiresAt ?? command.expiresAt;
-                const normalizedExisting = existing && existing.commandExpiresAt == null
-                    ? { ...existing, commandExpiresAt }
-                    : existing;
+                const legacyExpiryMissing = existing != null && !Number.isFinite(existing.commandExpiresAt);
+                const commandExpiresAt = existing
+                    ? (legacyExpiryMissing ? 0 : existing.commandExpiresAt)
+                    : command.expiresAt;
+                const normalizedExisting = existing ? { ...existing, commandExpiresAt } : undefined;
                 if (commandExpiresAt <= now) {
                     return {
                         status: 'replay',
