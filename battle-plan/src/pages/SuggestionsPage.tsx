@@ -6,11 +6,11 @@ import {
   type AgentSuggestion,
   type AgentSuggestionReply,
 } from '../services/suggestionsSync';
-import { db } from '../db';
 import { SuggestionCard } from '../components/SuggestionCard';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import { resolveSuggestionsSnapshot } from '../utils/suggestionReplies';
+import { newTaskMutationContext, taskMutations } from '../services/taskMutations';
 
 type FilterMode = 'all' | 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted';
 
@@ -114,19 +114,20 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             .join('\n')
         : '';
       const fullDescription = (suggestion.description ?? '') + noteSection;
-      const now = new Date().getTime();
-
-      const newId = await db.tasks.add({
-        title: suggestion.title,
-        description: fullDescription,
-        type: 'task',
-        status: 'pending',
-        urgency: suggestion.context.priority === 'high' ? 3 : suggestion.context.priority === 'low' ? 1 : 2,
-        date: deadline,
-        deadline: deadline,
-        createdAt: now,
-        updatedAt: now,
+      const mutation = await taskMutations.createTask({
+        task: {
+          title: suggestion.title,
+          description: fullDescription,
+          type: 'task',
+          status: 'pending',
+          urgency: suggestion.context.priority === 'high' ? 3 : suggestion.context.priority === 'low' ? 1 : 2,
+          date: deadline,
+          deadline,
+        },
+        context: newTaskMutationContext('ui'),
       });
+      if (mutation.status !== 'applied') throw new Error(`Task mutation ${mutation.status}`);
+      const newId = mutation.task.id!;
 
       // Post action reply
       await suggestionsSync.addReply({

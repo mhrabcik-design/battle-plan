@@ -61,6 +61,28 @@ workers may retry the persisted payload or effect without repeating the domain
 mutation. A digest alone is insufficient for an outbox because recovery after a
 restart must not depend on reconstructing caller memory.
 
+Snapshot every caller-owned mutation value synchronously, before the first
+`await`. This includes update patches, import rows, external-effect requests,
+and command claims; only stable service references should remain shared. A
+later clone is already too late because validation or workspace lookup can yield
+control back to a caller that still holds and can mutate the original object
+([taskMutations.ts](../../../battle-plan/src/services/taskMutations.ts)).
+
+Optimistic protocol revision checks do not protect local-only integration
+metadata. If an effect worker records a Calendar or Google Tasks identifier
+while a domain mutation is in flight, a stale whole-row write can erase that
+identifier without producing a revision conflict. Before persisting the planned
+Task row, re-read the current row and preserve integration-owned fields that
+changed since the plan snapshot. This keeps the domain revision boundary and
+the external-effect saga boundary independent.
+
+Authentication availability gates effect execution, not effect persistence.
+When a Task is already linked to an external resource, local updates and deletes
+must enqueue the corresponding durable effect even while OAuth is unavailable;
+the worker drains it after authentication recovers. A new, unlinked external
+resource may still require an explicit orchestration policy before its first
+upsert is queued.
+
 Persisted protocol payloads must pass the same manifest-covered standalone
 validators that peers use. Local TypeScript types and hand-written lifecycle
 checks are not sufficient: they can drift on UUID syntax, portable public IDs,
@@ -146,11 +168,15 @@ mutation during an asynchronous claim, expired lease fencing, crash rollback,
 manifest-exact result and event rejection, the 250-event batch boundary,
 cryptographically verified snapshot installation with crash rollback,
 outbox/event recovery after restart, duplicate portable identities during
-migration, poll rejection cleanup, and operation without Web Locks. The focused
-U3 suites live beside
+migration, poll rejection cleanup, operation without Web Locks, caller input
+mutation immediately after invocation, concurrent integration-metadata writes
+during a blocked mutation read, and linked-resource changes while OAuth is
+offline. The focused suites live beside
 [ledger.test.ts](../../../battle-plan/src/services/agentProtocol/ledger.test.ts),
 [dbMigration.test.ts](../../../battle-plan/src/dbMigration.test.ts), and
-[pollingCoordinator.test.ts](../../../battle-plan/src/services/agentProtocol/pollingCoordinator.test.ts).
+[pollingCoordinator.test.ts](../../../battle-plan/src/services/agentProtocol/pollingCoordinator.test.ts),
+with mutation-boundary cases in
+[taskMutations.test.ts](../../../battle-plan/src/services/taskMutations.test.ts).
 
 ## Related
 

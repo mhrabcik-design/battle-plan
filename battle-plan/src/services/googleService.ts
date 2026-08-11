@@ -659,15 +659,28 @@ class GoogleService {
                 'overrides': overrides
             };
 
-            const method = task.googleEventId ? 'update' : 'insert';
+            const existingEventId = typeof task.googleEventId === 'string' ? task.googleEventId : undefined;
+            const reservedEventId = typeof task.reservedGoogleEventId === 'string' ? task.reservedGoogleEventId : undefined;
+            const method = existingEventId ? 'update' : 'insert';
 
             const params: any = {
                 'calendarId': 'primary',
                 'resource': event,
             };
-            if (task.googleEventId) params.eventId = task.googleEventId;
+            if (existingEventId || reservedEventId) params.eventId = existingEventId ?? reservedEventId;
 
-            const response = await window.gapi.client.calendar.events[method](params);
+            let response;
+            try {
+                response = await window.gapi.client.calendar.events[method](params);
+            } catch (error: unknown) {
+                const conflict = error as { status?: number; code?: number; result?: { error?: { code?: number } } };
+                const status = conflict.status ?? conflict.code ?? conflict.result?.error?.code;
+                if (method !== 'insert' || !reservedEventId || status !== 409) throw error;
+                // The reserved ID already exists, which is the expected replay
+                // outcome after an ambiguous insert response. Updating that
+                // exact ID converges without creating a second Calendar event.
+                response = await window.gapi.client.calendar.events.update({ ...params, eventId: reservedEventId });
+            }
             return response.result.id;
         } catch (e: unknown) {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
@@ -696,6 +709,8 @@ class GoogleService {
                 this.markAuthUnavailable();
                 return;
             }
+            const status = err.status ?? (err.result?.error as { code?: number } | undefined)?.code;
+            if (status === 404) return true;
             const errorMsg = err?.result?.error?.message || err?.message || "Neznámá chyba Googlu";
             throw new Error(`Kalendář smazání selhalo: ${errorMsg}`);
         }

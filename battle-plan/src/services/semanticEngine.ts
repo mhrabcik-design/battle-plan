@@ -1,7 +1,8 @@
 import { db, type SubTask, type Task } from '../db.ts';
-import { googleService } from './googleService.ts';
 import type { GoogleAuthStatus } from '../types.ts';
 import { hasUsableAuth } from '../types.ts';
+import { drainGoogleExternalEffects } from './externalEffectOutbox.ts';
+import { newTaskMutationContext, taskMutations } from './taskMutations.ts';
 import { EXACT_TYPE_MAP, normalizeType, clampUrgency, clampIsAllDay, clampProgress } from './taskNormalization.ts';
 import type { AppContext } from './appContext.ts';
 import { renderAppContextSection } from './appContext.ts';
@@ -186,30 +187,32 @@ export const applySemanticResult = async (result: unknown, updateId: number | nu
                 createdAt: existing.createdAt,
                 updatedAt: Date.now(),
             };
-            await db.tasks.update(updateId, updated as Partial<Task>);
-            return { updatedId: updateId, result: updated };
+            const mutation = await taskMutations.updateTask({
+                localId: updateId,
+                changes: updated,
+                context: newTaskMutationContext('voice'),
+            });
+            if (mutation.status !== 'applied') return null;
+            return { updatedId: mutation.task.id!, result: mutation.task };
         } else {
             const norm = normalizeEntity(result, 'create', undefined);
             const v = norm.value as Partial<Task> & { title: string; type: Task['type']; urgency: 1 | 2 | 3 };
-            const newTaskId = await db.tasks.add({
-                ...v,
-                status: 'pending',
-                updatedAt: Date.now(),
-                createdAt: Date.now()
+            const mutation = await taskMutations.createTask({
+                task: {
+                    ...v,
+                    status: 'pending',
+                    title: v.title,
+                    type: v.type,
+                    urgency: v.urgency,
+                },
+                context: newTaskMutationContext('voice'),
+                effects: v.type === 'meeting' && hasUsableAuth(googleAuth)
+                    ? [{ kind: 'calendar', operation: 'upsert' }]
+                    : [],
             });
-
-            if (v.type === 'meeting' && hasUsableAuth(googleAuth)) {
-                const addedTask = await db.tasks.get(newTaskId);
-                if (addedTask) {
-                    try {
-                        const eventId = await googleService.addToCalendar(addedTask);
-                        if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
-                    } catch (e) {
-                        console.error("Auto Google sync failed", e);
-                    }
-                }
-            }
-            return { newId: newTaskId };
+            if (mutation.status !== 'applied') return null;
+            if (mutation.effectIds.length) await drainGoogleExternalEffects(mutation.effectIds);
+            return { newId: mutation.task.id! };
         }
     } catch (e) {
         console.error("applySemanticResult failed", e);

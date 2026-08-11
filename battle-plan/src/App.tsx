@@ -42,6 +42,7 @@ import {
 } from './utils/calendarUtils';
 import { buildInfo } from './utils/buildInfo';
 import { getErrorMessage } from './utils/errors';
+import { drainGoogleExternalEffects } from './services/externalEffectOutbox';
 
 const SuggestionsPage = lazy(() => import('./pages/SuggestionsPage').then((module) => ({ default: module.SuggestionsPage })));
 const WorkLogsPage = lazy(() => import('./pages/WorkLogsPage').then((module) => ({ default: module.WorkLogsPage })));
@@ -199,6 +200,16 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     }
     return 'ok';
 }, [googleAuth.state, syncHealth, isProcessing]);
+
+  useEffect(() => {
+    if (!hasUsableAuth) return;
+    const drain = () => {
+      drainGoogleExternalEffects().catch((error) => console.error('External effect outbox drain failed', error));
+    };
+    drain();
+    const timer = window.setInterval(drain, 30_000);
+    return () => window.clearInterval(timer);
+  }, [hasUsableAuth]);
 
   useEffect(() => {
     const cleanup = async () => {

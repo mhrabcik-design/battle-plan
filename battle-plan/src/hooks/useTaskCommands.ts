@@ -1,7 +1,9 @@
 import { useCallback } from 'react';
-import { db, type Task } from '../db';
+import type { Task } from '../db';
 import { AuthUnavailableError, googleService } from '../services/googleService';
 import { applySemanticResult } from '../services/semanticEngine';
+import { drainGoogleExternalEffects } from '../services/externalEffectOutbox';
+import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations } from '../services/taskMutations';
 import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types';
 import { hasUsableAuth } from '../types';
 
@@ -54,12 +56,10 @@ export function useTaskCommands({
     const total = task.totalDuration || task.duration || 0;
     const newDuration = Math.round(total * (1 - newProgress / 100));
 
-    await db.tasks.update(task.id, {
-      subTasks: newSubTasks,
-      progress: newProgress,
-      duration: newDuration,
-      totalDuration: total,
-      updatedAt: Date.now()
+    await taskMutations.updateTask({
+      localId: task.id,
+      changes: { subTasks: newSubTasks, progress: newProgress, duration: newDuration, totalDuration: total },
+      context: newTaskMutationContext('ui'),
     });
   }, []);
 
@@ -73,17 +73,24 @@ export function useTaskCommands({
       refreshGoogleTasks();
     } else if (task.id) {
       const newStatus = task.status === 'completed' ? 'pending' : 'completed';
-      await db.tasks.update(task.id, {
-        status: newStatus,
-        updatedAt: Date.now()
-      });
+      const calendarEffects = calendarEffectsForLocalTask(task, 'upsert');
+      const mutation = newStatus === 'completed'
+        ? await taskMutations.completeTask({
+            localId: task.id,
+            context: newTaskMutationContext('ui'),
+            effects: calendarEffects,
+          })
+        : await taskMutations.updateTask({
+            localId: task.id,
+            changes: { status: newStatus },
+            context: newTaskMutationContext('ui'),
+            effects: calendarEffects,
+          });
 
-      if (task.googleEventId && hasUsableAuth(googleAuth)) {
-        try {
-          const updatedTask = { ...task, status: newStatus };
-          await googleService.addToCalendar(updatedTask);
-        } catch (e) {
-          console.error("Failed to update calendar event on toggle", e);
+      if (mutation.status === 'applied' && mutation.effectIds.length && hasUsableAuth(googleAuth)) {
+        const outcome = await drainGoogleExternalEffects(mutation.effectIds);
+        if (outcome.retryScheduled || outcome.failed) {
+          console.error('Failed to update calendar event on toggle; durable retry retained');
         }
       }
     }
@@ -99,13 +106,15 @@ export function useTaskCommands({
       }
       refreshGoogleTasks();
     } else if (task.id) {
-      if (task.googleEventId && hasUsableAuth(googleAuth)) {
-        try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
-        if (isAuthUnavailableNow()) {
-          alert(AUTH_UNAVAILABLE_MSG);
-        }
+      const mutation = await taskMutations.archiveTask({
+        localId: task.id,
+        context: newTaskMutationContext('ui'),
+        effects: calendarEffectsForLocalTask(task, 'delete'),
+      });
+      if (mutation.status === 'applied' && mutation.effectIds.length && hasUsableAuth(googleAuth)) {
+        await drainGoogleExternalEffects(mutation.effectIds);
+        if (isAuthUnavailableNow()) alert(AUTH_UNAVAILABLE_MSG);
       }
-      await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
     }
   }, [googleAuth, refreshGoogleTasks]);
 
@@ -125,19 +134,16 @@ export function useTaskCommands({
         delete (taskData as Partial<UnifiedTask>).isGoogleTask;
         delete (taskData as Partial<UnifiedTask>).googleId;
         delete (taskData as Partial<UnifiedTask>).googleListId;
-        await db.tasks.update(editingTask.id, { ...taskData, updatedAt: Date.now() });
-        if (editingTask.type === 'meeting' && hasUsableAuth(googleAuth)) {
-          try {
-            const eventId = await googleService.addToCalendar(editingTask);
-            if (eventId && eventId !== editingTask.googleEventId) {
-              await db.tasks.update(editingTask.id, { googleEventId: eventId, updatedAt: Date.now() });
-            }
-            if (!eventId && isAuthUnavailableNow()) {
-              alert(AUTH_UNAVAILABLE_MSG);
-            }
-          } catch (e) {
-            console.error("Save Google sync failed", e);
-          }
+        const mutation = await taskMutations.updateTask({
+          localId: editingTask.id,
+          changes: taskData,
+          context: newTaskMutationContext('ui'),
+          effects: calendarEffectsForLocalTask(editingTask, 'upsert', hasUsableAuth(googleAuth)),
+        });
+        if (mutation.status === 'applied' && mutation.effectIds.length && hasUsableAuth(googleAuth)) {
+          const outcome = await drainGoogleExternalEffects(mutation.effectIds);
+          if (outcome.retryScheduled || outcome.failed) console.error('Save Google sync failed; durable retry retained');
+          if (isAuthUnavailableNow()) alert(AUTH_UNAVAILABLE_MSG);
         }
       }
       setEditingTask(null);
@@ -150,9 +156,14 @@ export function useTaskCommands({
     }
     setIsProcessing(true);
     try {
-      const eventId = await googleService.addToCalendar(task);
-      if (eventId) {
-        await db.tasks.update(task.id, { googleEventId: eventId, updatedAt: Date.now() });
+      const queued = await taskMutations.queueEffects({
+        localId: task.id,
+        context: newTaskMutationContext('ui'),
+        effects: [{ kind: 'calendar', operation: 'upsert' }],
+      });
+      if (queued.status === 'queued') {
+        const outcome = await drainGoogleExternalEffects(queued.effectIds);
+        if (outcome.retryScheduled || outcome.failed) alert('Synchronizaci se nepodařilo dokončit; bude automaticky opakována.');
       }
     } catch (err: unknown) {
       if (err instanceof AuthUnavailableError) {

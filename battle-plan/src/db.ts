@@ -22,6 +22,8 @@ export interface Task {
     id?: number;
     /** Portable protocol identity. Numeric `id` remains the local Dexie key. */
     publicId?: string;
+    /** Content-addressed collaboration revision; local numeric IDs never participate. */
+    protocolRevision?: ProtocolRevision;
     title: string;
     description?: string;
     internalNotes?: string;
@@ -37,6 +39,8 @@ export interface Task {
     subTasks?: SubTask[];
     progress?: number; // 0-100
     googleEventId?: string;
+    googleId?: string;
+    googleListId?: string;
     source?: 'user' | 'agent'; // attribution: which surface produced this row
     agent_write_id?: string; // inbox AgentWrite.id (only present when source === 'agent')
     updatedAt: number;
@@ -214,18 +218,44 @@ export type AgentProtocolOutboxRow = AgentProtocolOutboxBase & (
     | { family: 'capability'; payload: CapabilityPayload }
 );
 
-export interface AgentProtocolEffectRow {
+interface AgentProtocolEffectRowBase {
     id: string;
-    commandReceiptId: string;
+    commandReceiptId?: string;
     kind: ProtocolEffect['kind'];
+    entityKind: 'task';
+    entityPublicId: string;
+    mutationId: string;
     state: AgentProtocolEffectState;
     attempts: number;
     fencingToken: number;
+    leaseOwner?: string;
+    leaseExpiresAt?: number;
     nextAttemptAt?: number;
     lastErrorCode?: ProtocolErrorCode;
+    lastErrorMessage?: string;
     createdAt: number;
     updatedAt: number;
 }
+
+export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
+    | {
+        kind: 'calendar';
+        operation: 'upsert';
+        payload: {
+            title: string;
+            description?: string;
+            date?: string;
+            deadline?: string;
+            startTime?: string;
+            duration?: number;
+            isAllDay?: boolean;
+            googleEventId?: string;
+            reservedEventId: string;
+        };
+    }
+    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string } }
+    | { kind: 'google_tasks'; operation: 'complete'; payload: { googleTaskId: string; googleListId?: string } }
+);
 
 export interface AgentConsumerStateRow {
     id: string;

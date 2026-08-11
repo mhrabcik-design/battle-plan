@@ -71,10 +71,13 @@ export type PendingOutboxInput = PendingOutboxBase & (
     | { family: 'capability'; payload: Extract<AgentProtocolOutboxRow, { family: 'capability' }>['payload'] }
 );
 
-export interface PendingEffectInput {
-    id: string;
-    kind: AgentProtocolEffectRow['kind'];
-}
+type PendingEffectFields =
+    | 'commandReceiptId' | 'state' | 'attempts' | 'fencingToken'
+    | 'leaseOwner' | 'leaseExpiresAt' | 'nextAttemptAt' | 'lastErrorCode'
+    | 'lastErrorMessage' | 'createdAt' | 'updatedAt';
+export type PendingEffectInput = AgentProtocolEffectRow extends infer T
+    ? T extends AgentProtocolEffectRow ? Omit<T, PendingEffectFields> : never
+    : never;
 
 export interface PendingEventInput {
     eventId: string;

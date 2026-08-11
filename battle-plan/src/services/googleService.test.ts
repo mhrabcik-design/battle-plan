@@ -1216,6 +1216,53 @@ test('R9: addToCalendar 403 surfaces the calendar error without clearing Google 
     assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
 
+test('U4: reserved Calendar event ID makes an ambiguous insert retry idempotent', async () => {
+    clearStore();
+    seedSignedInStorage();
+    const reservedId = 'bp018f6f5e2d887f2a8f90d6ad23001234';
+    const insertArgs: unknown[] = [];
+    let insertAttempt = 0;
+    let updateAttempt = 0;
+    installGapiMock({
+        calendarEventsInsert: async (...args: unknown[]) => {
+            insertArgs.push(args[0]);
+            insertAttempt += 1;
+            const error = new Error(insertAttempt === 1 ? 'ambiguous timeout' : 'already exists') as Error & { status?: number };
+            error.status = insertAttempt === 1 ? 500 : 409;
+            throw error;
+        },
+        calendarEventsUpdate: async (...args: unknown[]) => {
+            updateAttempt += 1;
+            return { result: { id: (args[0] as { eventId: string }).eventId } };
+        },
+    });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+    const task = { title: 'Durable meeting', date: '2026-08-12', reservedGoogleEventId: reservedId };
+
+    await assert.rejects(() => svc.addToCalendar(task), /Google Calendar Error/);
+    assert.equal(await svc.addToCalendar(task), reservedId);
+    assert.equal((insertArgs[0] as { eventId?: string }).eventId, reservedId);
+    assert.equal((insertArgs[1] as { eventId?: string }).eventId, reservedId);
+    assert.equal(updateAttempt, 1);
+});
+
+test('U4: Calendar delete treats a replayed 404 as already completed', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMock({
+        calendarEventsDelete: async () => {
+            const error = new Error('not found') as Error & { status?: number };
+            error.status = 404;
+            throw error;
+        },
+    });
+    const svc = freshService();
+    stubSilentRefresh(svc);
+
+    assert.equal(await svc.deleteFromCalendar('already-deleted'), true);
+});
+
 test('v2 Drive transport exposes its exact narrow scope and account cache discriminator', () => {
     clearStore();
     localStorage.setItem('google_user_email', 'user@example.com');

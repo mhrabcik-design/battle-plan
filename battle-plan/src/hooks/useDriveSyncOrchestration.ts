@@ -7,6 +7,7 @@ import { getMissingWorkLogsFileStatus, hasLocalWorkLogsData } from '../utils/wor
 import type { GoogleAuthStatus, GoogleTaskList } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
+import { newTaskMutationContext, taskMutations } from '../services/taskMutations';
 import {
   autoSyncFailureHealth,
   driveUnavailableHealth,
@@ -102,25 +103,16 @@ export function useDriveSyncOrchestration({
 
           if (driveTasks && Array.isArray(driveTasks)) {
             let changesMade = false;
-            await db.transaction('rw', db.tasks, async () => {
-              for (const cloudTask of driveTasks) {
-                if (!cloudTask.id) continue;
-                const localTask = await db.tasks.get(cloudTask.id);
-
-                if (!localTask) {
-                  await db.tasks.add(cloudTask);
-                  changesMade = true;
-                } else {
-                  const cloudUpdated = cloudTask.updatedAt || cloudTask.createdAt || 0;
-                  const localUpdated = localTask.updatedAt || localTask.createdAt || 0;
-
-                  if (cloudUpdated > localUpdated) {
-                    await db.tasks.put(cloudTask);
-                    changesMade = true;
-                  }
-                }
+            for (const cloudTask of driveTasks) {
+              if (!cloudTask.id && !cloudTask.publicId) continue;
+              const mutation = await taskMutations.importTask({
+                task: cloudTask,
+                context: newTaskMutationContext('drive', 'battleplan-drive'),
+              });
+              if (mutation.status === 'applied') {
+                changesMade = true;
               }
-            });
+            }
 
             if (changesMade) {
               addLog(`Synchronizace: Staženy novější změny z cloudu.`);

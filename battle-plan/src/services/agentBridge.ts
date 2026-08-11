@@ -1,4 +1,3 @@
-import { googleService } from './googleService.ts';
 import { normalizeEntity } from './semanticEngine.ts';
 import type { AgentInboxRow, Project, Setting, Task, WorkLog } from '../db.ts';
 import { db } from '../db.ts';
@@ -17,6 +16,8 @@ import {
   updateWorkLogWithProjectSelection,
 } from './workLogPersistence.ts';
 import { createWorkLogSyncId } from '../utils/workLogSyncIdentity.ts';
+import { drainGoogleExternalEffects } from './externalEffectOutbox.ts';
+import { newTaskMutationContext, taskMutations } from './taskMutations.ts';
 
 export type AgentWriteAction =
   | 'create_task'
@@ -168,23 +169,22 @@ class AgentBridge {
     const data = (write.task_data ?? {}) as Partial<Task> & { id?: number };
     if (write.action === 'create_task') {
       const norm = normalizeEntity(data, 'create', undefined);
-      const newId = await db.tasks.add({
-        ...norm.value,
-        source: 'agent',
-        agent_write_id: write.id,
-        updatedAt: Date.now(),
-        createdAt: Date.now(),
-      } as Task);
-
-      // Calendar parity: meeting types with usable Google auth get a Calendar event.
-      if (norm.value.type === 'meeting') {
-        const eventId = await googleService.addToCalendar({ ...norm.value, id: newId } as Task);
-        if (eventId) {
-          await db.tasks.update(newId, { googleEventId: eventId });
-        }
-      }
-
-      return appliedWrite({ newId: newId as number, last_error: norm.last_error });
+      const mutation = await taskMutations.createTask({
+        task: {
+          ...norm.value,
+          title: norm.value.title ?? 'Nový záznam',
+          type: norm.value.type ?? 'thought',
+          urgency: norm.value.urgency,
+          status: norm.value.status,
+          source: 'agent',
+          agent_write_id: write.id,
+        },
+        context: newTaskMutationContext('hermes'),
+        effects: norm.value.type === 'meeting' ? [{ kind: 'calendar', operation: 'upsert' }] : [],
+      });
+      if (mutation.status !== 'applied') return retryableWrite(`task mutation ${mutation.status}`);
+      if (mutation.effectIds.length) await drainGoogleExternalEffects(mutation.effectIds);
+      return appliedWrite({ newId: mutation.task.id, last_error: norm.last_error });
     }
 
     if (write.action === 'update_task') {
@@ -192,12 +192,16 @@ class AgentBridge {
       const existing = await db.tasks.get(data.id);
       if (!existing) return terminalWrite('task not found');
       const norm = normalizeEntity(data, 'update', existing);
-      await db.tasks.update(data.id, {
-        ...norm.value,
-        source: existing.source ?? 'agent',
-        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-        updatedAt: Date.now(),
+      const mutation = await taskMutations.updateTask({
+        localId: data.id,
+        changes: {
+          ...norm.value,
+          source: existing.source ?? 'agent',
+          agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+        },
+        context: newTaskMutationContext('hermes'),
       });
+      if (mutation.status !== 'applied') return terminalWrite(`task mutation ${mutation.status}`);
       return appliedWrite({ last_error: norm.last_error });
     }
 
@@ -206,17 +210,18 @@ class AgentBridge {
       const existing = await db.tasks.get(data.id);
       if (!existing) return terminalWrite('task not found');
       const norm = normalizeEntity(data, 'complete', existing);
-      await db.tasks.update(data.id, {
-        ...norm.value,
-        source: existing.source ?? 'agent',
-        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-        updatedAt: Date.now(),
+      const mutation = await taskMutations.completeTask({
+        localId: data.id,
+        context: newTaskMutationContext('hermes'),
+        effects: existing.googleId ? [{ kind: 'google_tasks', operation: 'complete' }] : [],
+        changes: {
+          ...norm.value,
+          source: existing.source ?? 'agent',
+          agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+        },
       });
-      // Google Tasks parity: complete the linked Google Task when googleId is set.
-      const linked = existing as Task & { googleId?: string; googleListId?: string };
-      if (linked.googleId) {
-        await googleService.updateGoogleTask(linked.googleId, { status: 'completed' }, linked.googleListId);
-      }
+      if (mutation.status !== 'applied') return terminalWrite(`task mutation ${mutation.status}`);
+      if (mutation.effectIds.length) await drainGoogleExternalEffects(mutation.effectIds);
       return appliedWrite({ last_error: norm.last_error });
     }
 
@@ -224,17 +229,17 @@ class AgentBridge {
     if (!data.id) return terminalWrite('task_data.id missing');
     const existing = await db.tasks.get(data.id);
     if (!existing) return terminalWrite('task not found');
-    await db.tasks.update(data.id, {
-      isDeleted: true,
-      source: existing.source ?? 'agent',
-      agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-      updatedAt: Date.now(),
+    const mutation = await taskMutations.archiveTask({
+      localId: data.id,
+      context: newTaskMutationContext('hermes'),
+      effects: existing.googleEventId ? [{ kind: 'calendar', operation: 'delete' }] : [],
+      changes: {
+        source: existing.source ?? 'agent',
+        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+      },
     });
-    // Calendar parity: clean up the linked Calendar event for meetings.
-    const linked = existing as Task & { googleEventId?: string };
-    if (linked.googleEventId) {
-      await googleService.deleteFromCalendar(linked.googleEventId);
-    }
+    if (mutation.status !== 'applied') return terminalWrite(`task mutation ${mutation.status}`);
+    if (mutation.effectIds.length) await drainGoogleExternalEffects(mutation.effectIds);
     return appliedWrite();
   }
 
