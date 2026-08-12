@@ -99,6 +99,15 @@ export interface WorkLog {
     createdAt: number;
 }
 
+export interface WorkLogDeletionTombstone {
+    /** Removed WorkLog sync identity and durable primary key. */
+    syncId: string;
+    survivorSyncId: string;
+    fingerprint: string;
+    reason: 'confirmed-duplicate';
+    deletedAt: number;
+}
+
 export type SuggestionDecisionKind =
     | 'commented'
     | 'deferred'
@@ -425,6 +434,7 @@ export class BattlePlanDB extends Dexie {
     tasks!: Table<Task>;
     settings!: Table<Setting>;
     workLogs!: Table<WorkLog>;
+    workLogDeletionTombstones!: Table<WorkLogDeletionTombstone, string>;
     projects!: Table<Project>;
     agentInbox!: Table<AgentInboxRow>;
     agentCommandReceipts!: Table<AgentCommandReceiptRow, string>;
@@ -601,6 +611,12 @@ export class BattlePlanDB extends Dexie {
             suggestionSubjects: 'id, canonicalFingerprint, updatedAt',
             suggestionOccurrences: 'id, subjectId, *proposalIds, updatedAt',
             suggestionDecisions: 'id, subjectId, occurrenceKey, kind, createdAt, publishedAt',
+        });
+
+        // v18: local durable suppression records for user-confirmed WorkLog
+        // duplicate removal. The removed sync identity is the durable key.
+        this.version(18).stores({
+            workLogDeletionTombstones: 'syncId',
         });
 
         // Keep identities present and immutable until all mutation paths share

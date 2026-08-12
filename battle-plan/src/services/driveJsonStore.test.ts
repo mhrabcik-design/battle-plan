@@ -169,7 +169,7 @@ test('DriveJsonStore sends an If-Match precondition for conditional journal upda
         drive: { files: { list: async () => ({ result: { files: [] } }) } },
         request: async (args: { headers: Record<string, string> }) => {
             requestHeaders.push(args.headers);
-            return { status: 200, result: { id: 'file-123' } };
+            return { status: 200, result: { id: 'file-123' }, headers: { ETag: '"etag-8"' } };
         },
     }, {
         bp_folder_id: 'folder-123',
@@ -183,20 +183,23 @@ test('DriveJsonStore sends an If-Match precondition for conditional journal upda
     const store = new DriveJsonStore();
     assert.equal(await store.init(), true);
 
-    await store.writeJsonFile('data.json', { hello: 'world' }, 'file-123', { ifMatch: '"etag-7"' });
+    const result = await store.writeJsonFile('data.json', { hello: 'world' }, 'file-123', { ifMatch: '"etag-7"' });
 
     assert.equal(requestHeaders[0]['If-Match'], '"etag-7"');
+    assert.equal(result?.etag, '"etag-8"');
 });
 
-test('DriveJsonStore lists duplicate JSON files deterministically and trashes an exact id', async () => {
-    const listArguments: Array<{ pageSize?: number }> = [];
+test('DriveJsonStore lists every duplicate JSON page deterministically and trashes an exact id', async () => {
+    const listArguments: Array<{ pageSize?: number; pageToken?: string }> = [];
     const requests: Array<{ path: string; method: string; body: string }> = [];
     installDriveGlobals({
         drive: {
             files: {
-                list: async (args: { pageSize?: number }) => {
+                list: async (args: { pageSize?: number; pageToken?: string }) => {
                     listArguments.push(args);
-                    return { result: { files: [{ id: 'file-z' }, { id: 'file-a' }] } };
+                    return args.pageToken
+                        ? { result: { files: [{ id: 'file-m' }] } }
+                        : { result: { files: [{ id: 'file-z' }, { id: 'file-a' }], nextPageToken: 'page-2' } };
                 },
             },
         },
@@ -216,8 +219,11 @@ test('DriveJsonStore lists duplicate JSON files deterministically and trashes an
     const store = new DriveJsonStore();
     assert.equal(await store.init(), true);
 
-    assert.deepEqual(await store.findFileIds('journal.json'), ['file-a', 'file-z']);
-    assert.equal(listArguments[0].pageSize, 1000);
+    assert.deepEqual(await store.findFileIds('journal.json'), ['file-a', 'file-m', 'file-z']);
+    assert.deepEqual(listArguments, [
+        { q: "name='journal.json' and 'folder-123' in parents and trashed=false", spaces: 'drive', fields: 'files(id, name), nextPageToken', pageSize: 1000 },
+        { q: "name='journal.json' and 'folder-123' in parents and trashed=false", spaces: 'drive', fields: 'files(id, name), nextPageToken', pageSize: 1000, pageToken: 'page-2' },
+    ]);
     await store.trashFile('file/z');
     assert.equal(requests[0].path, '/drive/v3/files/file%2Fz?supportsAllDrives=true');
     assert.equal(requests[0].method, 'PATCH');
