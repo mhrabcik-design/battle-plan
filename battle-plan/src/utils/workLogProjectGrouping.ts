@@ -63,6 +63,15 @@ interface WorkLogProjectResolution {
     project?: Project;
 }
 
+function projectKeyFromResolution(
+    workLog: WorkLog,
+    resolution: WorkLogProjectResolution,
+): string {
+    return resolution.project?.id != null
+        ? `project-id:${resolution.project.id}`
+        : resolution.normalizedSnapshotName || `project-id:${workLog.projectId}`;
+}
+
 function resolveWorkLogProject(
     workLog: WorkLog,
     projectIndex: WorkLogProjectIndex,
@@ -91,6 +100,21 @@ export function resolveWorkLogProjectDisplay(
         : { name: workLog.projectName.trim(), color: 'slate' };
 }
 
+export function resolveWorkLogProjectKey(
+    workLog: WorkLog,
+    projectIndex: WorkLogProjectIndex,
+): string {
+    return projectKeyFromResolution(workLog, resolveWorkLogProject(workLog, projectIndex));
+}
+
+export function filterWorkLogsByProjectKey(
+    workLogs: WorkLog[],
+    projectKey: string,
+    projectIndex: WorkLogProjectIndex,
+): WorkLog[] {
+    return workLogs.filter((workLog) => resolveWorkLogProjectKey(workLog, projectIndex) === projectKey);
+}
+
 export function groupWorkLogsByProject(
     workLogs: WorkLog[],
     projectsOrIndex: Project[] | WorkLogProjectIndex = [],
@@ -104,9 +128,7 @@ export function groupWorkLogsByProject(
         const { normalizedSnapshotName, project } = resolveWorkLogProject(workLog, projectIndex);
         const name = project?.name.trim() || workLog.projectName.trim();
         const color = project?.color ?? 'slate';
-        const key = project?.id != null
-            ? `project-id:${project.id}`
-            : normalizedSnapshotName || `project-id:${workLog.projectId}`;
+        const key = projectKeyFromResolution(workLog, { normalizedSnapshotName, project });
         let group = grouped.get(key);
         if (!group) {
             group = {

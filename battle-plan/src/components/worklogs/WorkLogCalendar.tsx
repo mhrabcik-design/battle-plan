@@ -1,17 +1,22 @@
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { type WorkLog, type Project } from '../../db';
+import { ChevronLeft, ChevronRight, Filter, X } from 'lucide-react';
+import { type WorkLog } from '../../db';
 import { currentMonthKey, monthKeyToDate, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
 import { PROJECT_COLOR_DOT } from '../../utils/projectColors';
-import { groupWorkLogsByProject, type WorkLogProjectIndex } from '../../utils/workLogProjectGrouping';
+import {
+    filterWorkLogsByProjectKey,
+    groupWorkLogsByProject,
+    type WorkLogProjectIndex,
+} from '../../utils/workLogProjectGrouping';
 import { WorkLogCard } from './WorkLogCard';
 
 interface WorkLogCalendarProps {
     logs: WorkLog[];
-    projects: Project[];
     projectIndex: WorkLogProjectIndex;
 }
+
+const ALL_PROJECTS = '';
 
 const isoDate = (year: number, month0: number, day: number): string => {
     return `${year}-${String(month0 + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -19,19 +24,36 @@ const isoDate = (year: number, month0: number, day: number): string => {
 
 const WEEKDAYS_CS = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
-export function WorkLogCalendar({ logs, projects, projectIndex }: WorkLogCalendarProps) {
+export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
     const [monthKey, setMonthKey] = useState(currentMonthKey(0));
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
+    const [selectedProjectKey, setSelectedProjectKey] = useState(ALL_PROJECTS);
+
+    const projectOptions = useMemo(
+        () => groupWorkLogsByProject(logs, projectIndex)
+            .sort((left, right) => left.name.localeCompare(right.name, 'cs')),
+        [logs, projectIndex],
+    );
+    const activeProjectKey = selectedProjectKey === ALL_PROJECTS
+        || projectOptions.some((project) => project.key === selectedProjectKey)
+        ? selectedProjectKey
+        : ALL_PROJECTS;
+    const filteredLogs = useMemo(
+        () => activeProjectKey === ALL_PROJECTS
+            ? logs
+            : filterWorkLogsByProjectKey(logs, activeProjectKey, projectIndex),
+        [activeProjectKey, logs, projectIndex],
+    );
 
     // Mapa date → logs (pro rychlý lookup)
     const logsByDate = useMemo(() => {
         const map = new Map<string, WorkLog[]>();
-        for (const l of logs) {
+        for (const l of filteredLogs) {
             if (!map.has(l.date)) map.set(l.date, []);
             map.get(l.date)!.push(l);
         }
         return map;
-    }, [logs]);
+    }, [filteredLogs]);
     const projectGroupsByDate = useMemo(
         () => new Map(Array.from(logsByDate, ([date, dayLogs]) => [
             date,
@@ -63,12 +85,12 @@ export function WorkLogCalendar({ logs, projects, projectIndex }: WorkLogCalenda
 
     // Měsíční součty (header)
     const monthHours = useMemo(
-        () => logs.filter((l) => l.date.startsWith(monthKey)).reduce((s, l) => s + l.hours, 0),
-        [logs, monthKey]
+        () => filteredLogs.filter((l) => l.date.startsWith(monthKey)).reduce((s, l) => s + l.hours, 0),
+        [filteredLogs, monthKey]
     );
     const monthDays = useMemo(
-        () => new Set(logs.filter((l) => l.date.startsWith(monthKey)).map((l) => l.date)).size,
-        [logs, monthKey]
+        () => new Set(filteredLogs.filter((l) => l.date.startsWith(monthKey)).map((l) => l.date)).size,
+        [filteredLogs, monthKey]
     );
 
     // Detail vybraného dne
@@ -107,7 +129,31 @@ export function WorkLogCalendar({ logs, projects, projectIndex }: WorkLogCalenda
                     </button>
                 </div>
 
-                <div className="flex items-center gap-3 text-xs">
+                <div className="flex items-center gap-3 text-xs flex-wrap">
+                    <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-1.5">
+                        <Filter className="h-3.5 w-3.5 shrink-0 text-indigo-400" aria-hidden="true" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                            Projekt
+                        </span>
+                        <select
+                            value={activeProjectKey}
+                            onChange={(event) => {
+                                setSelectedProjectKey(event.target.value);
+                                setSelectedDate(null);
+                            }}
+                            className="min-w-0 max-w-[220px] bg-transparent text-xs font-bold text-white outline-none sm:min-w-[160px]"
+                            aria-label="Filtrovat kalendář podle projektu"
+                        >
+                            <option value={ALL_PROJECTS} className="bg-slate-900">
+                                Všechny projekty
+                            </option>
+                            {projectOptions.map((project) => (
+                                <option key={project.key} value={project.key} className="bg-slate-900">
+                                    {project.name}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
                     <div className="bg-slate-900/50 border border-slate-800 rounded-lg px-3 py-1.5">
                         <span className="text-slate-500 uppercase tracking-widest font-black">Celkem</span>{' '}
                         <span className="text-white font-black">{monthHours.toFixed(2)} h</span>
@@ -188,13 +234,15 @@ export function WorkLogCalendar({ logs, projects, projectIndex }: WorkLogCalenda
             </div>
 
             {/* Legenda barev projektů */}
-            {projects.filter((p) => p.isActive).length > 0 && (
+            {projectOptions.length > 0 && (
                 <div className="flex items-center gap-4 flex-wrap text-xs">
                     <span className="text-slate-500 uppercase tracking-widest font-black">Projekty:</span>
-                    {projects.filter((p) => p.isActive).map((p) => (
-                        <span key={p.id} className="flex items-center gap-1.5">
-                            <span className={`w-2.5 h-2.5 rounded-full ${PROJECT_COLOR_DOT[p.color]}`} />
-                            <span className="text-slate-300">{p.name}</span>
+                    {projectOptions
+                        .filter((project) => activeProjectKey === ALL_PROJECTS || project.key === activeProjectKey)
+                        .map((project) => (
+                        <span key={project.key} className="flex items-center gap-1.5">
+                            <span className={`w-2.5 h-2.5 rounded-full ${PROJECT_COLOR_DOT[project.color]}`} />
+                            <span className="text-slate-300">{project.name}</span>
                         </span>
                     ))}
                 </div>
