@@ -52,6 +52,7 @@ export interface DriveFileMetadata {
 export interface DriveJsonRead<T> {
     fileId: string;
     data: T;
+    etag?: string;
 }
 
 export interface DriveJsonWrite {
@@ -72,7 +73,13 @@ export interface DriveStoreStatus {
 }
 
 export type DriveJsonReadResult<T> =
-    | { kind: 'loaded'; fileId: string; data: T }
+    | { kind: 'loaded'; fileId: string; data: T; etag?: string }
+    | { kind: 'missing-file' }
+    | { kind: 'store-unavailable'; status: DriveStoreStatus }
+    | { kind: 'error'; message: string };
+
+export type DriveJsonReadManyResult<T> =
+    | { kind: 'loaded'; files: DriveJsonRead<T>[] }
     | { kind: 'missing-file' }
     | { kind: 'store-unavailable'; status: DriveStoreStatus }
     | { kind: 'error'; message: string };
@@ -426,32 +433,65 @@ export class DriveJsonStore {
         }
     }
 
-    async findFileId(name: string): Promise<string | null> {
-        if (!this.isInitialized || !this.folderId) return null;
+    async findFileIds(name: string): Promise<string[]> {
+        if (!this.isInitialized || !this.folderId) return [];
         const client = this.getClient();
-        if (!client?.drive) return null;
+        if (!client?.drive) return [];
         const listR = await client.drive.files.list({
             q: `name='${escapeDriveQueryValue(name)}' and '${escapeDriveQueryValue(this.folderId)}' in parents and trashed=false`,
             spaces: 'drive',
             fields: 'files(id, name)',
-            pageSize: 1,
+            pageSize: 1000,
         });
-        return listR.result.files?.[0]?.id ?? null;
+        return (listR.result.files ?? [])
+            .map((file) => file.id)
+            .filter(Boolean)
+            .sort();
+    }
+
+    async findFileId(name: string): Promise<string | null> {
+        return (await this.findFileIds(name))[0] ?? null;
     }
 
     async readJsonFile<T>(name: string): Promise<DriveJsonRead<T> | null> {
         const result = await this.readJsonFileWithStatus<T>(name);
         if (result.kind !== 'loaded') return null;
-        return { fileId: result.fileId, data: result.data };
+        return { fileId: result.fileId, data: result.data, ...(result.etag ? { etag: result.etag } : {}) };
     }
 
     async readJsonFileWithStatus<T>(name: string): Promise<DriveJsonReadResult<T>> {
         if (!this.isInitialized || !this.folderId) {
             return { kind: 'store-unavailable', status: this.lastStatusValue };
         }
-        const accessToken = await this.getAccessToken();
         const fileId = await this.findFileId(name);
         if (!fileId) return { kind: 'missing-file' };
+
+        return this.readJsonFileByIdWithStatus<T>(fileId);
+    }
+
+    async readJsonFilesWithStatus<T>(name: string): Promise<DriveJsonReadManyResult<T>> {
+        if (!this.isInitialized || !this.folderId) {
+            return { kind: 'store-unavailable', status: this.lastStatusValue };
+        }
+        const fileIds = await this.findFileIds(name);
+        if (fileIds.length === 0) return { kind: 'missing-file' };
+        const results = await Promise.all(fileIds.map((fileId) => this.readJsonFileByIdWithStatus<T>(fileId)));
+        const failed = results.find((result) => result.kind !== 'loaded');
+        if (failed) return failed;
+        return {
+            kind: 'loaded',
+            files: results.map((result) => {
+                if (result.kind !== 'loaded') throw new Error('unreachable Drive JSON read state');
+                return result;
+            }),
+        };
+    }
+
+    async readJsonFileByIdWithStatus<T>(fileId: string): Promise<DriveJsonReadResult<T>> {
+        if (!this.isInitialized || !this.folderId) {
+            return { kind: 'store-unavailable', status: this.lastStatusValue };
+        }
+        const accessToken = await this.getAccessToken();
 
         const resp = await fetch(
             `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
@@ -460,14 +500,33 @@ export class DriveJsonStore {
         if (!resp.ok) {
             return { kind: 'error', message: `${resp.status} ${resp.statusText}`.trim() };
         }
-        return { kind: 'loaded', fileId, data: await resp.json() as T };
+        const etag = resp.headers?.get?.('etag') ?? undefined;
+        return { kind: 'loaded', fileId, data: await resp.json() as T, ...(etag ? { etag } : {}) };
     }
 
-    async writeJsonFile(name: string, payload: unknown, fileId: string | null = null): Promise<DriveJsonWrite | null> {
+    async trashFile(fileId: string): Promise<void> {
+        if (!this.isInitialized || !this.folderId) throw new Error('Drive store není inicializovaný');
+        const client = this.getClient();
+        if (!client) throw new Error('GAPI client není dostupný');
+        const response = await client.request({
+            path: `/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`,
+            method: 'PATCH',
+            headers: { 'Content-Type': JSON_MIME_TYPE },
+            body: JSON.stringify({ trashed: true }),
+        });
+        ensureDriveRequestOk(response, 'Drive JSON duplicate cleanup');
+    }
+
+    async writeJsonFile(
+        name: string,
+        payload: unknown,
+        fileId: string | null = null,
+        options: { ifMatch?: string; createOnly?: boolean } = {},
+    ): Promise<DriveJsonWrite | null> {
         if (!this.isInitialized || !this.folderId) return null;
         const client = this.getClient();
         if (!client) return null;
-        const targetFileId = fileId ?? await this.findFileId(name);
+        const targetFileId = options.createOnly ? null : fileId ?? await this.findFileId(name);
         const metadata = buildDriveFileMetadata(name, JSON_MIME_TYPE, this.folderId, targetFileId);
         const body = buildMultipartJsonBody(metadata, payload);
         const response = await client.request({
@@ -475,7 +534,10 @@ export class DriveJsonStore {
                 ? `/upload/drive/v3/files/${targetFileId}?uploadType=multipart`
                 : '/upload/drive/v3/files?uploadType=multipart',
             method: targetFileId ? 'PATCH' : 'POST',
-            headers: { 'Content-Type': `multipart/related; boundary=${MULTIPART_BOUNDARY}` },
+            headers: {
+                'Content-Type': `multipart/related; boundary=${MULTIPART_BOUNDARY}`,
+                ...(options.ifMatch ? { 'If-Match': options.ifMatch } : {}),
+            },
             body,
         });
         ensureDriveRequestOk(response, 'Drive JSON upload');

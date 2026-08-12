@@ -14,11 +14,17 @@ import {
   Pause,
   FileText,
   Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import type { AgentSuggestion, AgentSuggestionReply } from '../services/suggestionsSync';
+import {
+  effectiveSuggestionStatus,
+  type SuggestionResolution,
+} from '../services/suggestionRegistry';
 
 interface SuggestionCardProps {
   suggestion: AgentSuggestion;
+  resolution?: SuggestionResolution;
   replies: AgentSuggestionReply[];
   onAccept: (convertToTask: boolean) => Promise<void>;
   onReject: () => Promise<void>;
@@ -27,6 +33,8 @@ interface SuggestionCardProps {
   onVoiceReply: (blob: Blob) => Promise<void>;
   onUpdate: (updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null }) => Promise<void>;
   onDelete: () => Promise<void>;
+  onConfirmSameOccurrence: (occurrenceKey: string) => Promise<void>;
+  onConfirmDistinct: (occurrenceKey: string) => Promise<void>;
   isProcessing: boolean;
   expandedTextReply: boolean;
   onExpandTextReply: (expand: boolean) => void;
@@ -85,6 +93,7 @@ function formatDeadline(ts: number | null): string | null {
 
 export function SuggestionCard({
   suggestion,
+  resolution,
   replies,
   onAccept,
   onReject,
@@ -93,6 +102,8 @@ export function SuggestionCard({
   onVoiceReply,
   onUpdate,
   onDelete,
+  onConfirmSameOccurrence,
+  onConfirmDistinct,
   isProcessing,
   expandedTextReply,
   onExpandTextReply,
@@ -118,7 +129,14 @@ export function SuggestionCard({
     await onUpdate({ deadline: ts });
   };
 
-  const isResolved = suggestion.status === 'accepted' || suggestion.status === 'rejected' || suggestion.status === 'converted';
+  const effectiveStatus = effectiveSuggestionStatus(suggestion, resolution);
+  const isResolved = resolution?.state === 'processed'
+    || resolution?.state === 'deferred'
+    || effectiveStatus === 'accepted'
+    || effectiveStatus === 'rejected'
+    || effectiveStatus === 'converted';
+  const requiresDuplicateDecision = resolution?.state === 'possible-duplicate'
+    && Boolean(resolution.matchedOccurrenceKey);
 
   const handleTextSubmit = async () => {
     if (!textValue.trim() || isProcessing) return;
@@ -178,7 +196,7 @@ export function SuggestionCard({
 
   const priority = PRIORITY_STYLES[suggestion.context.priority] ?? PRIORITY_STYLES.medium;
   const category = CATEGORY_STYLES[suggestion.category] ?? CATEGORY_STYLES.task;
-  const status = STATUS_STYLES[suggestion.status] ?? STATUS_STYLES.open;
+  const status = STATUS_STYLES[effectiveStatus] ?? STATUS_STYLES.open;
   const deadlineText = formatDeadline(suggestion.context.deadline);
 
   return (
@@ -210,6 +228,45 @@ export function SuggestionCard({
           {formatTimeAgo(suggestion.created_at)}
         </span>
       </div>
+
+      {resolution?.state === 'processed' && suggestion.status === 'open' && (
+        <div role="status" className="mb-3 rounded-xl border border-emerald-700/30 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
+          <span className="font-black uppercase tracking-wider">Již zpracováno</span>
+          <span className="text-emerald-300/70"> · stejná událost byla dříve {resolution.decision?.kind === 'rejected' || resolution.decision?.kind === 'dismissed' ? 'zamítnuta' : 'schválena'}.</span>
+        </div>
+      )}
+
+      {requiresDuplicateDecision && (
+        <div role="alert" className="mb-3 rounded-xl border border-amber-600/30 bg-amber-950/25 p-3">
+          <div className="flex items-start gap-2 text-amber-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="text-xs font-black uppercase tracking-wider">Možná duplicita</p>
+              <p className="mt-1 text-xs text-amber-100/70">
+                Podobá se dříve zpracované události „{resolution.matchedTitle ?? 'bez názvu'}“. Rozhodni, zda jde o totéž.
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onConfirmSameOccurrence(resolution.matchedOccurrenceKey!)}
+              disabled={isProcessing}
+              className="rounded-lg border border-amber-500/30 bg-amber-600/20 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider text-amber-200 disabled:opacity-40"
+            >
+              Je to stejné
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfirmDistinct(resolution.matchedOccurrenceKey!)}
+              disabled={isProcessing}
+              className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider text-slate-300 disabled:opacity-40"
+            >
+              Je to nové
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* TITLE + DESCRIPTION */}
       <h3 className={`text-base font-black text-white mb-2 ${isResolved ? 'opacity-70' : ''}`}>
@@ -381,7 +438,7 @@ export function SuggestionCard({
       )}
 
       {/* ACTION BUTTONS */}
-      {!isResolved && (
+      {!isResolved && !requiresDuplicateDecision && (
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => onAccept(true)}
@@ -438,10 +495,10 @@ export function SuggestionCard({
         </div>
       )}
 
-      {isResolved && suggestion.status === 'converted' && (
+      {isResolved && effectiveStatus === 'converted' && (
         <div className="text-sm text-slate-500 flex items-center gap-1">
           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          Anu vytvořil task v Plánu.
+          Task je vytvořený v Plánu.
         </div>
       )}
     </motion.article>

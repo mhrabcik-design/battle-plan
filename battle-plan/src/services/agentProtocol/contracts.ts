@@ -333,14 +333,25 @@ export interface DriveReceiptPayload {
 
 export interface ProposalPayload {
     proposal_id: string;
+    subject_id: string;
+    occurrence_key: string;
+    source_refs: Array<{
+        kind: 'email' | 'calendar' | 'task' | 'other';
+        id: string;
+        revision?: string;
+    }>;
     title: string;
     body: string;
     requested_action: 'accept' | 'reject' | 'defer' | 'convert_to_task';
 }
 
-export interface ResponsePayload {
+export interface ResponsePayload extends Pick<
+    ProposalPayload,
+    'subject_id' | 'occurrence_key'
+> {
     proposal_id: string;
-    decision: 'accepted' | 'rejected' | 'deferred' | 'converted_to_task';
+    decision: 'commented' | 'accepted' | 'rejected' | 'deferred' | 'converted_to_task';
+    defer_until?: string;
     comment?: string;
     task_public_id?: string;
 }

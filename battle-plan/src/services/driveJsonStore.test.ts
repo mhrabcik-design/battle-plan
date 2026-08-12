@@ -163,6 +163,67 @@ test('DriveJsonStore escapes Drive query values and rejects failed uploads', asy
     assert.match(queries[0], /'folder\\'\\\\id' in parents/);
 });
 
+test('DriveJsonStore sends an If-Match precondition for conditional journal updates', async () => {
+    const requestHeaders: Array<Record<string, string>> = [];
+    installDriveGlobals({
+        drive: { files: { list: async () => ({ result: { files: [] } }) } },
+        request: async (args: { headers: Record<string, string> }) => {
+            requestHeaders.push(args.headers);
+            return { status: 200, result: { id: 'file-123' } };
+        },
+    }, {
+        bp_folder_id: 'folder-123',
+        google_access_token: 'token-123',
+    });
+    setGoogleServiceState({
+        accessToken: 'token-123',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+
+    await store.writeJsonFile('data.json', { hello: 'world' }, 'file-123', { ifMatch: '"etag-7"' });
+
+    assert.equal(requestHeaders[0]['If-Match'], '"etag-7"');
+});
+
+test('DriveJsonStore lists duplicate JSON files deterministically and trashes an exact id', async () => {
+    const listArguments: Array<{ pageSize?: number }> = [];
+    const requests: Array<{ path: string; method: string; body: string }> = [];
+    installDriveGlobals({
+        drive: {
+            files: {
+                list: async (args: { pageSize?: number }) => {
+                    listArguments.push(args);
+                    return { result: { files: [{ id: 'file-z' }, { id: 'file-a' }] } };
+                },
+            },
+        },
+        request: async (args: { path: string; method: string; body: string }) => {
+            requests.push(args);
+            return { status: 200, result: { id: 'file-a' } };
+        },
+    }, {
+        bp_folder_id: 'folder-123',
+        google_access_token: 'token-123',
+    });
+    setGoogleServiceState({
+        accessToken: 'token-123',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+
+    assert.deepEqual(await store.findFileIds('journal.json'), ['file-a', 'file-z']);
+    assert.equal(listArguments[0].pageSize, 1000);
+    await store.trashFile('file/z');
+    assert.equal(requests[0].path, '/drive/v3/files/file%2Fz?supportsAllDrives=true');
+    assert.equal(requests[0].method, 'PATCH');
+    assert.equal(requests[0].body, JSON.stringify({ trashed: true }));
+});
+
 test('DriveJsonStore accepts created folder ids from gapi result payloads', async () => {
     const createdFolders: string[] = [];
     installDriveGlobals({

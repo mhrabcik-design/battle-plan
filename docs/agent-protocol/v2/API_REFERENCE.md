@@ -40,7 +40,7 @@ The normative Google Drive object layout, property names, immutable-create repla
 - `event-batch`: ordered producer-local events; sequence values are decimal strings. <!-- fixture:fixtures/valid/event-batch.json -->
 - `snapshot`: safe state at an explicit stream high-water mark. <!-- fixture:fixtures/valid/snapshot.json -->
 - `proposal`: non-executable human discussion. <!-- fixture:fixtures/valid/proposal.json -->
-- `response`: human proposal decision. <!-- fixture:fixtures/valid/response.json -->
+- `response`: human proposal decision; `deferred` requires `defer_until` as a calendar date. <!-- fixture:fixtures/valid/response.json -->
 - `drive-receipt`: signed, passed-only proof of both production OAuth probe directions. <!-- fixture:fixtures/valid/drive-receipt.json -->
 
 Every referenced example is loaded and validated by `validation.test.ts` with the same standalone validators used by BattlePlan. Invalid examples declare `expected_error` and a `message` to test.
@@ -52,6 +52,8 @@ Every referenced example is loaded and validated by `validation.test.ts` with th
 ## Data plane
 
 `command`, `result`, `event-batch`, `snapshot`, `proposal`, and `response` are data-plane families. Commands and proposals are intentionally separate: a proposal never grants mutation authority. Each command action has an exact payload variant in `command.schema.json`; Settings, secrets, OAuth, pairing and bulk destructive operations have no schema variant. Snapshot entities are lossless tagged variants: `resolved` carries one full revision/projection/tombstone, while `conflicted` carries a deterministic conflict-set ID and every complete sorted concurrent version.
+
+Every proposal carries a stable business `subject_id`, an `occurrence_key` for the concrete event, and `source_refs`. A regenerated `proposal_id` therefore does not create a new business event. Responses repeat the subject and occurrence keys; Hermes must consume terminal responses before proposing the same occurrence again. Similar wording alone is never a suppression key.
 
 ## Validation order
 
@@ -67,6 +69,6 @@ Every referenced example is loaded and validated by `validation.test.ts` with th
 
 ## Contract artifact identity
 
-`ARTIFACT_MANIFEST.json` is non-circular: it covers every schema, including the normative temporal and UUID patterns, but never fixtures, generated validators, documentation, or itself. Schemas use no implementation-defined `format` callbacks. Sort every `*.schema.json` by the manifest path `schemas/<filename>`. For each file record its exact byte length and `sha256:` plus lowercase SHA-256 of the raw file bytes. Build `material = {format,artifact_id,version,schemas}` in that field model, serialize `material` with RFC 8785 JCS, and compute `artifact_sha256 = sha256:` plus SHA-256 of UTF-8(`BattlePlan-Hermes/artifact-manifest/v1\0` + JCS(`material`)). The generator and `--check` implement this exact algorithm. The current tuple hash is `sha256:fa0496524c56796ff8eec77f5ccd013b4b6d404836d673b1cb8dcc70ae96d7d7`; the superseded `sha256:1b927765d2a36d9bcd7fbf5048ea08b103f9202fc979718e1425413134f20a83` lacks the manifest-covered temporal identity and must fail handshake comparison.
+`ARTIFACT_MANIFEST.json` is non-circular: it covers every schema, including the normative temporal and UUID patterns, but never fixtures, generated validators, documentation, or itself. Schemas use no implementation-defined `format` callbacks. Sort every `*.schema.json` by the manifest path `schemas/<filename>`. For each file record its exact byte length and `sha256:` plus lowercase SHA-256 of the raw file bytes. Build `material = {format,artifact_id,version,schemas}` in that field model, serialize `material` with RFC 8785 JCS, and compute `artifact_sha256 = sha256:` plus SHA-256 of UTF-8(`BattlePlan-Hermes/artifact-manifest/v1\0` + JCS(`material`)). The generator and `--check` implement this exact algorithm. The current tuple hash is `sha256:bc3929e40fb2c4bc26a4f32fd917232d279778edd117576ad3fba4d6d3a281f2`; older hashes do not require stable proposal subject and occurrence identity and must fail handshake comparison.
 
 See `MESSAGE_LIFECYCLES.md`, `ERROR_REGISTRY.md`, `SECURITY_AND_PAIRING.md`, `REVISION_AND_RETENTION.md`, `POLICY.md`, and `VERSIONING.md` for the remaining normative rules.

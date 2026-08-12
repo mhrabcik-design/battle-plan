@@ -8,7 +8,7 @@ Branch: `codex/hermes-collaboration-protocol`
 
 U1 trust/schema baseline remains the approved commit `daafb7e80d410bd717663a143e4c73cbafa15bb7` with artifact tuple:
 
-`battleplan-hermes-protocol / 2.0.0 / sha256:fa0496524c56796ff8eec77f5ccd013b4b6d404836d673b1cb8dcc70ae96d7d7`
+`battleplan-hermes-protocol / 2.0.0 / sha256:bc3929e40fb2c4bc26a4f32fd917232d279778edd117576ad3fba4d6d3a281f2`
 
 The U2 implementation must not change that signed JSON artifact. It adds the source-independent Google Drive transport profile `drive-immutable-v2` around the existing exact wire bytes.
 

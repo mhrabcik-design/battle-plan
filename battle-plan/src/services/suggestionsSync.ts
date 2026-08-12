@@ -1,7 +1,15 @@
-import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
+import {
+  DriveJsonStore,
+  type DriveStoreStatus,
+  type DriveJsonWrite,
+} from './driveJsonStore.ts';
+import type { ProposalPayload } from './agentProtocol/contracts.ts';
 import { getErrorMessage } from '../utils/errors.ts';
 
-export interface AgentSuggestion {
+export interface AgentSuggestion extends Partial<Pick<
+  ProposalPayload,
+  'subject_id' | 'occurrence_key' | 'source_refs'
+>> {
   id: string;
   created_at: number;
   source: string;
@@ -61,12 +69,22 @@ export type RepliesFetchResult =
 const SUGGESTIONS_FILENAME = 'agent-suggestions.json';
 const REPLIES_FILENAME = 'agent-suggestion-replies.json';
 
-class SuggestionsSync {
+export type SuggestionsStore = Pick<
+  DriveJsonStore,
+  'lastStatus' | 'init' | 'readJsonFile' | 'readJsonFileWithStatus' | 'readJsonFilesWithStatus'
+  | 'writeJsonFile' | 'trashFile' | 'uploadBlob'
+>;
+
+export class SuggestionsSync {
   private suggestionsFileId: string | null = null;
   private repliesFileId: string | null = null;
   private knownReplyIds: Set<string> = new Set();
   private isInitialized = false;
-  private readonly drive = new DriveJsonStore();
+  private readonly drive: SuggestionsStore;
+
+  constructor(drive: SuggestionsStore = new DriveJsonStore()) {
+    this.drive = drive;
+  }
 
   async init(): Promise<void> {
     if (this.isInitialized) return;
@@ -209,7 +227,7 @@ class SuggestionsSync {
   }
 
   async addReply(reply: Omit<AgentSuggestionReply, 'id' | 'created_at'>): Promise<{ success: boolean; id?: string }> {
-    if (!this.isInitialized || !this.repliesFileId) {
+    if (!this.isInitialized) {
       return { success: false };
     }
 
@@ -220,19 +238,53 @@ class SuggestionsSync {
     };
 
     try {
-      const loaded = await this.drive.readJsonFile<RepliesFile>(REPLIES_FILENAME);
-      if (!loaded) return { success: false };
-      this.repliesFileId = loaded.fileId;
-      const replies = [...(loaded.data.replies ?? []), newReply];
-      const saved = await this.drive.writeJsonFile(
-        REPLIES_FILENAME,
-        { ...loaded.data, replies, last_updated: Date.now() },
-        this.repliesFileId,
-      );
-      if (!saved) return { success: false };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const loaded = await this.drive.readJsonFilesWithStatus<RepliesFile>(REPLIES_FILENAME);
+        if (loaded.kind === 'store-unavailable' || loaded.kind === 'error') return { success: false };
+        const files = loaded.kind === 'loaded' ? loaded.files : [];
+        const canonical = files[0];
+        if (canonical && !canonical.etag) return { success: false };
 
-      this.knownReplyIds.add(newReply.id);
-      return { success: true, id: newReply.id };
+        const byId = new Map<string, AgentSuggestionReply>();
+        for (const file of files) {
+          for (const existing of file.data.replies ?? []) byId.set(existing.id, existing);
+        }
+        byId.set(newReply.id, newReply);
+        const replies = [...byId.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+        let saved: DriveJsonWrite | null;
+        try {
+          saved = await this.drive.writeJsonFile(
+            REPLIES_FILENAME,
+            { version: 1, replies, last_updated: Date.now() },
+            canonical?.fileId ?? null,
+            canonical
+              ? { ifMatch: canonical.etag }
+              : { createOnly: true },
+          );
+        } catch (error) {
+          if (error && typeof error === 'object' && 'status' in error && error.status === 412) continue;
+          throw error;
+        }
+        if (!saved) continue;
+
+        const verification = await this.drive.readJsonFilesWithStatus<RepliesFile>(REPLIES_FILENAME);
+        if (verification.kind !== 'loaded') continue;
+        const verifiedCanonical = verification.files[0];
+        const remoteIds = new Set((verifiedCanonical.data.replies ?? []).map((item) => item.id));
+        const allRemoteIds = new Set(
+          verification.files.flatMap((file) => (file.data.replies ?? []).map((item) => item.id)),
+        );
+        if ([...allRemoteIds].some((id) => !remoteIds.has(id))) continue;
+        if (!remoteIds.has(newReply.id)) continue;
+
+        for (const duplicate of verification.files.slice(1)) {
+          await this.drive.trashFile(duplicate.fileId);
+        }
+        this.repliesFileId = verifiedCanonical.fileId;
+        this.knownReplyIds.add(newReply.id);
+        return { success: true, id: newReply.id };
+      }
+      return { success: false };
     } catch (e) {
       console.error('SuggestionsSync: addReply failed', e);
       return { success: false };

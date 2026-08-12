@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Inbox, RefreshCw, Filter } from 'lucide-react';
 import {
@@ -6,7 +6,15 @@ import {
   type AgentSuggestion,
   type AgentSuggestionReply,
 } from '../services/suggestionsSync';
-import { db } from '../db';
+import {
+  effectiveSuggestionStatus,
+  suggestionRegistry,
+  type SuggestionResolution,
+} from '../services/suggestionRegistry';
+import {
+  suggestionRegistrySync,
+  type SuggestionRegistrySyncResult,
+} from '../services/suggestionRegistrySync';
 import { SuggestionCard } from '../components/SuggestionCard';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
@@ -33,13 +41,45 @@ interface SuggestionsPageProps {
 export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) {
   const [suggestions, setSuggestions] = useState<AgentSuggestion[]>([]);
   const [repliesBySuggestion, setRepliesBySuggestion] = useState<Record<string, AgentSuggestionReply[]>>({});
+  const [resolutionsBySuggestion, setResolutionsBySuggestion] = useState<Record<string, SuggestionResolution>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [filter, setFilter] = useState<FilterMode>('open');
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [expandedTextFor, setExpandedTextFor] = useState<string | null>(null);
+  const loadInFlightRef = useRef(false);
+
+  const resolveAll = useCallback(async (values: readonly AgentSuggestion[]) => {
+    const resolutions = await suggestionRegistry.resolveMany(values);
+    const entries = values.map((suggestion, index) => [suggestion.id, resolutions[index]] as const);
+    return Object.fromEntries(entries);
+  }, []);
+
+  const refreshResolution = useCallback(async (suggestion: AgentSuggestion) => {
+    const resolution = await suggestionRegistry.resolve(suggestion);
+    setResolutionsBySuggestion((previous) => ({ ...previous, [suggestion.id]: resolution }));
+  }, []);
+
+  const registryWriteSucceeded = (result: SuggestionRegistrySyncResult): boolean =>
+    result.kind === 'published' || result.kind === 'nothing-pending';
+
+  const reportPartialSync = (
+    action: string,
+    registryResult: SuggestionRegistrySyncResult,
+    legacyWriteSucceeded: boolean,
+  ) => {
+    if (registryWriteSucceeded(registryResult) && legacyWriteSucceeded) return;
+    const detail = registryWriteSucceeded(registryResult)
+      ? 'starší soubor návrhů se nepodařilo aktualizovat'
+      : legacyWriteSucceeded
+        ? 'registr rozhodnutí čeká na synchronizaci'
+        : 'změna je zatím uložená jen v tomto zařízení';
+    onAddLog(`Suggestions: ${action} — ${detail}.`, 'error');
+  };
 
   const loadAll = useCallback(async () => {
     if (!hasUsableAuth(googleAuth)) return;
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     setIsLoading(true);
     try {
       await suggestionsSync.init();
@@ -47,10 +87,20 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         onAddLog('SuggestionsSync: BP složka nenalezena. Otevři BP app a nech poprvé synchronizovat.', 'error');
         return;
       }
-      const [sugs, repliesResult] = await Promise.all([
-        suggestionsSync.fetchSuggestions(),
+      const [suggestionsResult, repliesResult, registryFetch] = await Promise.all([
+        suggestionsSync.fetchSuggestionsDetailed(),
         suggestionsSync.fetchRepliesDetailed(),
+        suggestionRegistrySync.fetchAndMerge(),
       ]);
+
+      if (suggestionsResult.kind === 'store-unavailable' || suggestionsResult.kind === 'error') {
+        const message = suggestionsResult.kind === 'error'
+          ? suggestionsResult.message
+          : suggestionsResult.status.message;
+        onAddLog(`Suggestions: Návrhy se nepodařilo načíst (${message})`, 'error');
+        return;
+      }
+      const sugs = suggestionsResult.suggestions;
 
       const snapshot = resolveSuggestionsSnapshot(sugs, repliesResult);
       if (snapshot.kind === 'preserve') {
@@ -59,15 +109,35 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         return;
       }
 
+      if (registryFetch.kind === 'error' || registryFetch.kind === 'store-unavailable') {
+        const message = registryFetch.kind === 'error'
+          ? registryFetch.message
+          : registryFetch.status?.message ?? 'Registr rozhodnutí není na Google Drive dostupný.';
+        setSuggestions([]);
+        setRepliesBySuggestion({});
+        setResolutionsBySuggestion({});
+        setExpandedTextFor(null);
+        onAddLog(`Suggestions: Návrhy jsou pozastavené, dokud se nenačte registr rozhodnutí (${message})`, 'error');
+        return;
+      }
+      const replies = Object.values(snapshot.repliesBySuggestion).flat();
+      await suggestionRegistry.ingestLegacy(sugs, replies);
+      const registryPublish = await suggestionRegistrySync.publishPending();
+      if (registryPublish.kind === 'error') {
+        console.warn('Suggestion decision registry publish failed', registryPublish.message);
+      }
+
       setSuggestions(sugs);
       setRepliesBySuggestion(snapshot.repliesBySuggestion);
+      setResolutionsBySuggestion(await resolveAll(sugs));
     } catch (e) {
       console.error('Load suggestions failed', e);
       onAddLog('Suggestions: Nepodařilo se načíst návrhy', 'error');
     } finally {
+      loadInFlightRef.current = false;
       setIsLoading(false);
     }
-  }, [googleAuth, onAddLog]);
+  }, [googleAuth, onAddLog, resolveAll]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -80,16 +150,17 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const counts = useMemo(() => {
     const c = { open: 0, accepted: 0, rejected: 0, deferred: 0, converted: 0 };
     for (const s of suggestions) {
-      if (s.status in c) c[s.status as keyof typeof c]++;
+      const status = effectiveSuggestionStatus(s, resolutionsBySuggestion[s.id]);
+      if (status in c) c[status as keyof typeof c]++;
     }
     return c;
-  }, [suggestions]);
+  }, [suggestions, resolutionsBySuggestion]);
 
   const filtered = useMemo(() => {
     const sorted = [...suggestions].sort((a, b) => b.created_at - a.created_at);
     if (filter === 'all') return sorted;
-    return sorted.filter((s) => s.status === filter);
-  }, [suggestions, filter]);
+    return sorted.filter((s) => effectiveSuggestionStatus(s, resolutionsBySuggestion[s.id]) === filter);
+  }, [suggestions, resolutionsBySuggestion, filter]);
 
   const acceptAndCreateTask = async (suggestion: AgentSuggestion) => {
     setProcessingId(suggestion.id);
@@ -116,7 +187,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
       const fullDescription = (suggestion.description ?? '') + noteSection;
       const now = new Date().getTime();
 
-      const newId = await db.tasks.add({
+      const conversion = await suggestionRegistry.convertToTask(suggestion, {
         title: suggestion.title,
         description: fullDescription,
         type: 'task',
@@ -127,18 +198,20 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         createdAt: now,
         updatedAt: now,
       });
+      const taskId = conversion.task.id!;
 
-      // Post action reply
-      await suggestionsSync.addReply({
+      const [registryResult, replyResult, statusResult] = await Promise.all([
+        suggestionRegistrySync.publishPending(),
+        suggestionsSync.addReply({
         suggestion_id: suggestion.id,
         type: 'action',
-        content: `Accepted → task #${newId}`,
+        content: `Accepted → task #${taskId}`,
         action: 'accept',
         action_data: { convert_to_task: true },
-      });
-
-      // Persist status change to Drive so next loadAll doesn't restore 'open'
-      await suggestionsSync.updateSuggestionStatus(suggestion.id, 'converted');
+        }),
+        suggestionsSync.updateSuggestionStatus(suggestion.id, 'converted'),
+      ]);
+      reportPartialSync('task byl vytvořen', registryResult, replyResult.success && statusResult.success);
 
       // Local optimistic update
       setSuggestions((prev) =>
@@ -148,8 +221,10 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             : s
         )
       );
+      await refreshResolution(suggestion);
 
-      onAddLog(`Suggestions: ✅ ${suggestion.title.slice(0, 50)} → task #${newId}`);
+      const retryLabel = conversion.outcome === 'existing' ? ' (už existoval)' : '';
+      onAddLog(`Suggestions: ✅ ${suggestion.title.slice(0, 50)} → task #${taskId}${retryLabel}`);
     } catch (e) {
       console.error('Accept failed', e);
       onAddLog(`Suggestions: Chyba při vytváření tasku: ${e instanceof Error ? e.message : String(e)}`, 'error');
@@ -161,14 +236,18 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const reject = async (suggestion: AgentSuggestion) => {
     setProcessingId(suggestion.id);
     try {
-      await suggestionsSync.addReply({
-        suggestion_id: suggestion.id,
-        type: 'action',
-        content: 'Rejected',
-        action: 'reject',
-      });
-      // Persist status change to Drive so next loadAll doesn't restore 'open'
-      await suggestionsSync.updateSuggestionStatus(suggestion.id, 'rejected');
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'rejected' });
+      const [registryResult, replyResult, statusResult] = await Promise.all([
+        suggestionRegistrySync.publishPending(),
+        suggestionsSync.addReply({
+          suggestion_id: suggestion.id,
+          type: 'action',
+          content: 'Rejected',
+          action: 'reject',
+        }),
+        suggestionsSync.updateSuggestionStatus(suggestion.id, 'rejected'),
+      ]);
+      reportPartialSync('zamítnutí bylo zaznamenáno', registryResult, replyResult.success && statusResult.success);
       setSuggestions((prev) =>
         prev.map((s) =>
           s.id === suggestion.id
@@ -176,9 +255,11 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             : s
         )
       );
+      await refreshResolution(suggestion);
       onAddLog(`Suggestions: ❌ Zamítnuto: ${suggestion.title.slice(0, 50)}`);
     } catch (e) {
       console.error('Reject failed', e);
+      onAddLog('Suggestions: Zamítnutí se nepodařilo uložit', 'error');
     } finally {
       setProcessingId(null);
     }
@@ -187,7 +268,10 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const deleteSuggestion = async (suggestion: AgentSuggestion) => {
     setProcessingId(suggestion.id);
     try {
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'dismissed' });
+      const registryResult = await suggestionRegistrySync.publishPending();
       const result = await suggestionsSync.deleteSuggestion(suggestion.id);
+      reportPartialSync('smazání bylo zaznamenáno', registryResult, result.success);
       if (result.success) {
         setSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
         setRepliesBySuggestion((prev) => {
@@ -210,15 +294,22 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
    const defer = async (suggestion: AgentSuggestion, deferUntil: string) => {
     setProcessingId(suggestion.id);
     try {
-      await suggestionsSync.addReply({
-        suggestion_id: suggestion.id,
-        type: 'action',
-        content: `Deferred to ${deferUntil}`,
-        action: 'defer',
-        action_data: { defer_until: deferUntil },
+      await suggestionRegistry.recordDecision(suggestion, {
+        kind: 'deferred',
+        deferUntil: new Date(`${deferUntil}T00:00:00`).getTime(),
       });
-      // Persist status change to Drive so next loadAll doesn't restore 'open'
-      await suggestionsSync.updateSuggestionStatus(suggestion.id, 'deferred');
+      const [registryResult, replyResult, statusResult] = await Promise.all([
+        suggestionRegistrySync.publishPending(),
+        suggestionsSync.addReply({
+          suggestion_id: suggestion.id,
+          type: 'action',
+          content: `Deferred to ${deferUntil}`,
+          action: 'defer',
+          action_data: { defer_until: deferUntil },
+        }),
+        suggestionsSync.updateSuggestionStatus(suggestion.id, 'deferred'),
+      ]);
+      reportPartialSync('odložení bylo zaznamenáno', registryResult, replyResult.success && statusResult.success);
       setSuggestions((prev) =>
         prev.map((s) =>
           s.id === suggestion.id
@@ -226,9 +317,11 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             : s
         )
       );
+      await refreshResolution(suggestion);
       onAddLog(`Suggestions: ⏰ Odloženo do ${deferUntil}: ${suggestion.title.slice(0, 50)}`);
     } catch (e) {
       console.error('Defer failed', e);
+      onAddLog('Suggestions: Odložení se nepodařilo uložit', 'error');
     } finally {
       setProcessingId(null);
     }
@@ -237,12 +330,17 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const sendTextReply = async (suggestion: AgentSuggestion, text: string) => {
     setProcessingId(suggestion.id);
     try {
-      const result = await suggestionsSync.addReply({
-        suggestion_id: suggestion.id,
-        type: 'text',
-        content: text,
-        action: null,
-      });
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'commented', comment: text });
+      const [registryResult, result] = await Promise.all([
+        suggestionRegistrySync.publishPending(),
+        suggestionsSync.addReply({
+          suggestion_id: suggestion.id,
+          type: 'text',
+          content: text,
+          action: null,
+        }),
+      ]);
+      reportPartialSync('komentář byl zaznamenán', registryResult, result.success);
       if (result.success && result.id) {
         setRepliesBySuggestion((prev) => ({
           ...prev,
@@ -258,7 +356,10 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             },
           ],
         }));
+        await refreshResolution(suggestion);
         onAddLog(`Suggestions: 💬 Text reply odeslán`);
+      } else {
+        onAddLog('Suggestions: Komentář je uložen v registru, ale odpověď pro Anu se neodeslala', 'error');
       }
     } catch (e) {
       console.error('Text reply failed', e);
@@ -275,13 +376,18 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         onAddLog('Suggestions: Nahrávání hlasu selhalo', 'error');
         return;
       }
-      const result = await suggestionsSync.addReply({
-        suggestion_id: suggestion.id,
-        type: 'voice',
-        content: '',
-        voice_file_id: upload.fileId,
-        action: null,
-      });
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'commented', comment: 'Hlasová reakce' });
+      const [registryResult, result] = await Promise.all([
+        suggestionRegistrySync.publishPending(),
+        suggestionsSync.addReply({
+          suggestion_id: suggestion.id,
+          type: 'voice',
+          content: '',
+          voice_file_id: upload.fileId,
+          action: null,
+        }),
+      ]);
+      reportPartialSync('hlasová reakce byla zaznamenána', registryResult, result.success);
       if (result.success && result.id) {
         setRepliesBySuggestion((prev) => ({
           ...prev,
@@ -298,11 +404,44 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             },
           ],
         }));
+        await refreshResolution(suggestion);
         onAddLog(`Suggestions: 🎙 Hlasová reakce uložena`);
       }
     } catch (e) {
       console.error('Voice reply failed', e);
       onAddLog('Suggestions: Hlasová reakce selhala', 'error');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const confirmSameSuggestion = async (suggestion: AgentSuggestion, targetOccurrenceKey: string) => {
+    setProcessingId(suggestion.id);
+    try {
+      await suggestionRegistry.confirmSameOccurrence(suggestion, targetOccurrenceKey);
+      const registryResult = await suggestionRegistrySync.publishPending();
+      reportPartialSync('sloučení návrhů bylo zaznamenáno', registryResult, true);
+      await refreshResolution(suggestion);
+      onAddLog(`Suggestions: Duplicitní návrh „${suggestion.title.slice(0, 50)}“ byl sloučen.`);
+    } catch (e) {
+      console.error('Confirm duplicate suggestion failed', e);
+      onAddLog('Suggestions: Sloučení návrhů se nepodařilo', 'error');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const confirmDistinctSuggestion = async (suggestion: AgentSuggestion, targetOccurrenceKey: string) => {
+    setProcessingId(suggestion.id);
+    try {
+      await suggestionRegistry.confirmDistinctSubjects(suggestion, targetOccurrenceKey);
+      const registryResult = await suggestionRegistrySync.publishPending();
+      reportPartialSync('nová samostatná událost byla zaznamenána', registryResult, true);
+      await refreshResolution(suggestion);
+      onAddLog(`Suggestions: „${suggestion.title.slice(0, 50)}“ zůstává jako nový návrh.`);
+    } catch (e) {
+      console.error('Confirm distinct suggestion failed', e);
+      onAddLog('Suggestions: Rozlišení návrhů se nepodařilo', 'error');
     } finally {
       setProcessingId(null);
     }
@@ -446,6 +585,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
             <SuggestionCard
               key={s.id}
               suggestion={s}
+              resolution={resolutionsBySuggestion[s.id]}
               replies={repliesBySuggestion[s.id] ?? []}
               isProcessing={processingId === s.id}
               expandedTextReply={expandedTextFor === s.id}
@@ -457,6 +597,8 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
               onVoiceReply={(blob) => sendVoiceReply(s, blob)}
               onUpdate={(updates) => updateSuggestion(s, updates)}
               onDelete={() => deleteSuggestion(s)}
+              onConfirmSameOccurrence={(occurrenceKey) => confirmSameSuggestion(s, occurrenceKey)}
+              onConfirmDistinct={(occurrenceKey) => confirmDistinctSuggestion(s, occurrenceKey)}
             />
           ))}
         </AnimatePresence>
