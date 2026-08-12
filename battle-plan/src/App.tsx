@@ -40,6 +40,7 @@ import {
   getWeekDays,
   getUrgencyColor
 } from './utils/calendarUtils';
+import { isTaskCleanupCandidate, isTaskVisibleInWeek } from './utils/taskHistory';
 import { buildInfo } from './utils/buildInfo';
 import { getErrorMessage } from './utils/errors';
 
@@ -205,7 +206,8 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
       try {
         const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
         const toDelete = await db.tasks
-          .filter(t => (t.status === 'completed' || !!t.isDeleted) && (t.updatedAt || t.createdAt) < thirtyDaysAgo)
+          .where('updatedAt').below(thirtyDaysAgo)
+          .filter(t => isTaskCleanupCandidate(t, thirtyDaysAgo))
           .primaryKeys();
         if (toDelete.length > 0) {
           await db.tasks.bulkDelete(toDelete);
@@ -300,15 +302,10 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         .where('deadline').between(start, end, true, true)
         .or('date').between(start, end, true, true)
         .filter(t => !t.isDeleted)
+        .distinct()
         .toArray();
 
-      // Pivot: Tasks only by deadline, Meetings by date/startTime
-      return all.filter(t => {
-        if (t.status === 'completed' || t.type === 'thought' || t.type === 'note') return false;
-        // Strict deadline policy for duplication removal
-        if (t.type === 'task') return t.deadline && t.deadline >= start && t.deadline <= end;
-        return t.date && t.date >= start && t.date <= end;
-      });
+      return all.filter(t => isTaskVisibleInWeek(t, start, end));
     }
 
     let collection;
@@ -380,7 +377,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   useAgentBridgePolling({ googleAuth, addLog });
 
   useEffect(() => {
-    if (hasUsableAuth && viewMode === 'tasks') {
+    if (hasUsableAuth && (viewMode === 'tasks' || viewMode === 'week')) {
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     }
   }, [hasUsableAuth, viewMode, activeTaskList]);
@@ -546,6 +543,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     applyAiResult,
     toggleSubtask,
     handleToggleTask,
+    handleRescheduleTask,
     handleDeleteTask,
     handleSaveEdit,
     handleSyncToGoogle,
@@ -767,6 +765,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
               currentTime={currentTime}
               currentHourPosition={currentHourPosition}
               setEditingTask={setEditingTask}
+              onRescheduleTask={handleRescheduleTask}
             />
           )}
 
@@ -852,6 +851,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                 handleDeleteTask={handleDeleteTask}
                 handleSyncToGoogle={handleSyncToGoogle}
                 handleSaveEdit={handleSaveEdit}
+                handleToggleTask={handleToggleTask}
                 googleAuth={googleAuth}
                 isOverCapacity={memoizedIsOverCapacity}
                 getDeadlineColor={memoizedGetDeadlineColor}

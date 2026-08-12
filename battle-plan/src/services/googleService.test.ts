@@ -27,7 +27,7 @@ const localStorage = {
 };
 (globalThis as unknown as { localStorage: typeof localStorage }).localStorage = localStorage;
 
-const { AGENT_PROTOCOL_DRIVE_SCOPE, GoogleService } = await import('./googleService.ts');
+const { AGENT_PROTOCOL_DRIVE_SCOPE, GoogleService, getFollowingCivilDate } = await import('./googleService.ts');
 
 function freshService(): InstanceType<typeof GoogleService> {
     return new GoogleService();
@@ -140,12 +140,12 @@ function resetEventCapture() {
 
 function installGapiMock(api: {
     tasklistsList?: () => Promise<unknown>;
-    tasksList?: () => Promise<unknown>;
+    tasksList?: (args?: { tasklist: string; showCompleted?: boolean; showHidden?: boolean; pageToken?: string }) => Promise<unknown>;
     tasksInsert?: () => Promise<unknown>;
     tasksPatch?: () => Promise<unknown>;
     tasksDelete?: () => Promise<unknown>;
-    calendarEventsInsert?: () => Promise<unknown>;
-    calendarEventsUpdate?: () => Promise<unknown>;
+    calendarEventsInsert?: (args?: unknown) => Promise<unknown>;
+    calendarEventsUpdate?: (args?: unknown) => Promise<unknown>;
     calendarEventsDelete?: () => Promise<unknown>;
 }) {
     (globalThis as unknown as { window: { gapi: unknown } }).window.gapi = {
@@ -1214,6 +1214,62 @@ test('R9: addToCalendar 403 surfaces the calendar error without clearing Google 
     );
 
     assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
+});
+
+test('getTasks follows nextPageToken and returns tasks from every page', async () => {
+    clearStore();
+    seedSignedInStorage();
+    const requests: Array<{ tasklist: string; showCompleted?: boolean; showHidden?: boolean; pageToken?: string }> = [];
+    installGapiMock({
+        tasksList: async (args) => {
+            assert.ok(args);
+            requests.push(args);
+            if (!args.pageToken) {
+                return { result: { items: [{ id: 'task-1' }], nextPageToken: 'page-2' } };
+            }
+            assert.equal(args.pageToken, 'page-2');
+            return { result: { items: [{ id: 'task-2' }] } };
+        },
+    });
+    const svc = freshService();
+
+    const tasks = await svc.getTasks('@default');
+
+    assert.deepEqual(tasks, [{ id: 'task-1' }, { id: 'task-2' }]);
+    assert.deepEqual(requests, [
+        { tasklist: '@default', showCompleted: true, showHidden: true },
+        { tasklist: '@default', showCompleted: true, showHidden: true, pageToken: 'page-2' },
+    ]);
+});
+
+test('getFollowingCivilDate increments calendar dates without local-time conversion', () => {
+    assert.equal(getFollowingCivilDate('2026-03-29'), '2026-03-30', 'DST boundary remains a civil date increment');
+    assert.equal(getFollowingCivilDate('2028-02-29'), '2028-03-01', 'leap day advances to March');
+    assert.equal(getFollowingCivilDate('2026-12-31'), '2027-01-01', 'year boundary advances correctly');
+});
+
+test('addToCalendar uses the following civil date as the exclusive end of an all-day event', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let request: { resource?: { start?: unknown; end?: unknown } } | undefined;
+    installGapiMock({
+        calendarEventsInsert: async (args) => {
+            request = args as typeof request;
+            return { result: { id: 'evt-all-day' } };
+        },
+    });
+    const svc = freshService();
+
+    const id = await svc.addToCalendar({
+        title: 'Celodenní schůzka',
+        description: '',
+        date: '2026-12-31',
+        isAllDay: true,
+    });
+
+    assert.equal(id, 'evt-all-day');
+    assert.deepEqual(request?.resource?.start, { date: '2026-12-31' });
+    assert.deepEqual(request?.resource?.end, { date: '2027-01-01' });
 });
 
 test('v2 Drive transport exposes its exact narrow scope and account cache discriminator', () => {

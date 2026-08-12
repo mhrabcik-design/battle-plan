@@ -113,6 +113,52 @@ export const getTimePosition = (timeStr: string | undefined, rowHeight: number) 
     return (totalMinutes / 60) * rowHeight;
 };
 
+export type WeeklyDropTarget = {
+    date: string;
+    lane: 'all-day' | 'timed';
+    /** Visual top edge of the block, expressed as minutes since midnight. */
+    blockTopMinutes?: number;
+};
+
+export type WeeklySchedulePatch = Pick<UnifiedTask, 'date' | 'deadline' | 'startTime' | 'isAllDay'>;
+
+const WEEK_START_MINUTES = 7 * 60;
+const WEEK_END_MINUTES = 19 * 60;
+const WEEK_SNAP_MINUTES = 15;
+
+const formatClockMinutes = (minutes: number): string => {
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return `${String(hours).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+};
+
+export const snapWeeklyMinute = (minutes: number, duration = 0): number => {
+    const snapped = Math.round(minutes / WEEK_SNAP_MINUTES) * WEEK_SNAP_MINUTES;
+    return Math.min(Math.max(snapped, WEEK_START_MINUTES), WEEK_END_MINUTES - Math.max(0, duration));
+};
+
+export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTarget): WeeklySchedulePatch => {
+    if (target.lane === 'all-day') {
+        return {
+            date: target.date,
+            deadline: target.date,
+            startTime: undefined,
+            isAllDay: true,
+        };
+    }
+
+    const duration = Math.max(0, task.duration || 60);
+    const blockTop = snapWeeklyMinute(target.blockTopMinutes ?? WEEK_START_MINUTES, duration);
+    const semanticTime = task.type === 'task' ? blockTop + duration : blockTop;
+
+    return {
+        date: target.date,
+        deadline: target.date,
+        startTime: formatClockMinutes(semanticTime),
+        isAllDay: false,
+    };
+};
+
 export const getUrgencyColor = (urgency?: number) => {
     switch (urgency) {
         case 3: return 'text-red-400 border-red-400/30 bg-red-400/10';

@@ -3,7 +3,8 @@ import { db, type Task } from '../db';
 import { AuthUnavailableError, googleService } from '../services/googleService';
 import { applySemanticResult } from '../services/semanticEngine';
 import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types';
-import { hasUsableAuth } from '../types';
+import { hasUsableAuth, isAuthUnavailable } from '../types';
+import type { WeeklySchedulePatch } from '../utils/calendarUtils';
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
@@ -27,12 +28,12 @@ export function useTaskCommands({
   // dispatches synchronously via google-auth-change but the consumer state
   // is captured at render time). Read live state from the singleton.
   const isAuthUnavailableNow = (): boolean => {
-      const state = googleService.getAuthState();
-      return state === 'OFFLINE_AUTH' || state === 'SIGNED_OUT';
+      return isAuthUnavailable(googleService.getAuthState());
   };
   const AUTH_UNAVAILABLE_MSG = 'Relace vypršela, obnovte prosím autorizaci v Nastavení';
-  const refreshGoogleTasks = useCallback(() => {
-    googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
+  const refreshGoogleTasks = useCallback(async () => {
+    const tasks = await googleService.getTasks(activeTaskList);
+    setGoogleTasksRaw(tasks);
   }, [activeTaskList, setGoogleTasksRaw]);
 
   const applyAiResult = useCallback(async (result: Partial<Task>, updateId: number | null) => {
@@ -63,19 +64,28 @@ export function useTaskCommands({
     });
   }, []);
 
-  const handleToggleTask = useCallback(async (task: UnifiedTask) => {
-    if (task.isGoogleTask && task.googleId && hasUsableAuth(googleAuth)) {
+  const handleToggleTask = useCallback(async (task: UnifiedTask): Promise<UnifiedTask | null> => {
+    if (task.isGoogleTask && task.googleId) {
+      if (!hasUsableAuth(googleAuth)) {
+        alert(AUTH_UNAVAILABLE_MSG);
+        return null;
+      }
       const newStatus = task.status === 'completed' ? 'needsAction' : 'completed';
       const result = await googleService.updateGoogleTask(task.googleId, { status: newStatus }, task.googleListId);
       if (result === null && isAuthUnavailableNow()) {
         alert(AUTH_UNAVAILABLE_MSG);
+        return null;
       }
-      refreshGoogleTasks();
+      if (result === null) return null;
+      await refreshGoogleTasks();
+      const status: UnifiedTask['status'] = newStatus === 'completed' ? 'completed' : 'pending';
+      return { ...task, status, updatedAt: Date.now() };
     } else if (task.id) {
       const newStatus = task.status === 'completed' ? 'pending' : 'completed';
+      const updatedAt = Date.now();
       await db.tasks.update(task.id, {
         status: newStatus,
-        updatedAt: Date.now()
+        updatedAt
       });
 
       if (task.googleEventId && hasUsableAuth(googleAuth)) {
@@ -86,7 +96,45 @@ export function useTaskCommands({
           console.error("Failed to update calendar event on toggle", e);
         }
       }
+      return { ...task, status: newStatus as UnifiedTask['status'], updatedAt };
     }
+    return null;
+  }, [googleAuth, refreshGoogleTasks]);
+
+  const handleRescheduleTask = useCallback(async (task: UnifiedTask, patch: WeeklySchedulePatch) => {
+    if (task.isGoogleTask && task.googleId) {
+      if (!hasUsableAuth(googleAuth)) {
+        alert(AUTH_UNAVAILABLE_MSG);
+        return false;
+      }
+      const result = await googleService.updateGoogleTask(task.googleId, {
+        due: `${patch.deadline}T00:00:00.000Z`,
+      }, task.googleListId);
+      if (result === null) {
+        if (isAuthUnavailableNow()) alert(AUTH_UNAVAILABLE_MSG);
+        return false;
+      }
+      await refreshGoogleTasks();
+      return true;
+    }
+
+    if (!task.id) return false;
+    const updatedTask = { ...task, ...patch, updatedAt: Date.now() };
+    await db.tasks.update(task.id, { ...patch, updatedAt: updatedTask.updatedAt });
+
+    if (task.type === 'meeting' && task.googleEventId && hasUsableAuth(googleAuth)) {
+      const reportSyncFailure = (error?: unknown) => {
+        if (error) console.error('Calendar reschedule sync failed', error);
+        alert('Změna je uložená lokálně, ale synchronizace s Google Kalendářem selhala.');
+      };
+      try {
+        const eventId = await googleService.addToCalendar(updatedTask);
+        if (!eventId) reportSyncFailure();
+      } catch (error) {
+        reportSyncFailure(error);
+      }
+    }
+    return true;
   }, [googleAuth, refreshGoogleTasks]);
 
   const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
@@ -114,7 +162,8 @@ export function useTaskCommands({
       if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth(googleAuth)) {
         const result = await googleService.updateGoogleTask(editingTask.googleId, {
           title: editingTask.title,
-          notes: editingTask.description
+          notes: editingTask.description,
+          due: editingTask.deadline ? `${editingTask.deadline}T00:00:00.000Z` : undefined,
         }, editingTask.googleListId);
         if (result === null && isAuthUnavailableNow()) {
           alert(AUTH_UNAVAILABLE_MSG);
@@ -177,6 +226,7 @@ export function useTaskCommands({
     applyAiResult,
     toggleSubtask,
     handleToggleTask,
+    handleRescheduleTask,
     handleDeleteTask,
     handleSaveEdit,
     handleSyncToGoogle,

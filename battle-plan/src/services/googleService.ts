@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { GoogleAuthState, GoogleAuthStatus } from '../types';
+import type { GoogleAuthState, GoogleAuthStatus, GoogleTaskRaw } from '../types';
 export type { GoogleAuthState, GoogleAuthStatus };
 
 declare global {
@@ -12,7 +12,7 @@ declare global {
                 tasks: {
                     tasklists: { list: () => Promise<{ result: { items?: any[] } }> };
                     tasks: {
-                        list: (args: { tasklist: string; showCompleted?: boolean; showHidden?: boolean }) => Promise<{ result: { items?: any[] } }>;
+                        list: (args: { tasklist: string; showCompleted?: boolean; showHidden?: boolean; pageToken?: string }) => Promise<{ result: { items?: GoogleTaskRaw[]; nextPageToken?: string } }>;
                         insert: (args: { tasklist: string; resource: unknown }) => Promise<{ result: unknown }>;
                         patch: (args: { tasklist: string; task: string; resource: unknown }) => Promise<{ result: unknown }>;
                         delete: (args: { tasklist: string; task: string }) => Promise<void>;
@@ -68,6 +68,21 @@ export const AGENT_PROTOCOL_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive
 const CORE_SCOPES = 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive';
 const SCOPES = `${CORE_SCOPES} ${GOOGLE_TASKS_SCOPE}`;
 const CORE_SCOPE_SET = CORE_SCOPES.split(/\s+/).filter(Boolean);
+
+/** Returns the next YYYY-MM-DD without converting through the browser's local timezone. */
+export function getFollowingCivilDate(date: string): string {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new Error(`Neplatné kalendářní datum: ${date}`);
+    }
+
+    const value = new Date(`${date}T00:00:00Z`);
+    if (Number.isNaN(value.getTime()) || value.toISOString().slice(0, 10) !== date) {
+        throw new Error(`Neplatné kalendářní datum: ${date}`);
+    }
+
+    value.setUTCDate(value.getUTCDate() + 1);
+    return value.toISOString().slice(0, 10);
+}
 
 function tokenHasScopes(response: TokenResponse, scopes: string[]): boolean | null {
     if (response.scope) {
@@ -504,12 +519,23 @@ class GoogleService {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return [];
         if (!this.googleTasksScopeAvailable) return [];
         try {
-            const response = await window.gapi.client.tasks.tasks.list({
-                tasklist: taskListId,
-                showCompleted: true,
-                showHidden: true
-            });
-            return response.result.items || [];
+            const tasks: GoogleTaskRaw[] = [];
+            let pageToken: string | undefined;
+
+            do {
+                const request: { tasklist: string; showCompleted: boolean; showHidden: boolean; pageToken?: string } = {
+                    tasklist: taskListId,
+                    showCompleted: true,
+                    showHidden: true,
+                };
+                if (pageToken) request.pageToken = pageToken;
+
+                const response = await window.gapi.client.tasks.tasks.list(request);
+                tasks.push(...(response.result.items || []));
+                pageToken = response.result.nextPageToken;
+            } while (pageToken);
+
+            return tasks;
         } catch (e: unknown) {
             if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
@@ -638,11 +664,8 @@ class GoogleService {
 
             if (isAllDay) {
                 // Google all-day: start.date = YYYY-MM-DD, end.date je EXKLUZIVNÍ (den po)
-                const endDate = new Date(`${dateStr}T00:00:00`);
-                endDate.setDate(endDate.getDate() + 1);
-                const endDateStr = endDate.toISOString().split('T')[0];
                 event.start = { 'date': dateStr };
-                event.end = { 'date': endDateStr };
+                event.end = { 'date': getFollowingCivilDate(dateStr) };
             } else {
                 event.start = {
                     'dateTime': baseDate.toISOString(),
