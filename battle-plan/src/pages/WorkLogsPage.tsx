@@ -353,7 +353,7 @@ export function WorkLogsPage({ onAddLog, onVoiceControllerChange }: WorkLogsPage
                     )}
 
                     {view === 'calendar' && (
-                        <WorkLogCalendar logs={effectiveLogs} projects={projects} projectIndex={projectIndex} />
+                        <WorkLogCalendar logs={effectiveLogs} projectIndex={projectIndex} />
                     )}
 
                     {view === 'table' && (

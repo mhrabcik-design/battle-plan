@@ -5,8 +5,10 @@ import { test } from 'node:test';
 import type { Project, WorkLog } from '../db.ts';
 import {
     createWorkLogProjectIndex,
+    filterWorkLogsByProjectKey,
     groupWorkLogsByProject,
     resolveWorkLogProjectDisplay,
+    resolveWorkLogProjectKey,
 } from './workLogProjectGrouping.ts';
 
 function workLog(projectId: number, projectName: string): WorkLog {
@@ -201,5 +203,42 @@ test('manual-merge aliases group historical snapshots under the survivor identit
         workLogs.map((workLog) => workLog.projectName),
         ['Komerční Banka', 'Komerční Banka', 'Komerční Banka', 'Komerční banka Plaza'],
         'grouping must not rewrite historical snapshots',
+    );
+});
+
+test('calendar filter key treats canonical and historical alias snapshots as one project', () => {
+    const survivor: Project = {
+        id: 7,
+        name: 'Komerční Banka',
+        aliases: ['Komerční banka Plaza'],
+        color: 'amber',
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 2,
+    };
+    const projectIndex = createWorkLogProjectIndex([survivor]);
+    const canonical = workLog(7, 'Komerční Banka');
+    const historicalAlias = workLog(404, 'Komerční banka Plaza');
+    const unrelated = workLog(12, 'Plaza Liberec');
+
+    assert.equal(
+        resolveWorkLogProjectKey(canonical, projectIndex),
+        'project-id:7',
+    );
+    assert.equal(
+        resolveWorkLogProjectKey(historicalAlias, projectIndex),
+        'project-id:7',
+    );
+    assert.equal(
+        resolveWorkLogProjectKey(unrelated, projectIndex),
+        'plaza liberec',
+    );
+    assert.deepEqual(
+        filterWorkLogsByProjectKey(
+            [canonical, historicalAlias, unrelated],
+            'project-id:7',
+            projectIndex,
+        ),
+        [canonical, historicalAlias],
     );
 });
