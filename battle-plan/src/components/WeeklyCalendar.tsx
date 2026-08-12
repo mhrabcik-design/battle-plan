@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { CheckCircle2, Clock, Hourglass, Sun } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { CheckCircle2, Clock, GripVertical, Hourglass, MapPin, Sun } from 'lucide-react';
 import type { UnifiedTask } from '../types';
 import {
     formatTimeLeft,
@@ -9,6 +10,7 @@ import {
     getWeeklyReschedulePatch,
     isAllDayTask,
     isOverCapacity,
+    snapWeeklyMinute,
     type WeeklyDropTarget,
     type WeeklySchedulePatch,
 } from '../utils/calendarUtils';
@@ -58,6 +60,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     const dragRef = useRef<DragState | null>(null);
     const suppressClickRef = useRef<string | null>(null);
     const [dropTarget, setDropTarget] = useState<WeeklyDropTarget | null>(null);
+    const [draggingTask, setDraggingTask] = useState<UnifiedTask | null>(null);
     const [busyTask, setBusyTask] = useState<string | null>(null);
     const [announcement, setAnnouncement] = useState('');
 
@@ -99,6 +102,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         if (!drag.dragging) {
             drag.dragging = true;
             event.currentTarget.setPointerCapture(event.pointerId);
+            setDraggingTask(drag.task);
         }
         event.preventDefault();
         const target = targetAtPoint(drag.task, event.clientX, event.clientY);
@@ -114,6 +118,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         suppressClickRef.current = taskKey(drag.task);
         const target = targetAtPoint(drag.task, event.clientX, event.clientY);
         setDropTarget(null);
+        setDraggingTask(null);
         if (!target) {
             setAnnouncement('Přesun zrušen');
             return;
@@ -136,6 +141,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         if (dragRef.current?.dragging) suppressClickRef.current = taskKey(dragRef.current.task);
         dragRef.current = null;
         setDropTarget(null);
+        setDraggingTask(null);
         setAnnouncement('Přesun zrušen');
     };
 
@@ -155,11 +161,67 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         onPointerCancel: cancelDrag,
         onClick: () => openTask(task),
         'aria-busy': busyTask === taskKey(task),
+        'aria-grabbed': draggingTask ? draggingTask === task : undefined,
     });
+
+    const draggingKey = draggingTask ? taskKey(draggingTask) : null;
+    const targetLabel = draggingTask && dropTarget ? describeTarget(draggingTask, dropTarget) : null;
+
+    const renderDropPreview = (lane: WeeklyDropTarget['lane']) => {
+        if (!draggingTask || !dropTarget || dropTarget.lane !== lane) return null;
+        const completed = draggingTask.status === 'completed';
+        const isMeeting = draggingTask.type === 'meeting';
+        const duration = Math.max(0, draggingTask.duration || 60);
+        const height = lane === 'timed' ? Math.max(40, duration / 60 * rowHeight) : 28;
+        const topMinutes = lane === 'timed'
+            ? snapWeeklyMinute(dropTarget.blockTopMinutes ?? startHour * 60, duration)
+            : 0;
+        const top = lane === 'timed' ? ((topMinutes - startHour * 60) / 60) * rowHeight : 2;
+
+        return (
+            <motion.div
+                layoutId="weekly-drop-preview"
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ type: 'spring', stiffness: 520, damping: 38, mass: 0.55 }}
+                className={`absolute left-1 right-1 z-40 overflow-hidden rounded-lg border-2 border-dashed pointer-events-none shadow-[0_0_28px_rgba(52,211,153,0.28)] ${completed ? 'border-emerald-300 bg-emerald-950/90' : isMeeting ? 'border-indigo-300 bg-indigo-500/85' : 'border-amber-300 bg-slate-800/95'}`}
+                style={{ top: `${top}px`, height: `${height}px` }}
+                aria-hidden="true"
+            >
+                <div className="absolute inset-0 bg-gradient-to-br from-white/18 via-transparent to-emerald-300/10 animate-pulse" />
+                <div className="relative flex h-full items-center gap-1.5 px-2">
+                    <MapPin className="h-3.5 w-3.5 shrink-0 text-emerald-200 drop-shadow" />
+                    <div className="min-w-0 flex-1">
+                        <div className="truncate text-[10px] font-black uppercase tracking-wide text-white">{draggingTask.title}</div>
+                        {lane === 'timed' && <div className="text-[9px] font-bold tabular-nums text-emerald-100">{targetLabel}</div>}
+                    </div>
+                    <span className="shrink-0 rounded bg-emerald-300 px-1.5 py-0.5 text-[8px] font-black uppercase text-emerald-950">Sem</span>
+                </div>
+            </motion.div>
+        );
+    };
 
     return (
         <div className="flex-1 flex flex-col min-h-0">
             <div aria-live="polite" className="sr-only">{announcement}</div>
+            <AnimatePresence>
+                {draggingTask && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 12, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 8, scale: 0.97 }}
+                        transition={{ type: 'spring', stiffness: 460, damping: 32 }}
+                        className={`fixed bottom-24 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-2 shadow-2xl backdrop-blur-xl md:bottom-8 ${dropTarget ? 'border-emerald-400/60 bg-emerald-950/90 text-emerald-100 shadow-emerald-950/60' : 'border-red-400/60 bg-red-950/90 text-red-100 shadow-red-950/60'}`}
+                        role="status"
+                    >
+                        <MapPin className={`h-4 w-4 ${dropTarget ? 'text-emerald-300' : 'text-red-300'}`} />
+                        <div className="whitespace-nowrap">
+                            <div className="text-[9px] font-black uppercase tracking-[0.16em] opacity-70">{dropTarget ? 'Pustit a přesunout' : 'Mimo platnou oblast'}</div>
+                            <div className="text-xs font-black first-letter:uppercase">{targetLabel ?? 'Vraťte kartu nad kalendář'}</div>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
             <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative">
                 <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[700px] md:min-w-[1200px] relative" style={{ height: `${calendarHours.length * rowHeight + timelineTop + 20}px` }}>
                     <div className="relative border-r border-white/10 bg-slate-950/40 z-20 ml-6 md:ml-10">
@@ -190,10 +252,13 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                     className={`absolute left-0 right-0 z-20 px-1 pt-1 space-y-1 overflow-y-auto no-scrollbar transition-colors ${isAllDayTarget ? 'bg-emerald-500/20 ring-2 ring-inset ring-emerald-400' : ''}`}
                                     style={{ top: '40px', height: `${allDayLaneHeight}px` }}
                                 >
+                                    {isAllDayTarget && renderDropPreview('all-day')}
                                     {allDayTasks.map(task => {
                                         const completed = task.status === 'completed';
+                                        const isDragging = draggingKey === taskKey(task);
                                         return (
-                                            <button key={`${taskKey(task)}-allday`} {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`w-full px-2 py-1 rounded-md border transition-all flex items-center gap-1.5 overflow-hidden touch-pan-y ${completed ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' : task.type === 'meeting' ? 'bg-indigo-600/80 border-indigo-500/50 hover:border-indigo-300' : 'bg-amber-600/80 border-amber-500/50 hover:border-amber-300'} disabled:opacity-60`}>
+                                            <button key={`${taskKey(task)}-allday`} {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`w-full px-2 py-1 rounded-md border transition-[opacity,transform,border-color,box-shadow] duration-150 flex items-center gap-1.5 overflow-hidden touch-pan-y cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-25 scale-[0.97] border-dashed shadow-none' : 'shadow-sm'} ${completed ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' : task.type === 'meeting' ? 'bg-indigo-600/80 border-indigo-500/50 hover:border-indigo-300' : 'bg-amber-600/80 border-amber-500/50 hover:border-amber-300'} disabled:opacity-60`}>
+                                                {!completed && <GripVertical className="h-3 w-3 shrink-0 text-white/45" />}
                                                 {completed ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <Sun className="w-3 h-3 text-white shrink-0" />}
                                                 <span className={`text-sm font-bold uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-white'}`}>{task.title}</span>
                                                 {completed && <span className="text-[9px] font-black uppercase ml-auto">Splněno</span>}
@@ -206,16 +271,21 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                 {calendarHours.map(hour => <div key={hour} className="absolute left-0 w-full border-b border-white/5" style={{ top: `${(hour - startHour) * rowHeight + timelineTop}px`, height: `${rowHeight}px` }} />)}
 
                                 <div data-week-drop-lane="timed" data-week-date={day.full} className={`absolute left-1 right-1 bottom-0 z-10 transition-colors ${isTimedTarget ? 'bg-emerald-500/10 ring-2 ring-inset ring-emerald-400/70' : ''}`} style={{ top: `${timelineTop}px` }}>
+                                    {isTimedTarget && renderDropPreview('timed')}
                                     {timedTasks.map(task => {
                                         const completed = task.status === 'completed';
+                                        const isDragging = draggingKey === taskKey(task);
                                         const height = Math.max(40, (task.duration || 60) / 60 * rowHeight);
                                         const basePos = getTimePosition(task.startTime, rowHeight);
                                         const top = task.type === 'task' ? basePos - height : basePos;
                                         return (
-                                            <button key={taskKey(task)} {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`absolute left-0 right-0 p-2 rounded-lg border transition-all flex flex-col gap-0.5 overflow-hidden group/item touch-pan-y ${completed ? 'bg-emerald-950/80 border-emerald-500/40' : task.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : isOverCapacity(currentTime, task) ? 'bg-red-950/40 border-red-500/40 animate-pulse-red' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'} disabled:opacity-60`} style={{ top: `${top}px`, height: `${height}px` }}>
+                                            <button key={taskKey(task)} {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`absolute left-0 right-0 p-2 rounded-lg border transition-[opacity,transform,border-color,box-shadow] duration-150 flex flex-col gap-0.5 overflow-hidden group/item touch-pan-y cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-25 scale-[0.97] border-dashed shadow-none' : 'shadow-lg'} ${completed ? 'bg-emerald-950/80 border-emerald-500/40' : task.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : isOverCapacity(currentTime, task) ? 'bg-red-950/40 border-red-500/40 animate-pulse-red' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'} disabled:opacity-60`} style={{ top: `${top}px`, height: `${height}px` }}>
                                                 <div className={`absolute top-0 left-0 bottom-0 w-1 ${completed ? 'bg-emerald-400' : task.type === 'meeting' ? 'bg-indigo-300' : isOverCapacity(currentTime, task) ? 'bg-red-500' : 'bg-orange-500'} opacity-80`} />
                                                 <div className="flex items-center justify-between gap-1">
-                                                    <span className={`text-xs font-black uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-white'}`}>{task.title}</span>
+                                                    <span className="flex min-w-0 items-center gap-1">
+                                                        {!completed && <GripVertical className="h-3 w-3 shrink-0 text-white/35" />}
+                                                        <span className={`text-xs font-black uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-white'}`}>{task.title}</span>
+                                                    </span>
                                                     {completed && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300 shrink-0" />}
                                                     {task.isGoogleTask && <span className="text-sm bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30 shrink-0">G</span>}
                                                 </div>
