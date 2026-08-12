@@ -3,3 +3,4 @@ graphify-out/
 .agents/
 current-task.md
 handoffs/
+.worktrees/
