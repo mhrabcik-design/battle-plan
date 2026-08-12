@@ -29,7 +29,7 @@ AI návrh lze před dalším použitím upravit ve Focus Mode. Při hlasové akt
 
 ## Týdenní plán a splněné úkoly
 
-Položku přesunete stisknutím a tažením na nový den nebo čas. Časové položky se zarovnávají po 15 minutách; celodenní položky se přesouvají mezi horními denními pruhy. Google Tasks jsou vždy celodenní. Puštění mimo platnou oblast přesun zruší a obyčejné kliknutí dál otevře detail.
+Položku přesunete stisknutím a tažením na nový den nebo čas. Původní karta při tažení zeslábne, cílový den se zeleně zvýrazní a animovaný náhled s označením **Sem** ukáže přesnou budoucí pozici. Spodní štítek průběžně zobrazuje cílový den a čas; při opuštění kalendáře zčervená. Časové položky se zarovnávají po 15 minutách, celodenní položky se přesouvají mezi horními denními pruhy a Google Tasks zůstávají vždy celodenní. Puštění mimo platnou oblast přesun zruší a obyčejné kliknutí dál otevře detail.
 
 Úkol lze označit jako splněný z karty i z jeho detailu pomocí tlačítka **Označit splněno**. Splněný úkol zůstane ve svém naplánovaném týdnu se zeleným, přeškrtnutým vzhledem a štítkem „Splněno“. V detailu jej lze tlačítkem **Znovu otevřít** vrátit mezi rozpracované. Datum a čas lze vždy změnit také formulářem v detailu, což je alternativa k tažení.
 
