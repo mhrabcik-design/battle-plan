@@ -40,6 +40,10 @@ export interface Task {
     googleEventId?: string;
     source?: 'user' | 'agent'; // attribution: which surface produced this row
     agent_write_id?: string; // inbox AgentWrite.id (only present when source === 'agent')
+    /** Stable Suggestions subject that produced this task. */
+    suggestionSubjectId?: string;
+    /** Unique Suggestions occurrence conversion key; prevents a second task. */
+    suggestionOccurrenceKey?: string;
     updatedAt: number;
     isDeleted?: boolean;
     createdAt: number;
@@ -93,6 +97,53 @@ export interface WorkLog {
     agent_write_id?: string;
     updatedAt: number;
     createdAt: number;
+}
+
+export type SuggestionDecisionKind =
+    | 'commented'
+    | 'deferred'
+    | 'accepted'
+    | 'converted'
+    | 'rejected'
+    | 'dismissed'
+    | 'reopened';
+
+export interface SuggestionSubjectRow {
+    id: string;
+    canonicalFingerprint: string;
+    aliases: string[];
+    distinctFromSubjectIds: string[];
+    title: string;
+    category: string;
+    source: string;
+    createdAt: number;
+    updatedAt: number;
+}
+
+export interface SuggestionOccurrenceRow {
+    id: string;
+    subjectId: string;
+    aliases: string[];
+    proposalIds: string[];
+    exactFingerprint: string;
+    titleSnapshot: string;
+    sourceScope: string[];
+    createdAt: number;
+    updatedAt: number;
+}
+
+export interface SuggestionDecisionRow {
+    id: string;
+    subjectId: string;
+    occurrenceKey: string;
+    suggestionId: string;
+    kind: SuggestionDecisionKind;
+    comment?: string;
+    deferUntil?: number;
+    taskId?: number;
+    taskPublicId?: string;
+    createdAt: number;
+    publishedAt?: number;
 }
 
 // AgentInbox row: mirror of the inbox file in Dexie so the diagnostics
@@ -387,6 +438,9 @@ export class BattlePlanDB extends Dexie {
     agentSigningKeyRefs!: Table<AgentSigningKeyRefRow, string>;
     agentPairingKeys!: Table<AgentPairingKeyRow, string>;
     agentReceiverCapabilities!: Table<AgentReceiverCapabilityRow, string>;
+    suggestionSubjects!: Table<SuggestionSubjectRow, string>;
+    suggestionOccurrences!: Table<SuggestionOccurrenceRow, string>;
+    suggestionDecisions!: Table<SuggestionDecisionRow, string>;
 
     constructor(name = 'BattlePlanDB') {
         super(name);
@@ -539,6 +593,16 @@ export class BattlePlanDB extends Dexie {
         // such row terminal on its next claim instead of trusting replay data.
         this.version(16).stores({}).upgrade(failClosedLegacyCommandExpiry);
 
+        // v17: durable Suggestions identity and decision journal. The optional
+        // unique task conversion key prevents a proposal replay from creating
+        // a second local task while ordinary tasks remain unindexed there.
+        this.version(17).stores({
+            tasks: '++id, &publicId, &suggestionOccurrenceKey, suggestionSubjectId, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+            suggestionSubjects: 'id, canonicalFingerprint, updatedAt',
+            suggestionOccurrences: 'id, subjectId, *proposalIds, updatedAt',
+            suggestionDecisions: 'id, subjectId, occurrenceKey, kind, createdAt, publishedAt',
+        });
+
         // Keep identities present and immutable until all mutation paths share
         // the centralized domain-command transaction boundary.
         this.tasks.hook('creating', (_primaryKey, task) => {
@@ -546,8 +610,24 @@ export class BattlePlanDB extends Dexie {
         });
         this.tasks.hook('updating', (changes, _primaryKey, task) => {
             if (Dexie.currentTransaction && portableIdentityRepairTransactions.has(Dexie.currentTransaction)) return;
-            if (!task.publicId) return { publicId: createPortableId('task') };
-            if ('publicId' in changes && changes.publicId !== task.publicId) return { publicId: task.publicId };
+            const protectedChanges: Partial<Task> = {};
+            if (!task.publicId) protectedChanges.publicId = createPortableId('task');
+            else if ('publicId' in changes && changes.publicId !== task.publicId) protectedChanges.publicId = task.publicId;
+            if (
+                task.suggestionOccurrenceKey
+                && 'suggestionOccurrenceKey' in changes
+                && changes.suggestionOccurrenceKey !== task.suggestionOccurrenceKey
+            ) {
+                protectedChanges.suggestionOccurrenceKey = task.suggestionOccurrenceKey;
+            }
+            if (
+                task.suggestionSubjectId
+                && 'suggestionSubjectId' in changes
+                && changes.suggestionSubjectId !== task.suggestionSubjectId
+            ) {
+                protectedChanges.suggestionSubjectId = task.suggestionSubjectId;
+            }
+            return Object.keys(protectedChanges).length ? protectedChanges : undefined;
         });
         this.projects.hook('creating', (_primaryKey, project) => {
             project.publicId ??= createPortableId('project');

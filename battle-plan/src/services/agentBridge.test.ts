@@ -913,7 +913,7 @@ test('U7: agentInbox is a Dexie Table and recordings is no longer declared in th
     // v11 retains the legacy inbox while adding isolated protocol-v2 stores;
     // v14 repairs portable identities before v15 makes them unique; v16
     // fail-closes legacy protocol receipts that lack authenticated expiry.
-    assert.equal(await db.verno, 16);
+    assert.equal(await db.verno, 17);
 });
 
 

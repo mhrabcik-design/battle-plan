@@ -1,0 +1,25 @@
+{
+  "expected_error": "schema_invalid",
+  "message": {
+    "signed": {
+      "protocol_version": "2.0.0",
+      "message_type": "response",
+      "message_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000110",
+      "workspace_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000010",
+      "producer_id": "battleplan.device-a",
+      "target": { "kind": "receiver", "id": "hermes.primary" },
+      "created_at": "2026-08-09T10:00:05.000Z",
+      "correlation_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000007",
+      "causation_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000007",
+      "signing_key_id": "ed25519:battleplan-1",
+      "pairing_epoch": 1,
+      "payload": {
+        "proposal_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000071",
+        "subject_id": "tax.vat-2026-07",
+        "occurrence_key": "tax.vat-2026-07.prepare-documents",
+        "decision": "deferred"
+      }
+    },
+    "signature": { "alg": "Ed25519", "key_id": "ed25519:battleplan-1", "pairing_epoch": 1, "value": "AA" }
+  }
+}

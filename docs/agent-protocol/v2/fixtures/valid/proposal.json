@@ -13,6 +13,11 @@
     "pairing_epoch": 1,
     "payload": {
       "proposal_id": "018f6f5e-2d88-7f2a-8f90-d6ad23000071",
+      "subject_id": "tax.vat-2026-07",
+      "occurrence_key": "tax.vat-2026-07.prepare-documents",
+      "source_refs": [
+        { "kind": "email", "id": "thread-123", "revision": "message-7" }
+      ],
       "title": "Prepare review",
       "body": "Create a task for the architecture review.",
       "requested_action": "convert_to_task"

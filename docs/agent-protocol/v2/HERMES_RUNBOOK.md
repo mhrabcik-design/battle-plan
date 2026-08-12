@@ -45,6 +45,8 @@ Any stop leaves `execution_enabled=false`. These are control-plane failures and 
 
 Canonicalize, sign and upload one immutable message per file. Target one advertised receiver. On ambiguity retry the identical canonical bytes and ID. Persist results/events before advancing a cursor. On a sequence gap, stop canonical application and load a signed snapshot. On concurrent entity heads, retain both and wait for `conflict_resolved`. Proposals remain non-executable.
 
+Before publishing a proposal, derive and persist its stable `subject_id`, `occurrence_key`, and `source_refs`. Read all authenticated responses since the last cursor first. A terminal response (`accepted`, `rejected`, or `converted_to_task`) suppresses that occurrence permanently; `deferred` suppresses it until its required `defer_until` date; `commented` keeps the occurrence open in the same thread. A new `proposal_id`, rewritten title, or later Hermes cycle never creates a new occurrence by itself. Do not suppress merely similar text without a user-confirmed identity link.
+
 ## 6. Rotation and recovery
 
 Follow `SECURITY_AND_PAIRING.md`. A revoked/unknown epoch quarantines. A consumer inactive for 90 days must discard its incremental assumption and resnapshot. Retrying a terminal command is read-only reconciliation; it never creates a new intent.

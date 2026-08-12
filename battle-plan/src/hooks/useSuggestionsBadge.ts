@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { suggestionsSync } from '../services/suggestionsSync';
+import { effectiveSuggestionStatus, suggestionRegistry } from '../services/suggestionRegistry';
+import { suggestionRegistrySync } from '../services/suggestionRegistrySync';
 import { googleService } from '../services/googleService';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
@@ -11,6 +13,7 @@ import {
   isDriveScopeError,
 } from '../utils/driveSyncDiagnostics';
 import { getErrorMessage } from '../utils/errors';
+import { resolveSuggestionsSnapshot } from '../utils/suggestionReplies';
 
 interface UseSuggestionsBadgeArgs {
   googleAuth: GoogleAuthStatus;
@@ -30,14 +33,21 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
       return;
     }
 
+    let refreshInFlight = false;
     const refreshBadge = async () => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       try {
         await suggestionsSync.init();
         if (!suggestionsSync.initialized) {
           updateSyncHealth('suggestions', driveUnavailableHealth(suggestionsSync.status));
           return;
         }
-        const suggestionsResult = await suggestionsSync.fetchSuggestionsDetailed();
+        const [suggestionsResult, repliesResult, registryFetchResult] = await Promise.all([
+          suggestionsSync.fetchSuggestionsDetailed(),
+          suggestionsSync.fetchRepliesDetailed(),
+          suggestionRegistrySync.fetchAndMerge(),
+        ]);
         const authAfterFetch = googleService.getAuthStatus();
         if (isAuthUnavailable(authAfterFetch.state)) {
           return;
@@ -60,8 +70,48 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           }
           return;
         }
+        if (registryFetchResult.kind === 'error' || registryFetchResult.kind === 'store-unavailable') {
+          const message = registryFetchResult.kind === 'error'
+            ? registryFetchResult.message
+            : 'Registr rozhodnutí není na Google Drive dostupný.';
+          updateSyncHealth('suggestions', {
+            state: 'error',
+            detail: 'Synchronizace rozhodnutí selhala',
+            lastError: message,
+          });
+          addLog(message, 'error');
+          return;
+        }
         const sugs = suggestionsResult.suggestions;
-        const open = sugs.filter((s) => s.status === 'open').length;
+        const snapshot = resolveSuggestionsSnapshot(sugs, repliesResult);
+        if (snapshot.kind === 'preserve') {
+          updateSyncHealth('suggestions', {
+            state: 'error',
+            detail: 'Načtení odpovědí selhalo',
+            lastError: snapshot.message,
+          });
+          addLog(snapshot.message, 'error');
+          return;
+        }
+        const replies = Object.values(snapshot.repliesBySuggestion).flat();
+        await suggestionRegistry.ingestLegacy(sugs, replies);
+        const registryPublishResult = await suggestionRegistrySync.publishPending();
+        if (registryPublishResult.kind === 'error' || registryPublishResult.kind === 'store-unavailable') {
+          const message = registryPublishResult.kind === 'error'
+            ? registryPublishResult.message
+            : 'Registr rozhodnutí není na Google Drive dostupný.';
+          updateSyncHealth('suggestions', {
+            state: 'error',
+            detail: 'Uložení rozhodnutí selhalo',
+            lastError: message,
+          });
+          addLog(message, 'error');
+          return;
+        }
+        const resolutions = await suggestionRegistry.resolveMany(sugs);
+        const open = sugs.filter((suggestion, index) =>
+          effectiveSuggestionStatus(suggestion, resolutions[index]) === 'open'
+        ).length;
         setSuggestionsBadge(open);
         // Race guard: if markAuthUnavailable flipped the auth state to
         // OFFLINE_AUTH / SIGNED_OUT while we were inside the await chain
@@ -87,6 +137,8 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
         if (isDriveScopeError(lastErrorString)) {
           addLog(GOOGLE_DRIVE_RECONSENT_MESSAGE, 'error');
         }
+      } finally {
+        refreshInFlight = false;
       }
     };
 

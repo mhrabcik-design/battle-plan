@@ -76,3 +76,18 @@ The full lifecycle from browser microphone recording through AI extraction, prop
 Terminal actions in this lifecycle must clean up both visible proposal UI and source recorder state such as audio blobs, processing guards, timers, audio contexts, media recorder handlers, and media tracks.
 
 A shared voice entry point remains owned by the selected voice domain even while its page-local controller is not ready. During that interval it fails closed instead of falling back to a recorder from another domain.
+
+## Agent Suggestions
+
+### Suggestion Subject
+The durable topic or recurring series that several concrete suggestion occurrences may belong to across producer cycles.
+
+### Suggestion Occurrence
+One concrete actionable event within a Suggestion Subject, independent of how many times the producer delivers it as a proposal.
+
+A terminal human decision permanently resolves that exact occurrence. A new occurrence under the same subject remains actionable.
+
+### Suggestion Decision Registry
+The append-only, synchronized record of human decisions keyed by Suggestion Occurrence rather than by one proposal delivery.
+
+Exact terminal decisions suppress an occurrence across later cycles and devices. Comments remain nonterminal, deferrals expire, and approximate text similarity requires a human same-or-new decision.

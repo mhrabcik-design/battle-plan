@@ -15,7 +15,7 @@
       "contract_artifact": {
         "id": "battleplan-hermes-protocol",
         "version": "2.0.0",
-        "sha256": "sha256:fa0496524c56796ff8eec77f5ccd013b4b6d404836d673b1cb8dcc70ae96d7d7"
+        "sha256": "sha256:bc3929e40fb2c4bc26a4f32fd917232d279778edd117576ad3fba4d6d3a281f2"
       },
       "receiver_id": "battleplan.device-a",
       "status": "disabled",

@@ -91,7 +91,7 @@ test('v10 upgrade reconciles duplicate projects and preserves WorkLog snapshots'
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 16);
+        assert.equal(upgraded.verno, 17);
         assert.equal(await upgraded.projects.count(), 1);
         assert.deepEqual(
             (await upgraded.workLogs.orderBy('date').toArray()).map((workLog) => ({
@@ -140,7 +140,7 @@ test('v11 upgrade backfills stable public identities without replacing local key
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 16);
+        assert.equal(upgraded.verno, 17);
         const task = await upgraded.tasks.get(taskId);
         const project = await upgraded.projects.get(projectId);
         const logs = await upgraded.workLogs.orderBy('id').toArray();
@@ -231,7 +231,7 @@ test('direct v11 upgrade repairs duplicate public identities before creating uni
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 16);
+        assert.equal(upgraded.verno, 17);
         const projects = await upgraded.projects.orderBy('id').toArray();
         const tasks = await upgraded.tasks.orderBy('id').toArray();
         const workLogs = await upgraded.workLogs.orderBy('id').toArray();
@@ -355,7 +355,7 @@ test('direct v13 upgrade repairs identities omitted under the previous unique sc
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 16);
+        assert.equal(upgraded.verno, 17);
         assertPortableIdentityIndexesAreUnique(upgraded);
         const tasks = await upgraded.tasks.orderBy('id').toArray();
         const projects = await upgraded.projects.orderBy('id').toArray();
@@ -405,7 +405,7 @@ test('an aborted v14 identity repair rolls back and succeeds on retry', async ()
     const recovered = new BattlePlanDB(databaseName);
     await recovered.open();
     try {
-        assert.equal(recovered.verno, 16);
+        assert.equal(recovered.verno, 17);
         assert.match((await recovered.tasks.get(taskId))?.publicId ?? '', /^task_[0-9a-f-]{36}$/);
         assertPortableIdentityIndexesAreUnique(recovered);
     } finally {
@@ -441,7 +441,7 @@ test('v16 upgrade makes legacy command receipts without authenticated expiry fai
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 16);
+        assert.equal(upgraded.verno, 17);
         assert.equal((await upgraded.agentCommandReceipts.get(receiptId))?.commandExpiresAt, 0);
     } finally {
         await upgraded.delete();
@@ -505,12 +505,52 @@ test('legacy upgrade preserves intentionally identical rows with deterministic d
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 16);
+        assert.equal(upgraded.verno, 17);
         const workLogs = await upgraded.workLogs.toArray();
         assert.equal(workLogs.length, 2);
         assert.match(workLogs[0]?.syncId ?? '', /^legacy-[0-9a-f]{32}$/);
         assert.equal(workLogs[1]?.syncId, `${workLogs[0]?.syncId}-2`);
         assert.equal(workLogs.reduce((sum, workLog) => sum + workLog.hours, 0), 60);
+    } finally {
+        await upgraded.delete();
+    }
+});
+
+test('v17 adds the suggestion decision registry without changing existing task keys', async () => {
+    const databaseName = `BattlePlanDB-v16-suggestion-registry-${Date.now()}-${Math.random()}`;
+    const legacy = new Dexie(databaseName);
+    legacy.version(16).stores(LEGACY_V13_UNIQUE_STORES);
+    await legacy.open();
+    const existingTaskId = await legacy.table('tasks').add({
+        publicId: 'task_existing', title: 'Existing task', type: 'task', urgency: 2,
+        status: 'pending', createdAt: 10, updatedAt: 10,
+    });
+    legacy.close();
+
+    const upgraded = new BattlePlanDB(databaseName);
+    await upgraded.open();
+    try {
+        assert.equal(upgraded.verno, 17);
+        assert.equal((await upgraded.tasks.get(existingTaskId))?.publicId, 'task_existing');
+        assert.equal(upgraded.tasks.schema.idxByName.suggestionOccurrenceKey?.unique, true);
+        assert.ok(upgraded.tables.some((table) => table.name === 'suggestionSubjects'));
+        assert.ok(upgraded.tables.some((table) => table.name === 'suggestionOccurrences'));
+        assert.ok(upgraded.tables.some((table) => table.name === 'suggestionDecisions'));
+
+        const convertedTask = {
+            publicId: 'task_converted', suggestionSubjectId: 'subject-tax',
+            suggestionOccurrenceKey: 'occurrence-tax-2026-07', title: 'DPH 7/26',
+            type: 'task', urgency: 2, status: 'pending', createdAt: 20, updatedAt: 20,
+        } as const;
+        await upgraded.tasks.add(convertedTask);
+        await assert.rejects(upgraded.tasks.add({
+            ...convertedTask,
+            publicId: 'task_duplicate-conversion',
+        }));
+        await upgraded.tasks.bulkAdd([
+            { publicId: 'task_regular-a', title: 'Regular A', type: 'task', urgency: 2, status: 'pending', createdAt: 30, updatedAt: 30 },
+            { publicId: 'task_regular-b', title: 'Regular B', type: 'task', urgency: 2, status: 'pending', createdAt: 31, updatedAt: 31 },
+        ]);
     } finally {
         await upgraded.delete();
     }
