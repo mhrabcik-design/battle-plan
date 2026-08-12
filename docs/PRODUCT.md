@@ -9,7 +9,7 @@ Bitevní Plán je osobní desktop-first PWA pro rychlé hlasové zachycení plá
 | Oblast | Úloha |
 | --- | --- |
 | Plán | Dnešní strategický přehled |
-| Týden | Časová osa 7:00–19:00 |
+| Týden | Časová osa 7:00–19:00, přímé přesouvání a historie splněných úkolů |
 | Úkoly | Deadline, urgentnost, podúkoly a postup |
 | Schůzky | Datum, čas, délka a volitelný Google Calendar event |
 | Myšlenky | Rozvinutí a strukturování nápadů |
@@ -26,13 +26,15 @@ Bitevní Plán je osobní desktop-first PWA pro rychlé hlasové zachycení plá
 - Batch WorkLog hodiny jsou člověkohodiny: počet lidí × hodiny na osobu.
 - Hlasový návrh WorkLogu se před uložením potvrzuje; nejisté datum, projekt nebo lidé nesmí projít tiše.
 - Novější synchronizační změna vyhrává podle `updatedAt`; smazané tasky zůstávají jako soft-delete tombstones.
+- Splnění je stav stejného úkolu, nikoli archivace: splněný úkol zůstává v původním naplánovaném týdnu a lze jej znovu otevřít.
+- Přesun v týdenním pohledu mění datum a u časových položek slot po 15 minutách. Úkol ukládá konec bloku jako `startTime`, schůzka jeho začátek.
 - Citlivé tokeny, Gemini klíč a uživatelská data zůstávají v lokálním úložišti / uživatelově Google účtu, ne v repozitáři.
 
 ## Integrace
 
 - Gemini REST API zpracovává hlavní hlasový vstup a samostatný WorkLog batch prompt.
 - Google Drive drží task backup, WorkLogs a integrační soubory ve sdílené složce BattlePlan.
-- Google Tasks se slučují s lokálními úkoly v relevantních pohledech.
+- Google Tasks se slučují s lokálními úkoly v relevantních pohledech včetně Týdne; zůstávají celodenní a přesun mění jejich datum splatnosti.
 - Google Calendar je volitelný výstup schůzek.
 - Agent bridge zpracovává explicitní příkazy přes inbox a zaznamenává jejich stav do Dexie.
 

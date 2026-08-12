@@ -30,6 +30,7 @@ Tento soubor obsahuje jen otevřenou práci. Po dokončení se položka odstran�
 - [ ] Přidat read scope a načítání událostí Google Calendar.
 - [ ] Detekovat kolize před uložením schůzky.
 - [ ] Nabídnout volné sloty bez automatického přepsání uživatelova záměru.
+- [ ] Navrhnout trvalý outbox a retry pro změny Google Tasks a Calendar, které selžou po lokálním uložení.
 
 ## 5. Produktivita
 

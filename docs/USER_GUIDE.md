@@ -7,7 +7,7 @@ V Nastavení vložte Gemini API klíč a podle potřeby připojte Google účet.
 ## Hlavní části aplikace
 
 - **Plán**: dnešní strategický přehled.
-- **Týden**: časová osa 7:00–19:00.
+- **Týden**: časová osa 7:00–19:00, ve které lze úkoly a schůzky přesouvat.
 - **Úkoly**: lokální a Google úkoly v jednom pracovním pohledu.
 - **Schůzky**: plánované meetingy a volitelný zápis do Google Calendar.
 - **Myšlenky**: nápady rozvinuté AI.
@@ -27,6 +27,12 @@ Příklady:
 
 AI návrh lze před dalším použitím upravit ve Focus Mode. Při hlasové aktualizaci se metadata mění podle nového pokynu, zatímco bohatý existující popis se má zachovat.
 
+## Týdenní plán a splněné úkoly
+
+Položku přesunete stisknutím a tažením na nový den nebo čas. Časové položky se zarovnávají po 15 minutách; celodenní položky se přesouvají mezi horními denními pruhy. Google Tasks jsou vždy celodenní. Puštění mimo platnou oblast přesun zruší a obyčejné kliknutí dál otevře detail.
+
+Úkol lze označit jako splněný z karty i z jeho detailu pomocí tlačítka **Označit splněno**. Splněný úkol zůstane ve svém naplánovaném týdnu se zeleným, přeškrtnutým vzhledem a štítkem „Splněno“. V detailu jej lze tlačítkem **Znovu otevřít** vrátit mezi rozpracované. Datum a čas lze vždy změnit také formulářem v detailu, což je alternativa k tažení.
+
 ## Práce a člověkohodiny
 
 V záložce Práce lze přidat činnost ručně nebo hlasem. Hlasový vstup nejdřív vytvoří návrh a teprve po potvrzení jej uloží.
@@ -41,7 +47,7 @@ V záložce Práce lze přidat činnost ručně nebo hlasem. Hlasový vstup nejd
 ## Synchronizace
 
 - **Drive** zálohuje plánovací data a samostatně WorkLogs / projekty.
-- **Google Tasks** se zobrazují s lokálními úkoly v podporovaných pohledech.
+- **Google Tasks** se zobrazují s lokálními úkoly v podporovaných pohledech včetně Týdne; přesun nebo úprava data aktualizuje jejich datum splatnosti.
 - **Google Calendar** přijímá schůzky, pokud má aplikace potřebné oprávnění.
 - Pokud přihlášení nebo scope chybí, aplikace má zachovat lokální data a ukázat stav v Diagnostice.
 

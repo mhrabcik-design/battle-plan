@@ -12,7 +12,7 @@ interface TaskCardProps {
     getDeadlineColor: (date?: string, time?: string) => string;
     formatTimeLeft: (date?: string, time?: string) => string;
     toggleSubtask: (task: UnifiedTask, subtaskId: string) => void;
-    handleToggleTask: (task: UnifiedTask) => Promise<void>;
+    handleToggleTask: (task: UnifiedTask) => Promise<UnifiedTask | null>;
     setEditingTask: (task: UnifiedTask) => void;
     stopRecording: () => void;
     setActiveVoiceUpdateId: (id: number) => void;

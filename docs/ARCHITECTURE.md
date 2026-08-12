@@ -12,14 +12,14 @@ Bitevní Plán je klientská React PWA bez vlastního backendu. Stav uživatelsk
 | UI komponenty | `components/` | Editace, karty, kalendář, nastavení, WorkLogs |
 | Orchestrace | `hooks/` | Hlas, Drive sync, diagnostika, příkazy a polling |
 | Doménové služby | `services/` | Gemini, Google API, Drive JSON store, sync a agent bridge |
-| Data | `db.ts`, `types.ts` | Dexie schema v9 a sdílené datové kontrakty |
+| Data | `db.ts`, `types.ts` | Dexie schema v16 a sdílené datové kontrakty |
 | Čistá logika | `utils/` | Kalendář, normalizace, merge identity a diagnostika |
 
 `App.tsx` zůstává kompoziční shell. Sekundární obrazovky Návrhy, Práce a Diagnostika se načítají lazy; `Suspense` řeší stav načítání a `PageErrorBoundary` izoluje chybu chunku od zbytku aplikace. Pokud lazy obrazovka vlastní sdílený zdroj, například WorkLogs mikrofon, vlastnictví určuje vybraný pohled a chybějící controller znamená „zatím nepřipraveno“, ne přechod do jiné domény.
 
 ## Datový model
 
-Dexie databáze `BattlePlanDB` má v aktivním schématu v9 tabulky:
+Dexie databáze `BattlePlanDB` má v aktivním schématu v16 tabulky:
 
 - `tasks`: task / meeting / thought, soft delete, Google identity a audit agentních zápisů;
 - `settings`: uživatelská konfigurace;
@@ -46,6 +46,12 @@ Starší verze schématu zůstávají v `db.ts` pouze kvůli migraci existujíc�
 `DriveJsonStore` poskytuje společný mechanismus pro práci s JSON soubory; doménové služby `taskDriveBackup`, `workLogsSync`, `suggestionsSync` a `agentBridge` vlastní tvar payloadu, merge a chybový význam. Sdílené diagnostické helpery převádějí technické stavy Drive až na hranici hooku/UI a zachovávají rozdíl mezi chybějícím volitelným souborem, nedostupným úložištěm a skutečnou chybou.
 
 Návrhy načítají soubor odpovědí jednou za refresh a seskupují jej lokálně. `suggestionsSync` vrací detailní výsledek čtení; při přechodné chybě stránka zachová poslední úplný snapshot, aby přijetí návrhu neztratilo dříve načtené poznámky.
+
+### Týdenní plánování
+
+`WeeklyCalendar` převádí pointer gesto jen na sémantický cíl `{ date, lane, blockTopMinutes }`. Čisté helpery v `calendarUtils` z něj vytvoří plánovací patch se správným významem času pro úkol nebo schůzku. `useTaskCommands` je mutační hranice: nejprve uloží lokální Dexie řádek a potom případně aktualizuje Google Task nebo existující Calendar event. Síťový zápis nastává jednou po dokončení gesta, nikoli během pohybu.
+
+Splněné úkoly zůstávají ve stejné tabulce a týdenní live query je vrací podle jejich plánovaného `deadline`. Cleanup používá index `updatedAt` a fyzicky odstraňuje jen staré soft-delete tombstones; stav `completed` není retenční důvod ke smazání. Selhání volitelné Google synchronizace nezahodí lokální přesun a je uživateli oznámeno; trvalý retry/outbox zatím není součástí systému.
 
 ### Diagnostika
 

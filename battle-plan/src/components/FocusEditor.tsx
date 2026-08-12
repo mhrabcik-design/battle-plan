@@ -18,6 +18,7 @@ interface FocusEditorProps {
     handleDeleteTask: (task: UnifiedTask) => void;
     handleSyncToGoogle: (task: UnifiedTask) => void;
     handleSaveEdit: () => void;
+    handleToggleTask: (task: UnifiedTask) => Promise<UnifiedTask | null>;
     googleAuth: GoogleAuthStatus;
     isOverCapacity: (task: UnifiedTask) => boolean;
     getDeadlineColor: (date?: string, time?: string) => string;
@@ -36,11 +37,25 @@ export function FocusEditor({
     handleDeleteTask,
     handleSyncToGoogle,
     handleSaveEdit,
+    handleToggleTask,
     googleAuth,
     isOverCapacity,
     getDeadlineColor,
     formatTimeLeft
 }: FocusEditorProps) {
+    const [isTogglingTask, setIsTogglingTask] = useState(false);
+
+    const toggleWholeTask = async () => {
+        if (isTogglingTask) return;
+        setIsTogglingTask(true);
+        try {
+            const updatedTask = await handleToggleTask(editingTask);
+            if (updatedTask) setEditingTask(updatedTask);
+        } finally {
+            setIsTogglingTask(false);
+        }
+    };
+
     return (
         <div className="fixed inset-0 md:left-64 z-[100] flex items-stretch justify-center bg-slate-950/80 backdrop-blur-md overflow-hidden">
             <motion.div
@@ -300,6 +315,19 @@ export function FocusEditor({
                     </button>
 
                     <div className="flex items-center gap-4">
+                        {editingTask.type === 'task' && (
+                            <button
+                                type="button"
+                                onClick={toggleWholeTask}
+                                disabled={isTogglingTask}
+                                aria-pressed={editingTask.status === 'completed'}
+                                aria-busy={isTogglingTask}
+                                className={`px-4 md:px-6 py-3.5 rounded-xl border transition-all text-xs md:text-sm font-black uppercase flex items-center gap-2 ${editingTask.status === 'completed' ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-200 hover:border-emerald-500/60'} disabled:opacity-50 disabled:cursor-wait`}
+                            >
+                                <CheckCircle2 className="w-4 h-4" />
+                                {isTogglingTask ? 'Ukládám…' : editingTask.status === 'completed' ? 'Znovu otevřít' : 'Označit splněno'}
+                            </button>
+                        )}
                         {editingTask.type === 'meeting' && !editingTask.isGoogleTask && hasUsableAuth(googleAuth) && (
                             <button
                                 onClick={() => handleSyncToGoogle(editingTask)}
