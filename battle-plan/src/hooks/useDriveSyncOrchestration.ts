@@ -166,7 +166,11 @@ export function useDriveSyncOrchestration({
               lastError: workLogsResult.message,
             });
           } else if (wl.timestamp > 0) {
-            const mergeResult: MergeResult = await mergeCloudToLocal(wl.workLogs, wl.projects);
+            const mergeResult: MergeResult = await mergeCloudToLocal(
+              wl.workLogs,
+              wl.projects,
+              wl.workLogDeletionTombstones,
+            );
             if (mergeResult.workLogsAdded > 0 || mergeResult.workLogsUpdated > 0 ||
                 mergeResult.projectsAdded > 0 || mergeResult.projectsUpdated > 0) {
               addLog(

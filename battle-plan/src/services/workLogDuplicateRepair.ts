@@ -1,4 +1,4 @@
-import { db, type WorkLog } from '../db.ts';
+import { db, type WorkLog, type WorkLogDeletionTombstone } from '../db.ts';
 import {
     findExactWorkLogDuplicateGroups,
     type ExactWorkLogDuplicateGroup,
@@ -22,6 +22,20 @@ export class WorkLogDuplicateRepairStaleError extends Error {
     }
 }
 
+class WorkLogDuplicateRepairMissingSyncIdError extends Error {
+    constructor() {
+        super('worklog-duplicate-missing-sync-id');
+        this.name = 'WorkLogDuplicateRepairMissingSyncIdError';
+    }
+}
+
+class WorkLogDuplicateRepairTombstoneConflictError extends Error {
+    constructor() {
+        super('worklog-duplicate-tombstone-conflict');
+        this.name = 'WorkLogDuplicateRepairTombstoneConflictError';
+    }
+}
+
 const sortedIds = (rows: Array<{ id: number }>): number[] => (
     rows.map((row) => row.id).sort((left, right) => left - right)
 );
@@ -37,7 +51,7 @@ const sameIds = (left: readonly number[], right: readonly number[]): boolean => 
 export async function confirmWorkLogDuplicateRepair(
     input: ConfirmWorkLogDuplicateRepairInput,
 ): Promise<WorkLogDuplicateRepairResult> {
-    return db.transaction('rw', db.workLogs, async () => {
+    return db.transaction('rw', [db.workLogs, db.workLogDeletionTombstones], async () => {
         const groups = findExactWorkLogDuplicateGroups(await db.workLogs.toArray());
         const group: ExactWorkLogDuplicateGroup | undefined = groups.find(
             (candidate) => candidate.fingerprint === input.fingerprint,
@@ -48,11 +62,39 @@ export async function confirmWorkLogDuplicateRepair(
         }
 
         const removedRows = group.rows.slice(1);
+        const survivorSyncId = group.survivor.syncId;
+        if (!survivorSyncId || removedRows.some((row) => !row.syncId)) {
+            throw new WorkLogDuplicateRepairMissingSyncIdError();
+        }
+        const deletedAt = Date.now();
+        const tombstones: WorkLogDeletionTombstone[] = removedRows.map((row) => ({
+            syncId: row.syncId!,
+            survivorSyncId,
+            fingerprint: group.fingerprint,
+            reason: 'confirmed-duplicate',
+            deletedAt,
+        }));
+        const existingTombstones = await db.workLogDeletionTombstones.bulkGet(
+            tombstones.map(({ syncId }) => syncId),
+        );
+        const durableTombstones = tombstones.map((tombstone, index) => {
+            const existing = existingTombstones[index];
+            if (!existing) return tombstone;
+            if (
+                existing.survivorSyncId !== tombstone.survivorSyncId
+                || existing.fingerprint !== tombstone.fingerprint
+                || existing.reason !== tombstone.reason
+            ) {
+                throw new WorkLogDuplicateRepairTombstoneConflictError();
+            }
+            return existing;
+        });
+        await db.workLogDeletionTombstones.bulkPut(durableTombstones);
         await db.workLogs.bulkDelete(group.duplicateIds);
         return {
             survivor: group.survivor,
             removed: group.duplicateIds.length,
-            removedSyncIds: removedRows.flatMap((row) => row.syncId ? [row.syncId] : []),
+            removedSyncIds: tombstones.map((tombstone) => tombstone.syncId),
         };
     });
 }

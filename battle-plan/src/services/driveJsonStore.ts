@@ -22,13 +22,20 @@ interface DriveFileMeta {
 interface DriveUploadResponse {
     body?: string;
     result?: unknown;
+    headers?: Record<string, string>;
     status?: number;
     statusText?: string;
 }
 
 interface GapiDriveClient {
     files: {
-        list: (args: { spaces: string; q: string; fields: string; pageSize: number }) => Promise<{ result: { files?: DriveFileMeta[] } }>;
+        list: (args: {
+            spaces: string;
+            q: string;
+            fields: string;
+            pageSize: number;
+            pageToken?: string;
+        }) => Promise<{ result: { files?: DriveFileMeta[]; nextPageToken?: string } }>;
     };
 }
 
@@ -57,6 +64,7 @@ export interface DriveJsonRead<T> {
 
 export interface DriveJsonWrite {
     fileId: string | null;
+    etag?: string;
 }
 
 export type DriveStoreStatusCode =
@@ -103,6 +111,13 @@ export function getUploadedDriveFileId(response: DriveUploadResponse): string | 
     } catch {
         return null;
     }
+}
+
+function getDriveResponseEtag(response: DriveUploadResponse): string | undefined {
+    const headers = response.headers;
+    if (!headers) return undefined;
+    const key = Object.keys(headers).find((header) => header.toLowerCase() === 'etag');
+    return key ? headers[key] : undefined;
 }
 
 function escapeDriveQueryValue(value: string): string {
@@ -437,13 +452,25 @@ export class DriveJsonStore {
         if (!this.isInitialized || !this.folderId) return [];
         const client = this.getClient();
         if (!client?.drive) return [];
-        const listR = await client.drive.files.list({
-            q: `name='${escapeDriveQueryValue(name)}' and '${escapeDriveQueryValue(this.folderId)}' in parents and trashed=false`,
-            spaces: 'drive',
-            fields: 'files(id, name)',
-            pageSize: 1000,
-        });
-        return (listR.result.files ?? [])
+        const files: DriveFileMeta[] = [];
+        const seenPageTokens = new Set<string>();
+        let pageToken: string | undefined;
+        do {
+            const listR = await client.drive.files.list({
+                q: `name='${escapeDriveQueryValue(name)}' and '${escapeDriveQueryValue(this.folderId)}' in parents and trashed=false`,
+                spaces: 'drive',
+                fields: 'files(id, name), nextPageToken',
+                pageSize: 1000,
+                ...(pageToken ? { pageToken } : {}),
+            });
+            files.push(...(listR.result.files ?? []));
+            pageToken = listR.result.nextPageToken;
+            if (pageToken && seenPageTokens.has(pageToken)) {
+                throw new Error('Drive file listing repeated a page token');
+            }
+            if (pageToken) seenPageTokens.add(pageToken);
+        } while (pageToken);
+        return files
             .map((file) => file.id)
             .filter(Boolean)
             .sort();
@@ -541,7 +568,11 @@ export class DriveJsonStore {
             body,
         });
         ensureDriveRequestOk(response, 'Drive JSON upload');
-        return { fileId: targetFileId ?? getUploadedDriveFileId(response) };
+        const etag = getDriveResponseEtag(response);
+        return {
+            fileId: targetFileId ?? getUploadedDriveFileId(response),
+            ...(etag ? { etag } : {}),
+        };
     }
 
     async uploadBlob(name: string, blob: Blob, mimeType: string): Promise<DriveJsonWrite | null> {

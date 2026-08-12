@@ -6,6 +6,8 @@ import Dexie from 'dexie';
 
 import { BattlePlanDB } from './db.ts';
 
+const CURRENT_DB_VERSION = 18;
+
 const V9_STORES = {
     tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
     settings: 'id',
@@ -40,6 +42,14 @@ const LEGACY_V13_UNIQUE_STORES = {
     tasks: '++id, &publicId, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
     workLogs: '++id, &publicId, syncId, date, projectId, hours, createdAt',
     projects: '++id, &publicId, name, isActive, createdAt',
+};
+
+const LEGACY_V17_STORES = {
+    ...LEGACY_V13_UNIQUE_STORES,
+    tasks: '++id, &publicId, &suggestionOccurrenceKey, suggestionSubjectId, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',
+    suggestionSubjects: 'id, canonicalFingerprint, updatedAt',
+    suggestionOccurrences: 'id, subjectId, *proposalIds, updatedAt',
+    suggestionDecisions: 'id, subjectId, occurrenceKey, kind, createdAt, publishedAt',
 };
 
 const assertPortableIdentityIndexesAreUnique = (db: BattlePlanDB): void => {
@@ -91,7 +101,7 @@ test('v10 upgrade reconciles duplicate projects and preserves WorkLog snapshots'
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 17);
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
         assert.equal(await upgraded.projects.count(), 1);
         assert.deepEqual(
             (await upgraded.workLogs.orderBy('date').toArray()).map((workLog) => ({
@@ -140,7 +150,7 @@ test('v11 upgrade backfills stable public identities without replacing local key
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 17);
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
         const task = await upgraded.tasks.get(taskId);
         const project = await upgraded.projects.get(projectId);
         const logs = await upgraded.workLogs.orderBy('id').toArray();
@@ -231,7 +241,7 @@ test('direct v11 upgrade repairs duplicate public identities before creating uni
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 17);
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
         const projects = await upgraded.projects.orderBy('id').toArray();
         const tasks = await upgraded.tasks.orderBy('id').toArray();
         const workLogs = await upgraded.workLogs.orderBy('id').toArray();
@@ -355,7 +365,7 @@ test('direct v13 upgrade repairs identities omitted under the previous unique sc
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 17);
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
         assertPortableIdentityIndexesAreUnique(upgraded);
         const tasks = await upgraded.tasks.orderBy('id').toArray();
         const projects = await upgraded.projects.orderBy('id').toArray();
@@ -405,7 +415,7 @@ test('an aborted v14 identity repair rolls back and succeeds on retry', async ()
     const recovered = new BattlePlanDB(databaseName);
     await recovered.open();
     try {
-        assert.equal(recovered.verno, 17);
+        assert.equal(recovered.verno, CURRENT_DB_VERSION);
         assert.match((await recovered.tasks.get(taskId))?.publicId ?? '', /^task_[0-9a-f-]{36}$/);
         assertPortableIdentityIndexesAreUnique(recovered);
     } finally {
@@ -441,7 +451,7 @@ test('v16 upgrade makes legacy command receipts without authenticated expiry fai
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 17);
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
         assert.equal((await upgraded.agentCommandReceipts.get(receiptId))?.commandExpiresAt, 0);
     } finally {
         await upgraded.delete();
@@ -505,7 +515,7 @@ test('legacy upgrade preserves intentionally identical rows with deterministic d
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 17);
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
         const workLogs = await upgraded.workLogs.toArray();
         assert.equal(workLogs.length, 2);
         assert.match(workLogs[0]?.syncId ?? '', /^legacy-[0-9a-f]{32}$/);
@@ -530,12 +540,13 @@ test('v17 adds the suggestion decision registry without changing existing task k
     const upgraded = new BattlePlanDB(databaseName);
     await upgraded.open();
     try {
-        assert.equal(upgraded.verno, 17);
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
         assert.equal((await upgraded.tasks.get(existingTaskId))?.publicId, 'task_existing');
         assert.equal(upgraded.tasks.schema.idxByName.suggestionOccurrenceKey?.unique, true);
         assert.ok(upgraded.tables.some((table) => table.name === 'suggestionSubjects'));
         assert.ok(upgraded.tables.some((table) => table.name === 'suggestionOccurrences'));
         assert.ok(upgraded.tables.some((table) => table.name === 'suggestionDecisions'));
+        assert.ok(upgraded.tables.some((table) => table.name === 'workLogDeletionTombstones'));
 
         const convertedTask = {
             publicId: 'task_converted', suggestionSubjectId: 'subject-tax',
@@ -551,6 +562,35 @@ test('v17 adds the suggestion decision registry without changing existing task k
             { publicId: 'task_regular-a', title: 'Regular A', type: 'task', urgency: 2, status: 'pending', createdAt: 30, updatedAt: 30 },
             { publicId: 'task_regular-b', title: 'Regular B', type: 'task', urgency: 2, status: 'pending', createdAt: 31, updatedAt: 31 },
         ]);
+    } finally {
+        await upgraded.delete();
+    }
+});
+
+test('v18 upgrades a persisted v17 database without changing existing WorkLogs', async () => {
+    const databaseName = `BattlePlanDB-v17-worklog-tombstones-${Date.now()}-${Math.random()}`;
+    const legacy = new Dexie(databaseName);
+    legacy.version(17).stores(LEGACY_V17_STORES);
+    await legacy.open();
+    const projectId = await legacy.table('projects').add({
+        publicId: 'project_existing', name: 'Komerční Banka', color: 'amber', isActive: true,
+        createdAt: 10, updatedAt: 10,
+    });
+    const existingWorkLog = {
+        publicId: 'worklog_existing', syncId: 'sync-existing', date: '2026-06-22',
+        projectId, projectName: 'Komerční Banka', people: 'Martin', hours: 8,
+        source: 'manual', createdAt: 20, updatedAt: 20,
+    };
+    const workLogId = await legacy.table('workLogs').add(existingWorkLog);
+    legacy.close();
+
+    const upgraded = new BattlePlanDB(databaseName);
+    await upgraded.open();
+    try {
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
+        assert.deepEqual(await upgraded.workLogs.get(workLogId), { ...existingWorkLog, id: workLogId });
+        assert.equal(await upgraded.workLogDeletionTombstones.count(), 0);
+        assert.ok(upgraded.tables.some((table) => table.name === 'workLogDeletionTombstones'));
     } finally {
         await upgraded.delete();
     }

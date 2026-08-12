@@ -387,14 +387,19 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
 
   const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
-  const workLogsDataHash = useLiveQuery(async () => {
-    const [allWorkLogs, allProjects] = await Promise.all([
+  const workLogsDataRevision = useLiveQuery(async () => {
+    const [allWorkLogs, allProjects, allWorkLogTombstones] = await Promise.all([
       db.workLogs.toArray(),
       db.projects.toArray(),
+      db.workLogDeletionTombstones.toArray(),
     ]);
-    return allWorkLogs.length * 1_000_000 + allWorkLogs.reduce((sum, workLog) => sum + (workLog.updatedAt || 0), 0)
-      + allProjects.length * 10_000 + allProjects.reduce((sum, project) => sum + (project.updatedAt || 0), 0);
-  }, []) ?? 0;
+    if (allWorkLogs.length === 0 && allProjects.length === 0 && allWorkLogTombstones.length === 0) return '';
+    return JSON.stringify({
+      workLogs: allWorkLogs.map((row) => [row.syncId ?? row.id, row.updatedAt]).sort(),
+      projects: allProjects.map((row) => [row.publicId ?? row.id, row.updatedAt]).sort(),
+      tombstones: allWorkLogTombstones.map((row) => [row.syncId, row.deletedAt]).sort(),
+    });
+  }, []) ?? '';
 
   // Auto-backup on change
   useEffect(() => {
@@ -433,7 +438,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   }, [tasksHash, hasUsableAuth, addLog, updateSyncHealth]);
 
   useEffect(() => {
-    if (!hasUsableAuth || workLogsDataHash === 0) return;
+    if (!hasUsableAuth || !workLogsDataRevision) return;
 
     let disposed = false;
     let pending = true;
@@ -506,7 +511,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
       window.removeEventListener('online', retryPendingBackup);
       window.removeEventListener('focus', retryPendingBackup);
     };
-  }, [workLogsDataHash, hasUsableAuth, addLog, updateSyncHealth]);
+  }, [workLogsDataRevision, hasUsableAuth, addLog, updateSyncHealth]);
 
   useEffect(() => {
     db.settings.get('gemini_api_key').then(setting => {

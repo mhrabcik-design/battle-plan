@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { createServer } from 'vite';
-import type { BattlePlanDB, Project } from '../db.ts';
+import type { BattlePlanDB, Project, WorkLogDeletionTombstone } from '../db.ts';
 import type {
     mergeCloudToLocal as MergeCloudToLocal,
     mergeLocalToCloud as MergeLocalToCloud,
@@ -18,6 +18,7 @@ const storage = new Map<string, string>();
     get length() { return storage.size; },
 };
 
+const { DriveRequestError } = await import('./driveJsonStore.ts');
 const { buildWorkLogsFileMetadata } = await import('./workLogsDriveMetadata.ts');
 // workLogsSync follows the app's extensionless bundler imports, so load this
 // integration seam through Vite rather than Node's stricter ESM resolver.
@@ -29,9 +30,14 @@ const vite = await createServer({
     appType: 'custom',
 });
 const { db } = await vite.ssrLoadModule('/src/db.ts') as { db: BattlePlanDB };
-const { mergeCloudToLocal, mergeLocalToCloud, workLogsSync } = await vite.ssrLoadModule('/src/services/workLogsSync.ts') as {
+const { mergeCloudToLocal, mergeLocalToCloud, WorkLogsSync, workLogsSync } = await vite.ssrLoadModule('/src/services/workLogsSync.ts') as {
     mergeCloudToLocal: typeof MergeCloudToLocal;
     mergeLocalToCloud: typeof MergeLocalToCloud;
+    WorkLogsSync: new (store: unknown) => {
+        init: () => Promise<void>;
+        loadAllDetailed: () => Promise<unknown>;
+        saveAll: (payload: unknown) => Promise<number | null>;
+    };
     workLogsSync: unknown;
 };
 after(async () => vite.close());
@@ -39,6 +45,7 @@ after(async () => vite.close());
 async function resetDb(): Promise<void> {
     await db.workLogs.clear();
     await db.projects.clear();
+    await db.workLogDeletionTombstones.clear();
 }
 
 function withoutProjectPublicId(project: Project | undefined): Omit<Project, 'publicId'> | undefined {
@@ -502,7 +509,44 @@ test('mergeLocalToCloud aborts without writing when the Drive pull fails', async
     }
 });
 
-test('confirmed duplicate repair excludes removed sync identities but still pulls unrelated cloud work', async () => {
+test('mergeLocalToCloud retries the full pull after a conditional save conflict', async () => {
+    await resetDb();
+    const sync = workLogsSync as {
+        isInitialized: boolean;
+        loadAllDetailed: () => Promise<unknown>;
+        saveAll: (payload: unknown) => Promise<number | null>;
+    };
+    const originalInitialized = sync.isInitialized;
+    const originalLoad = sync.loadAllDetailed;
+    const originalSave = sync.saveAll;
+    let loadCalls = 0;
+    let saveCalls = 0;
+    try {
+        sync.isInitialized = true;
+        sync.loadAllDetailed = async () => {
+            loadCalls += 1;
+            return {
+                kind: 'missing-file',
+                data: { workLogs: [], projects: [], workLogDeletionTombstones: [], timestamp: 0 },
+            };
+        };
+        sync.saveAll = async () => {
+            saveCalls += 1;
+            if (saveCalls === 1) throw new DriveRequestError(412, 'stale Drive revision');
+            return 21;
+        };
+
+        assert.equal(await mergeLocalToCloud(), true);
+        assert.equal(loadCalls, 2);
+        assert.equal(saveCalls, 2);
+    } finally {
+        sync.isInitialized = originalInitialized;
+        sync.loadAllDetailed = originalLoad;
+        sync.saveAll = originalSave;
+    }
+});
+
+test('durable tombstones stop a stale second device from resurrecting confirmed copies', async () => {
     await resetDb();
     const projectId = await db.projects.add({
         name: 'Komerční Banka', color: 'amber', isActive: true, createdAt: 1, updatedAt: 1,
@@ -511,12 +555,27 @@ test('confirmed duplicate repair excludes removed sync identities but still pull
         date: '2026-06-22', projectId, projectName: 'Komerční Banka', people: 'Martin',
         hours: 8, source: 'manual' as const, createdAt: 10, updatedAt: 10,
     };
-    await db.workLogs.add({ ...sharedFields, syncId: 'keep-me' });
+    await db.workLogs.bulkAdd([
+        { ...sharedFields, syncId: 'keep-me' },
+        { ...sharedFields, syncId: 'remove-me' },
+    ]);
+    const tombstone: WorkLogDeletionTombstone = {
+        syncId: 'remove-me',
+        survivorSyncId: 'keep-me',
+        fingerprint: 'confirmed-copy',
+        reason: 'confirmed-duplicate',
+        deletedAt: 20,
+    };
+    await db.workLogDeletionTombstones.put(tombstone);
+    await db.workLogs.where('syncId').equals('remove-me').delete();
 
     const sync = workLogsSync as {
         isInitialized: boolean;
         loadAllDetailed: () => Promise<unknown>;
-        saveAll: (payload: { workLogs: Array<{ syncId?: string }> }) => Promise<number | null>;
+        saveAll: (payload: {
+            workLogs: Array<{ syncId?: string }>;
+            workLogDeletionTombstones: WorkLogDeletionTombstone[];
+        }) => Promise<number | null>;
     };
     const originalInitialized = sync.isInitialized;
     const originalLoad = sync.loadAllDetailed;
@@ -533,19 +592,218 @@ test('confirmed duplicate repair excludes removed sync identities but still pull
                     { ...sharedFields, id: 101, syncId: 'remove-me' },
                     { ...sharedFields, id: 102, syncId: 'unrelated', date: '2026-06-23' },
                 ],
+                workLogDeletionTombstones: [],
             },
         });
         sync.saveAll = async (payload) => {
             savedSyncIds = payload.workLogs.map((workLog) => workLog.syncId).sort();
+            assert.deepEqual(payload.workLogDeletionTombstones, [tombstone]);
             return 21;
         };
 
-        assert.equal(await mergeLocalToCloud({ excludedWorkLogSyncIds: ['remove-me'] }), true);
+        assert.equal(await mergeLocalToCloud(), true);
         assert.deepEqual(savedSyncIds, ['keep-me', 'unrelated']);
         assert.deepEqual(
             (await db.workLogs.toArray()).map((workLog) => workLog.syncId).sort(),
             ['keep-me', 'unrelated'],
         );
+    } finally {
+        sync.isInitialized = originalInitialized;
+        sync.loadAllDetailed = originalLoad;
+        sync.saveAll = originalSave;
+    }
+});
+
+test('duplicate WorkLogs Drive files merge and remain available for later stale-client writes', async () => {
+    const tombstone: WorkLogDeletionTombstone = {
+        syncId: 'removed-copy', survivorSyncId: 'survivor', fingerprint: 'copy',
+        reason: 'confirmed-duplicate', deletedAt: 20,
+    };
+    const project: Project = {
+        id: 1, name: 'Plaza', color: 'amber', isActive: true, createdAt: 1, updatedAt: 1,
+    };
+    const workLog = {
+        id: 1, syncId: 'survivor', date: '2026-08-01', projectId: 1, projectName: 'Plaza',
+        people: 'Martin', hours: 8, source: 'manual' as const, createdAt: 10, updatedAt: 10,
+    };
+    const files = [
+        {
+            fileId: 'file-a', etag: '"etag-a"',
+            data: { version: 2, last_updated: 20, workLogs: [workLog], projects: [project], workLogDeletionTombstones: [] },
+        },
+        {
+            fileId: 'file-b', etag: '"etag-b"',
+            data: { version: 1, last_updated: 21, workLogs: [], projects: [] },
+        },
+    ];
+    const tombstoneFiles = [{
+        fileId: 'tombstone-a', etag: '"tombstone-etag-a"',
+        data: { version: 1, last_updated: 22, tombstones: [tombstone] },
+    }];
+    const writes: Array<{ name: string; fileId?: string | null; options?: unknown; payload: unknown }> = [];
+    const store = {
+        lastStatus: { code: 'ready' as const, message: 'ready' },
+        init: async () => true,
+        readJsonFilesWithStatus: async (name: string) => ({
+            kind: 'loaded' as const,
+            files: structuredClone(name === 'work_logs_data.json' ? files : tombstoneFiles),
+        }),
+        writeJsonFile: async (name: string, payload: unknown, fileId?: string | null, options?: unknown) => {
+            writes.push({ name, payload: structuredClone(payload), fileId, options });
+            return {
+                fileId: fileId ?? 'file-a',
+                etag: name === 'work_logs_data.json' ? '"etag-a-2"' : '"tombstone-etag-a-2"',
+            };
+        },
+    };
+    const sync = new WorkLogsSync(store);
+    await sync.init();
+    const loaded = await sync.loadAllDetailed() as { kind: string; data: { workLogs: unknown[]; workLogDeletionTombstones: unknown[] } };
+
+    assert.equal(loaded.kind, 'loaded');
+    assert.equal(loaded.data.workLogs.length, 1);
+    assert.deepEqual(loaded.data.workLogDeletionTombstones, [tombstone]);
+    assert.ok(await sync.saveAll({ workLogs: [workLog], projects: [project], workLogDeletionTombstones: [tombstone] }));
+    assert.deepEqual(writes.map(({ name, fileId, options }) => ({ name, fileId, options })), [
+        { name: 'work_log_deletion_tombstones.json', fileId: 'tombstone-a', options: { ifMatch: '"tombstone-etag-a"' } },
+        { name: 'work_logs_data.json', fileId: 'file-a', options: { ifMatch: '"etag-a"' } },
+    ]);
+    assert.ok(await sync.saveAll({ workLogs: [workLog], projects: [project], workLogDeletionTombstones: [tombstone] }));
+    assert.deepEqual(writes.slice(2).map(({ name, fileId, options }) => ({ name, fileId, options })), [
+        { name: 'work_log_deletion_tombstones.json', fileId: 'tombstone-a', options: { ifMatch: '"tombstone-etag-a-2"' } },
+        { name: 'work_logs_data.json', fileId: 'file-a', options: { ifMatch: '"etag-a-2"' } },
+    ]);
+});
+
+test('a WorkLogs 412 after journal creation retains the journal revision for retry', async () => {
+    const tombstone: WorkLogDeletionTombstone = {
+        syncId: 'removed-copy', survivorSyncId: 'survivor', fingerprint: 'copy',
+        reason: 'confirmed-duplicate', deletedAt: 20,
+    };
+    const writes: Array<{ name: string; fileId?: string | null; options?: unknown }> = [];
+    let workLogsWrites = 0;
+    const store = {
+        lastStatus: { code: 'ready' as const, message: 'ready' },
+        init: async () => true,
+        readJsonFilesWithStatus: async () => ({ kind: 'missing-file' as const }),
+        writeJsonFile: async (name: string, _payload: unknown, fileId?: string | null, options?: unknown) => {
+            writes.push({ name, fileId, options });
+            if (name === 'work_log_deletion_tombstones.json') {
+                return { fileId: fileId ?? 'journal-1', etag: fileId ? '"journal-etag-2"' : '"journal-etag-1"' };
+            }
+            workLogsWrites += 1;
+            if (workLogsWrites === 1) throw new DriveRequestError(412, 'stale WorkLogs revision');
+            return { fileId: 'worklogs-1', etag: '"worklogs-etag-1"' };
+        },
+    };
+    const sync = new WorkLogsSync(store);
+    await sync.init();
+    const payload = { workLogs: [], projects: [], workLogDeletionTombstones: [tombstone] };
+
+    await assert.rejects(sync.saveAll(payload), (error: unknown) => (
+        error instanceof Error && 'status' in error && error.status === 412
+    ));
+    assert.ok(await sync.saveAll(payload));
+
+    assert.deepEqual(writes.map(({ name, fileId, options }) => ({ name, fileId, options })), [
+        { name: 'work_log_deletion_tombstones.json', fileId: null, options: { createOnly: true } },
+        { name: 'work_logs_data.json', fileId: null, options: { createOnly: true } },
+        { name: 'work_log_deletion_tombstones.json', fileId: 'journal-1', options: { ifMatch: '"journal-etag-1"' } },
+        { name: 'work_logs_data.json', fileId: null, options: { createOnly: true } },
+    ]);
+});
+
+test('remote tombstones delete stale local copies and converge monotonically', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({
+        name: 'Komerční Banka', color: 'amber', isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    const sharedFields = {
+        date: '2026-06-22', projectId, projectName: 'Komerční Banka', people: 'Martin',
+        hours: 8, source: 'manual' as const, createdAt: 10, updatedAt: 10,
+    };
+    await db.workLogs.bulkAdd([
+        { ...sharedFields, syncId: 'keep-me' },
+        { ...sharedFields, syncId: 'remove-me' },
+    ]);
+    const remoteTombstone: WorkLogDeletionTombstone = {
+        syncId: 'remove-me', survivorSyncId: 'keep-me', fingerprint: 'confirmed-copy',
+        reason: 'confirmed-duplicate', deletedAt: 20,
+    };
+
+    await mergeCloudToLocal(
+        [{ ...sharedFields, id: 101, syncId: 'remove-me' }],
+        [],
+        [remoteTombstone],
+    );
+
+    assert.deepEqual((await db.workLogs.toArray()).map((row) => row.syncId), ['keep-me']);
+    assert.deepEqual(await db.workLogDeletionTombstones.toArray(), [remoteTombstone]);
+});
+
+test('conflicting tombstone identity fails closed without deleting local work', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({
+        name: 'Komerční Banka', color: 'amber', isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    const workLog = {
+        date: '2026-06-22', projectId, projectName: 'Komerční Banka', people: 'Martin',
+        hours: 8, source: 'manual' as const, syncId: 'removed-copy', createdAt: 10, updatedAt: 10,
+    };
+    await db.workLogs.add(workLog);
+    const localTombstone: WorkLogDeletionTombstone = {
+        syncId: 'removed-copy', survivorSyncId: 'survivor-a', fingerprint: 'copy-a',
+        reason: 'confirmed-duplicate', deletedAt: 20,
+    };
+    await db.workLogDeletionTombstones.put(localTombstone);
+
+    await assert.rejects(
+        mergeCloudToLocal([], [], [{
+            ...localTombstone,
+            survivorSyncId: 'survivor-b',
+        }]),
+        /conflicting WorkLog tombstone/,
+    );
+
+    assert.equal((await db.workLogs.toArray())[0]?.syncId, 'removed-copy');
+    assert.deepEqual(await db.workLogDeletionTombstones.toArray(), [localTombstone]);
+});
+
+test('WorkLogs Drive sync serializes overlapping backup triggers', async () => {
+    await resetDb();
+    const sync = workLogsSync as {
+        isInitialized: boolean;
+        loadAllDetailed: () => Promise<unknown>;
+        saveAll: (payload: unknown) => Promise<number | null>;
+    };
+    const originalInitialized = sync.isInitialized;
+    const originalLoad = sync.loadAllDetailed;
+    const originalSave = sync.saveAll;
+    let releaseFirstRead: (() => void) | undefined;
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    try {
+        sync.isInitialized = true;
+        sync.loadAllDetailed = async () => {
+            activeReads += 1;
+            maxActiveReads = Math.max(maxActiveReads, activeReads);
+            if (!releaseFirstRead) {
+                await new Promise<void>((resolve) => { releaseFirstRead = resolve; });
+            }
+            activeReads -= 1;
+            return {
+                kind: 'missing-file',
+                data: { workLogs: [], projects: [], workLogDeletionTombstones: [], timestamp: 0 },
+            };
+        };
+        sync.saveAll = async () => 21;
+
+        const first = mergeLocalToCloud();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const second = mergeLocalToCloud();
+        releaseFirstRead?.();
+        assert.deepEqual(await Promise.all([first, second]), [true, true]);
+        assert.equal(maxActiveReads, 1);
     } finally {
         sync.isInitialized = originalInitialized;
         sync.loadAllDetailed = originalLoad;

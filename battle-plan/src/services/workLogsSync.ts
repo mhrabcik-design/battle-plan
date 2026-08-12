@@ -1,6 +1,11 @@
-import { db, type WorkLog, type Project } from '../db';
+import {
+    db,
+    type WorkLog,
+    type WorkLogDeletionTombstone,
+    type Project,
+} from '../db';
 import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
-import { getWorkLogSyncKey } from '../utils/workLogSyncIdentity';
+import { getWorkLogSyncKey, mergeWorkLogSnapshots } from '../utils/workLogSyncIdentity';
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 import { normalizeProjectName } from './projectCatalog';
 import {
@@ -28,11 +33,21 @@ interface WorkLogsFile {
     last_updated?: number;
     workLogs: WorkLog[];
     projects: Project[];
+    workLogDeletionTombstones?: WorkLogDeletionTombstone[];
 }
+
+interface WorkLogDeletionTombstonesFile {
+    version: 1;
+    last_updated: number;
+    tombstones: WorkLogDeletionTombstone[];
+}
+
+const WORKLOG_TOMBSTONES_FILENAME = 'work_log_deletion_tombstones.json';
 
 export interface WorkLogsLoadData {
     workLogs: WorkLog[];
     projects: Project[];
+    workLogDeletionTombstones: WorkLogDeletionTombstone[];
     timestamp: number;
 }
 
@@ -42,12 +57,72 @@ export type WorkLogsLoadResult =
     | { kind: 'store-unavailable'; status: DriveStoreStatus; data: WorkLogsLoadData }
     | { kind: 'error'; message: string; data: WorkLogsLoadData };
 
-const emptyWorkLogsLoadData = (): WorkLogsLoadData => ({ workLogs: [], projects: [], timestamp: 0 });
+const emptyWorkLogsLoadData = (): WorkLogsLoadData => ({
+    workLogs: [],
+    projects: [],
+    workLogDeletionTombstones: [],
+    timestamp: 0,
+});
 
-class WorkLogsSync {
+const isDrivePreconditionConflict = (error: unknown): boolean => (
+    !!error && typeof error === 'object' && 'status' in error && error.status === 412
+);
+
+function parseWorkLogDeletionTombstone(value: unknown): WorkLogDeletionTombstone {
+    if (!value || typeof value !== 'object') throw new Error('WorkLog tombstone nemá platný formát');
+    const row = value as Partial<WorkLogDeletionTombstone>;
+    if (
+        typeof row.syncId !== 'string' || row.syncId.trim() === ''
+        || typeof row.survivorSyncId !== 'string' || row.survivorSyncId.trim() === ''
+        || row.syncId === row.survivorSyncId
+        || typeof row.fingerprint !== 'string' || row.fingerprint === ''
+        || row.reason !== 'confirmed-duplicate'
+        || typeof row.deletedAt !== 'number' || !Number.isFinite(row.deletedAt)
+    ) {
+        throw new Error('WorkLog tombstone nemá platný formát');
+    }
+    return row as WorkLogDeletionTombstone;
+}
+
+function mergeWorkLogDeletionTombstones(
+    ...snapshots: ReadonlyArray<readonly WorkLogDeletionTombstone[]>
+): WorkLogDeletionTombstone[] {
+    const bySyncId = new Map<string, WorkLogDeletionTombstone>();
+    for (const snapshot of snapshots) {
+        for (const raw of snapshot) {
+            const tombstone = parseWorkLogDeletionTombstone(raw);
+            const existing = bySyncId.get(tombstone.syncId);
+            if (existing && (
+                existing.survivorSyncId !== tombstone.survivorSyncId
+                || existing.fingerprint !== tombstone.fingerprint
+                || existing.reason !== tombstone.reason
+            )) {
+                throw new Error(`conflicting WorkLog tombstone: ${tombstone.syncId}`);
+            }
+            if (!existing || tombstone.deletedAt > existing.deletedAt) {
+                bySyncId.set(tombstone.syncId, tombstone);
+            }
+        }
+    }
+    return [...bySyncId.values()].sort((left, right) => left.syncId.localeCompare(right.syncId));
+}
+
+type WorkLogsStore = Pick<
+    DriveJsonStore,
+    'init' | 'readJsonFilesWithStatus' | 'writeJsonFile' | 'lastStatus'
+>;
+
+export class WorkLogsSync {
     private fileId: string | null = null;
+    private fileEtag: string | undefined;
+    private tombstoneFileId: string | null = null;
+    private tombstoneFileEtag: string | undefined;
     private isInitialized = false;
-    private readonly drive = new DriveJsonStore();
+    private readonly drive: WorkLogsStore;
+
+    constructor(drive: WorkLogsStore = new DriveJsonStore()) {
+        this.drive = drive;
+    }
 
     async init(): Promise<void> {
         if (this.isInitialized) return;
@@ -68,18 +143,69 @@ class WorkLogsSync {
         }
 
         try {
-            const result = await this.drive.readJsonFileWithStatus<WorkLogsFile>(WORKLOGS_FILENAME);
-            if (result.kind === 'missing-file') return { kind: 'missing-file', data: emptyWorkLogsLoadData() };
+            const [result, tombstoneResult] = await Promise.all([
+                this.drive.readJsonFilesWithStatus<WorkLogsFile>(WORKLOGS_FILENAME),
+                this.drive.readJsonFilesWithStatus<WorkLogDeletionTombstonesFile>(WORKLOG_TOMBSTONES_FILENAME),
+            ]);
+            if (tombstoneResult.kind === 'store-unavailable') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
+            if (tombstoneResult.kind === 'error') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
+            let remoteTombstones: WorkLogDeletionTombstone[] = [];
+            let tombstoneTimestamp = 0;
+            if (tombstoneResult.kind === 'loaded') {
+                const [tombstoneCanonical] = tombstoneResult.files;
+                if (tombstoneCanonical) {
+                    this.tombstoneFileId = tombstoneCanonical.fileId;
+                    this.tombstoneFileEtag = tombstoneCanonical.etag;
+                }
+                for (const file of tombstoneResult.files) {
+                    remoteTombstones = mergeWorkLogDeletionTombstones(
+                        remoteTombstones,
+                        file.data.tombstones ?? [],
+                    );
+                    tombstoneTimestamp = Math.max(tombstoneTimestamp, file.data.last_updated ?? 0);
+                }
+            } else {
+                this.tombstoneFileId = null;
+                this.tombstoneFileEtag = undefined;
+            }
+            if (result.kind === 'missing-file') {
+                this.fileId = null;
+                this.fileEtag = undefined;
+                return {
+                    kind: 'missing-file',
+                    data: {
+                        ...emptyWorkLogsLoadData(),
+                        workLogDeletionTombstones: remoteTombstones,
+                        timestamp: tombstoneTimestamp,
+                    },
+                };
+            }
             if (result.kind === 'store-unavailable') return { ...result, data: emptyWorkLogsLoadData() };
             if (result.kind === 'error') return { ...result, data: emptyWorkLogsLoadData() };
-            this.fileId = result.fileId;
-            const data = result.data;
+            const [canonical] = result.files;
+            if (!canonical) return { kind: 'missing-file', data: emptyWorkLogsLoadData() };
+            this.fileId = canonical.fileId;
+            this.fileEtag = canonical.etag;
+            const workLogs = mergeWorkLogSnapshots(
+                [],
+                result.files.flatMap((file) => file.data.workLogs ?? []),
+            );
+            const projects = result.files.flatMap((file) => file.data.projects ?? []);
+            const tombstones = mergeWorkLogDeletionTombstones(
+                remoteTombstones,
+                ...result.files.map((file) => file.data.workLogDeletionTombstones ?? []),
+            );
+            const timestamp = result.files.reduce(
+                (latest, file) => Math.max(latest, file.data.last_updated ?? 0),
+                tombstoneTimestamp,
+            );
             return {
                 kind: 'loaded',
                 data: {
-                    workLogs: data.workLogs ?? [],
-                    projects: data.projects ?? [],
-                    timestamp: data.last_updated ?? 0,
+                    workLogs,
+                    projects,
+                    workLogDeletionTombstones: tombstones,
+                    timestamp,
                 },
             };
         } catch (e) {
@@ -92,27 +218,57 @@ class WorkLogsSync {
      * Zapíše kompletní payload (workLogs + projects) do work_logs_data.json.
      * Pokud soubor neexistuje, vytvoří ho.
      */
-    async saveAll(payload: { workLogs: WorkLog[]; projects: Project[] }): Promise<number | null> {
+    async saveAll(payload: {
+        workLogs: WorkLog[];
+        projects: Project[];
+        workLogDeletionTombstones: WorkLogDeletionTombstone[];
+    }): Promise<number | null> {
         if (!this.isInitialized) {
             return null;
         }
 
         const timestamp = Date.now();
+        const tombstones = mergeWorkLogDeletionTombstones(payload.workLogDeletionTombstones);
         const fileContent = {
-            version: 1,
+            version: 2,
             last_updated: timestamp,
             workLogs: payload.workLogs,
             projects: payload.projects,
+            workLogDeletionTombstones: tombstones,
         };
 
         try {
-            const saved = await this.drive.writeJsonFile(WORKLOGS_FILENAME, fileContent, this.fileId);
+            if (tombstones.length > 0 || this.tombstoneFileId) {
+                if (this.tombstoneFileId && !this.tombstoneFileEtag) {
+                    throw new Error('WorkLog tombstone journal nemá ETag pro bezpečný souběžný zápis');
+                }
+                const tombstoneSaved = await this.drive.writeJsonFile(
+                    WORKLOG_TOMBSTONES_FILENAME,
+                    { version: 1, last_updated: timestamp, tombstones } satisfies WorkLogDeletionTombstonesFile,
+                    this.tombstoneFileId,
+                    this.tombstoneFileId ? { ifMatch: this.tombstoneFileEtag } : { createOnly: true },
+                );
+                if (!tombstoneSaved) return null;
+                this.tombstoneFileId = tombstoneSaved.fileId;
+                this.tombstoneFileEtag = tombstoneSaved.etag;
+            }
+            if (this.fileId && !this.fileEtag) {
+                throw new Error('WorkLogs soubor nemá ETag pro bezpečný souběžný zápis');
+            }
+            const saved = await this.drive.writeJsonFile(
+                WORKLOGS_FILENAME,
+                fileContent,
+                this.fileId,
+                this.fileId ? { ifMatch: this.fileEtag } : { createOnly: true },
+            );
             if (!saved) return null;
             if (saved.fileId) {
                 this.fileId = saved.fileId;
             }
+            this.fileEtag = saved.etag;
             return timestamp;
         } catch (e) {
+            if (isDrivePreconditionConflict(e)) throw e;
             console.error('WorkLogsSync: saveAll failed', e);
             return null;
         }
@@ -140,6 +296,26 @@ export interface MergeResult {
     projectsRemoved: number;
 }
 
+let workLogsSyncQueue: Promise<void> = Promise.resolve();
+
+function enqueueWorkLogsSync<T>(operation: () => Promise<T>): Promise<T> {
+    const result = workLogsSyncQueue.then(operation);
+    workLogsSyncQueue = result.then(() => undefined, () => undefined);
+    return result;
+}
+
+export function mergeCloudToLocal(
+    cloudWorkLogs: WorkLog[],
+    cloudProjects: Project[],
+    cloudWorkLogDeletionTombstones: WorkLogDeletionTombstone[] = [],
+): Promise<MergeResult> {
+    return enqueueWorkLogsSync(() => performMergeCloudToLocal(
+        cloudWorkLogs,
+        cloudProjects,
+        cloudWorkLogDeletionTombstones,
+    ));
+}
+
 /**
  * Porovná cloud data s IndexedDB a provede winner-wins merge podle updatedAt.
  * Vrací statistiku. Side-effect: aktualizuje db.workLogs a db.projects.
@@ -158,9 +334,10 @@ export interface MergeResult {
  * Po merge se projekty sjednotí podle normalizovaného názvu a WorkLogy se přepojí
  * na lokální kanonický projectId. Historický projectName zůstává zachovaný.
  */
-export async function mergeCloudToLocal(
+async function performMergeCloudToLocal(
     cloudWorkLogs: WorkLog[],
-    cloudProjects: Project[]
+    cloudProjects: Project[],
+    cloudWorkLogDeletionTombstones: WorkLogDeletionTombstone[] = [],
 ): Promise<MergeResult> {
     const result: MergeResult = {
         workLogsAdded: 0,
@@ -171,7 +348,27 @@ export async function mergeCloudToLocal(
         projectsRemoved: 0,
     };
 
-    await db.transaction('rw', [db.workLogs, db.projects], async () => {
+    await db.transaction('rw', [db.workLogs, db.projects, db.workLogDeletionTombstones], async () => {
+        const localTombstones = await db.workLogDeletionTombstones.toArray();
+        const localTombstonesBySyncId = new Map(
+            localTombstones.map((tombstone) => [tombstone.syncId, tombstone]),
+        );
+        const tombstones = mergeWorkLogDeletionTombstones(localTombstones, cloudWorkLogDeletionTombstones);
+        const changedTombstones = tombstones.filter((tombstone) => {
+            const local = localTombstonesBySyncId.get(tombstone.syncId);
+            return !local || tombstone.deletedAt > local.deletedAt;
+        });
+        if (changedTombstones.length > 0) {
+            await db.workLogDeletionTombstones.bulkPut(changedTombstones);
+        }
+        const deletedSyncIds = new Set(tombstones.map((tombstone) => tombstone.syncId));
+        const staleLocalIds = deletedSyncIds.size > 0
+            ? await db.workLogs.where('syncId').anyOf([...deletedSyncIds]).primaryKeys() as number[]
+            : [];
+        if (staleLocalIds.length > 0) {
+            await db.workLogs.bulkDelete(staleLocalIds);
+            result.workLogsRemoved += staleLocalIds.length;
+        }
         const initialReconciliation = await reconcileProjectIdentities(db.projects, db.workLogs);
         result.projectsRemoved += initialReconciliation.projectsMerged;
         let localProjects = await db.projects.toArray();
@@ -284,6 +481,7 @@ export async function mergeCloudToLocal(
         // its normalized project snapshot before persisting it locally.
         let needsOrphanReconciliation = false;
         for (const cw of cloudWorkLogs) {
+            if (cw.syncId && deletedSyncIds.has(cw.syncId)) continue;
             const key = getWorkLogSyncKey(cw);
             const identity = resolveProjectIdentityFromIndex(identityIndex, cw.projectName);
             if (identity.outcome === 'conflict') {
@@ -353,28 +551,65 @@ interface MergeLocalToCloudOptions {
     excludedWorkLogSyncIds?: readonly string[];
 }
 
-export async function mergeLocalToCloud(
+async function performMergeLocalToCloud(
     options: MergeLocalToCloudOptions = {},
 ): Promise<boolean> {
     if (!workLogsSync.initialized) {
         await workLogsSync.init();
         if (!workLogsSync.initialized) return false;
     }
-    const cloudResult = await workLogsSync.loadAllDetailed();
-    if (cloudResult.kind === 'store-unavailable' || cloudResult.kind === 'error') {
-        return false;
-    }
-    if (cloudResult.kind === 'loaded' && cloudResult.data.timestamp > 0) {
-        const excludedSyncIds = new Set(options.excludedWorkLogSyncIds ?? []);
-        const cloudWorkLogs = excludedSyncIds.size === 0
-            ? cloudResult.data.workLogs
-            : cloudResult.data.workLogs.filter(
-                (workLog) => !workLog.syncId || !excludedSyncIds.has(workLog.syncId),
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const cloudResult = await workLogsSync.loadAllDetailed();
+        if (cloudResult.kind === 'store-unavailable' || cloudResult.kind === 'error') {
+            return false;
+        }
+        if (
+            cloudResult.kind === 'loaded'
+            || cloudResult.data.workLogDeletionTombstones.length > 0
+        ) {
+            const excludedSyncIds = new Set(options.excludedWorkLogSyncIds ?? []);
+            const cloudWorkLogs = excludedSyncIds.size === 0
+                ? cloudResult.data.workLogs
+                : cloudResult.data.workLogs.filter(
+                    (workLog) => !workLog.syncId || !excludedSyncIds.has(workLog.syncId),
+                );
+            await performMergeCloudToLocal(
+                cloudWorkLogs,
+                cloudResult.data.projects,
+                cloudResult.data.workLogDeletionTombstones ?? [],
             );
-        await mergeCloudToLocal(cloudWorkLogs, cloudResult.data.projects);
+        }
+        const [storedTombstones, storedWorkLogs, allProjects] = await db.transaction(
+            'r',
+            [db.workLogDeletionTombstones, db.workLogs, db.projects],
+            () => Promise.all([
+                db.workLogDeletionTombstones.toArray(),
+                db.workLogs.toArray(),
+                db.projects.toArray(),
+            ]),
+        );
+        const tombstones = mergeWorkLogDeletionTombstones(storedTombstones);
+        const tombstonedIds = new Set(tombstones.map((tombstone) => tombstone.syncId));
+        const allWorkLogs = storedWorkLogs.filter(
+            (workLog) => !workLog.syncId || !tombstonedIds.has(workLog.syncId),
+        );
+        try {
+            const ts = await workLogsSync.saveAll({
+                workLogs: allWorkLogs,
+                projects: allProjects,
+                workLogDeletionTombstones: tombstones,
+            });
+            return ts !== null;
+        } catch (error) {
+            if (isDrivePreconditionConflict(error)) continue;
+            throw error;
+        }
     }
-    const allWorkLogs = await db.workLogs.toArray();
-    const allProjects = await db.projects.toArray();
-    const ts = await workLogsSync.saveAll({ workLogs: allWorkLogs, projects: allProjects });
-    return ts !== null;
+    return false;
+}
+
+export async function mergeLocalToCloud(
+    options: MergeLocalToCloudOptions = {},
+): Promise<boolean> {
+    return enqueueWorkLogsSync(() => performMergeLocalToCloud(options));
 }

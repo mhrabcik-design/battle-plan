@@ -899,7 +899,7 @@ test('U5: clearAppliedInbox removes applied rows but keeps pending', async () =>
     assert.equal(remaining[0]!.id, 'b');
 });
 
-test('U7: agentInbox is a Dexie Table and recordings is no longer declared in the class', async () => {
+test('U7: agentInbox is a Dexie Table and the current schema opens', async () => {
     await db.open();
     const tables = (db as unknown as { tables: Array<{ name: string }> }).tables;
     const names = tables.map(t => t.name).sort();
@@ -908,12 +908,7 @@ test('U7: agentInbox is a Dexie Table and recordings is no longer declared in th
     assert.ok(names.includes('workLogs'), 'workLogs must be present');
     assert.ok(names.includes('projects'), 'projects must be present');
     assert.ok(names.includes('settings'), 'settings must be present');
-    // The full removal of the recordings table from the class and all
-    // version().stores() chains is a release-rollout concern; the test
-    // v11 retains the legacy inbox while adding isolated protocol-v2 stores;
-    // v14 repairs portable identities before v15 makes them unique; v16
-    // fail-closes legacy protocol receipts that lack authenticated expiry.
-    assert.equal(await db.verno, 17);
+    assert.equal(await db.verno, 18);
 });
 
 
