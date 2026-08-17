@@ -122,8 +122,27 @@ function getDriveResponseEtag(response: DriveUploadResponse): string | undefined
 
 function getStrongDriveResponseEtag(response: DriveUploadResponse): string | undefined {
     const etag = getDriveResponseEtag(response);
-    if (!etag || /^W\//i.test(etag) || !etag.startsWith('"') || !etag.endsWith('"')) return undefined;
+    if (!etag || !/^"[\x21\x23-\x7E\x80-\xFF]*"$/.test(etag)) return undefined;
     return etag;
+}
+
+function getDriveRequestErrorMessage(error: unknown, action: string): string {
+    if (error instanceof Error) return error.message;
+    if (!error || typeof error !== 'object') return String(error);
+
+    const response = error as {
+        status?: unknown;
+        statusText?: unknown;
+        result?: { error?: { message?: unknown } };
+    };
+    if (typeof response.status !== 'number') return String(error);
+
+    const statusText = typeof response.statusText === 'string' ? response.statusText : '';
+    const apiMessage = typeof response.result?.error?.message === 'string'
+        ? response.result.error.message
+        : '';
+    const detail = [statusText, apiMessage].filter(Boolean).join(' - ');
+    return `${action} failed: ${response.status}${detail ? ` ${detail}` : ''}`;
 }
 
 function escapeDriveQueryValue(value: string): string {
@@ -539,7 +558,7 @@ export class DriveJsonStore {
             const etag = getStrongDriveResponseEtag(response);
             return { kind: 'loaded', fileId, data, ...(etag ? { etag } : {}) };
         } catch (error) {
-            return { kind: 'error', message: error instanceof Error ? error.message : String(error) };
+            return { kind: 'error', message: getDriveRequestErrorMessage(error, 'Drive JSON media read') };
         }
     }
 

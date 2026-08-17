@@ -507,6 +507,8 @@ test('DriveJsonStore readJsonFileWithStatus reads JSON and strong ETags from the
         { status: 200, body: '{"source":"body"}' },
         { status: 200, result: { source: 'empty-etag' }, headers: { ETag: '' } },
         { status: 200, result: { source: 'weak-etag' }, headers: { ETAG: 'W/"weak-etag"' } },
+        { status: 200, result: { source: 'combined-etag' }, headers: { ETag: '"revision-a", "revision-b"' } },
+        { status: 200, result: { source: 'embedded-quote' }, headers: { ETag: '"revision-"a"' } },
         { status: 503, statusText: 'Unavailable', result: { source: 'ignored' }, headers: { ETag: '"ignored"' } },
     ];
     const mediaRequests: Array<{ path: string; method: string; headers: Record<string, string>; body: string }> = [];
@@ -528,6 +530,7 @@ test('DriveJsonStore readJsonFileWithStatus reads JSON and strong ETags from the
             mediaRequests.push(args);
             const response = mediaResponses[mediaResponseIndex++];
             if (response instanceof Error) throw response;
+            if (response && typeof response === 'object' && 'reject' in response) throw response.reject;
             return response;
         },
     }, { bp_folder_id: 'folder-existing' });
@@ -564,9 +567,31 @@ test('DriveJsonStore readJsonFileWithStatus reads JSON and strong ETags from the
         fileId: 'file-existing',
         data: { source: 'weak-etag' },
     });
+    assert.deepEqual(await store.readJsonFileWithStatus<{ source: string }>('data.json'), {
+        kind: 'loaded',
+        fileId: 'file-existing',
+        data: { source: 'combined-etag' },
+    });
+    assert.deepEqual(await store.readJsonFileWithStatus<{ source: string }>('data.json'), {
+        kind: 'loaded',
+        fileId: 'file-existing',
+        data: { source: 'embedded-quote' },
+    });
     assert.deepEqual(await store.readJsonFileWithStatus('data.json'), {
         kind: 'error',
         message: 'Drive JSON media read failed: 503 Unavailable',
+    });
+
+    mediaResponses.push({
+        reject: {
+            status: 503,
+            statusText: 'Unavailable',
+            result: { error: { message: 'backend unavailable' } },
+        },
+    });
+    assert.deepEqual(await store.readJsonFileWithStatus('data.json'), {
+        kind: 'error',
+        message: 'Drive JSON media read failed: 503 Unavailable - backend unavailable',
     });
 
     mediaResponses.push(new Error('GAPI transport rejected'));
@@ -576,7 +601,7 @@ test('DriveJsonStore readJsonFileWithStatus reads JSON and strong ETags from the
     });
 
     assert.deepEqual(mediaRequests.map(({ path, method, headers, body }) => ({ path, method, headers, body })), [
-        ...Array.from({ length: 6 }, () => ({
+        ...Array.from({ length: 9 }, () => ({
             path: '/drive/v3/files/file-existing?alt=media&supportsAllDrives=true',
             method: 'GET',
             headers: {},
