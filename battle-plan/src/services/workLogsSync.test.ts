@@ -675,6 +675,61 @@ test('duplicate WorkLogs Drive files merge and remain available for later stale-
     ]);
 });
 
+test('WorkLogs existing files without ETags fail closed before any write', async () => {
+    const cases = [
+        { missingEtagFor: 'work_logs_data.json', tombstones: [] as WorkLogDeletionTombstone[] },
+        {
+            missingEtagFor: 'work_log_deletion_tombstones.json',
+            tombstones: [{
+                syncId: 'removed-copy', survivorSyncId: 'survivor', fingerprint: 'copy',
+                reason: 'confirmed-duplicate' as const, deletedAt: 20,
+            }],
+        },
+    ];
+    const originalConsoleError = console.error;
+    console.error = () => undefined;
+    try {
+        for (const { missingEtagFor, tombstones } of cases) {
+            let writeCount = 0;
+            const store = {
+                lastStatus: { code: 'ready' as const, message: 'ready' },
+                init: async () => true,
+                readJsonFilesWithStatus: async (name: string) => {
+                    if (missingEtagFor === 'work_logs_data.json' && name === 'work_log_deletion_tombstones.json') {
+                        return { kind: 'missing-file' as const };
+                    }
+                    return {
+                        kind: 'loaded' as const,
+                        files: [{
+                            fileId: `${name}-id`,
+                            ...(name === missingEtagFor ? {} : { etag: `"${name}-etag"` }),
+                            data: name === 'work_logs_data.json'
+                                ? { version: 2, last_updated: 1, workLogs: [], projects: [], workLogDeletionTombstones: [] }
+                                : { version: 1, last_updated: 1, tombstones },
+                        }],
+                    };
+                },
+                writeJsonFile: async () => {
+                    writeCount++;
+                    return { fileId: 'unexpected-write' };
+                },
+            };
+            const sync = new WorkLogsSync(store);
+            await sync.init();
+            await sync.loadAllDetailed();
+
+            assert.equal(
+                await sync.saveAll({ workLogs: [], projects: [], workLogDeletionTombstones: tombstones }),
+                null,
+                missingEtagFor,
+            );
+            assert.equal(writeCount, 0, missingEtagFor);
+        }
+    } finally {
+        console.error = originalConsoleError;
+    }
+});
+
 test('a WorkLogs 412 after journal creation retains the journal revision for retry', async () => {
     const tombstone: WorkLogDeletionTombstone = {
         syncId: 'removed-copy', survivorSyncId: 'survivor', fingerprint: 'copy',

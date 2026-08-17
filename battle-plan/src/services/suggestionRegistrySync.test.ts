@@ -54,10 +54,14 @@ class FakeRegistryStore implements SuggestionRegistryStore {
     data: SuggestionRegistryFile | null = null;
     duplicateData: SuggestionRegistryFile[] = [];
     trashedFileIds: string[] = [];
+    writeCalls: Array<{ fileId?: string | null; options?: unknown }> = [];
+    readCount = 0;
     writeCount = 0;
     initialized = true;
     dropNextWrite = false;
     rejectNextWriteAsStale = false;
+    staleReplacementData: SuggestionRegistryFile | null = null;
+    etag = '"registry-etag-a"';
     omitEtag = false;
 
     async init(): Promise<boolean> {
@@ -68,13 +72,14 @@ class FakeRegistryStore implements SuggestionRegistryStore {
         | { kind: 'loaded'; files: Array<{ fileId: string; etag?: string; data: T }> }
         | { kind: 'missing-file' }
     > {
+        this.readCount++;
         return this.data
             ? {
                 kind: 'loaded',
                 files: [
                     {
                         fileId: 'registry-a',
-                        ...(!this.omitEtag ? { etag: '"registry-etag-a"' } : {}),
+                        ...(!this.omitEtag ? { etag: this.etag } : {}),
                         data: structuredClone(this.data) as T,
                     },
                     ...this.duplicateData.map((data, index) => ({
@@ -87,10 +92,20 @@ class FakeRegistryStore implements SuggestionRegistryStore {
             : { kind: 'missing-file' };
     }
 
-    async writeJsonFile(_name: string, payload: unknown): Promise<{ fileId: string } | null> {
+    async writeJsonFile(
+        _name: string,
+        payload: unknown,
+        fileId?: string | null,
+        options?: unknown,
+    ): Promise<{ fileId: string } | null> {
         this.writeCount++;
+        this.writeCalls.push({ fileId, options });
         if (this.rejectNextWriteAsStale) {
             this.rejectNextWriteAsStale = false;
+            if (this.staleReplacementData) {
+                this.data = structuredClone(this.staleReplacementData);
+                this.etag = '"registry-etag-b"';
+            }
             throw Object.assign(new Error('stale Drive revision'), { status: 412 });
         }
         if (this.dropNextWrite) {
@@ -126,15 +141,39 @@ test('publishing verifies the journal and retries a lost whole-file write', asyn
 test('publishing retries after Drive rejects a stale conditional revision', async () => {
     const registry = createRegistry();
     const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
+    const initialRemote = createRegistry();
+    const concurrentRemote = createRegistry();
+    await concurrentRemote.recordDecision(
+        suggestion({
+            id: 'proposal-remote',
+            title: 'Souběžné rozhodnutí',
+            context: {
+                related_task_ids: [],
+                related_email_ids: ['thread-remote'],
+                deadline: null,
+                priority: 'medium',
+            },
+        }),
+        { kind: 'accepted' },
+        1_100,
+    );
     const store = new FakeRegistryStore();
+    store.data = await initialRemote.exportSnapshot();
     store.rejectNextWriteAsStale = true;
+    store.staleReplacementData = await concurrentRemote.exportSnapshot();
     const sync = new SuggestionRegistrySync(registry, store);
 
     const result = await sync.publishPending();
 
     assert.equal(result.kind, 'published');
     assert.equal(store.writeCount, 2);
+    assert.equal(store.readCount, 3);
+    assert.deepEqual(store.writeCalls, [
+        { fileId: 'registry-a', options: { ifMatch: '"registry-etag-a"' } },
+        { fileId: 'registry-a', options: { ifMatch: '"registry-etag-b"' } },
+    ]);
     assert.ok(store.data?.decisions.some((row) => row.id === decision.id));
+    assert.ok(store.data?.decisions.some((row) => row.suggestionId === 'proposal-remote'));
 });
 
 test('publishing fails closed when an existing registry has no ETag', async () => {
@@ -250,6 +289,9 @@ test('duplicate first-use registry files converge into one canonical journal', a
     assert.equal((await sync.fetchAndMerge()).kind, 'loaded');
 
     assert.equal(store.data.decisions.length, 2);
+    assert.deepEqual(store.writeCalls, [
+        { fileId: 'registry-a', options: { ifMatch: '"registry-etag-a"' } },
+    ]);
     assert.deepEqual(store.trashedFileIds, ['registry-b']);
     assert.equal((await localRegistry.exportSnapshot()).decisions.length, 2);
 });
