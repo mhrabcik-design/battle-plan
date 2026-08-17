@@ -120,6 +120,31 @@ function getDriveResponseEtag(response: DriveUploadResponse): string | undefined
     return key ? headers[key] : undefined;
 }
 
+function getStrongDriveResponseEtag(response: DriveUploadResponse): string | undefined {
+    const etag = getDriveResponseEtag(response);
+    if (!etag || !/^"[\x21\x23-\x7E\x80-\xFF]*"$/.test(etag)) return undefined;
+    return etag;
+}
+
+function getDriveRequestErrorMessage(error: unknown, action: string): string {
+    if (error instanceof Error) return error.message;
+    if (!error || typeof error !== 'object') return String(error);
+
+    const response = error as {
+        status?: unknown;
+        statusText?: unknown;
+        result?: { error?: { message?: unknown } };
+    };
+    if (typeof response.status !== 'number') return String(error);
+
+    const statusText = typeof response.statusText === 'string' ? response.statusText : '';
+    const apiMessage = typeof response.result?.error?.message === 'string'
+        ? response.result.error.message
+        : '';
+    const detail = [statusText, apiMessage].filter(Boolean).join(' - ');
+    return `${action} failed: ${response.status}${detail ? ` ${detail}` : ''}`;
+}
+
 function escapeDriveQueryValue(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -518,17 +543,23 @@ export class DriveJsonStore {
         if (!this.isInitialized || !this.folderId) {
             return { kind: 'store-unavailable', status: this.lastStatusValue };
         }
-        const accessToken = await this.getAccessToken();
+        await this.getAccessToken();
+        const client = this.getClient();
+        if (!client) return { kind: 'error', message: 'GAPI client není dostupný' };
 
-        const resp = await fetch(
-            `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-            { headers: { 'Authorization': `Bearer ${accessToken}` } },
-        );
-        if (!resp.ok) {
-            return { kind: 'error', message: `${resp.status} ${resp.statusText}`.trim() };
+        try {
+            const response = await client.request({
+                path: `/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`,
+                method: 'GET',
+                headers: {},
+                body: '',
+            });
+            const data = responseObject<T>(response, 'Drive JSON media read');
+            const etag = getStrongDriveResponseEtag(response);
+            return { kind: 'loaded', fileId, data, ...(etag ? { etag } : {}) };
+        } catch (error) {
+            return { kind: 'error', message: getDriveRequestErrorMessage(error, 'Drive JSON media read') };
         }
-        const etag = resp.headers?.get?.('etag') ?? undefined;
-        return { kind: 'loaded', fileId, data: await resp.json() as T, ...(etag ? { etag } : {}) };
     }
 
     async trashFile(fileId: string): Promise<void> {
