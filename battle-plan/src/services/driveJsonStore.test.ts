@@ -501,13 +501,19 @@ test('DriveJsonStore reports folder-missing without createFolder and folder-crea
     assert.deepEqual(createdFolders, ['Anu-BattlePlan']);
 });
 
-test('DriveJsonStore readJsonFileWithStatus distinguishes missing files and failed media reads', async () => {
-    const mediaResponses = [
-        { ok: false, status: 500, statusText: 'Nope' },
-        { ok: true, status: 200, statusText: 'OK', json: async () => ({ hello: 'world' }) },
+test('DriveJsonStore readJsonFileWithStatus reads JSON and strong ETags from the authenticated GAPI response', async () => {
+    const mediaResponses: Array<unknown> = [
+        { status: 200, result: { source: 'result' }, headers: { eTaG: '"strong-etag:bytes"' } },
+        { status: 200, body: '{"source":"body"}' },
+        { status: 200, result: { source: 'empty-etag' }, headers: { ETag: '' } },
+        { status: 200, result: { source: 'weak-etag' }, headers: { ETAG: 'W/"weak-etag"' } },
+        { status: 503, statusText: 'Unavailable', result: { source: 'ignored' }, headers: { ETag: '"ignored"' } },
     ];
+    const mediaRequests: Array<{ path: string; method: string; headers: Record<string, string>; body: string }> = [];
     let mediaResponseIndex = 0;
-    (globalThis as unknown as { fetch: unknown }).fetch = async () => mediaResponses[mediaResponseIndex++];
+    (globalThis as unknown as { fetch: unknown }).fetch = async () => {
+        throw new Error('Drive JSON reads must not use fetch');
+    };
 
     installDriveGlobals({
         drive: {
@@ -518,7 +524,12 @@ test('DriveJsonStore readJsonFileWithStatus distinguishes missing files and fail
                 },
             },
         },
-        request: async () => ({ status: 200, result: { id: 'file-existing' } }),
+        request: async (args: { path: string; method: string; headers: Record<string, string>; body: string }) => {
+            mediaRequests.push(args);
+            const response = mediaResponses[mediaResponseIndex++];
+            if (response instanceof Error) throw response;
+            return response;
+        },
     }, { bp_folder_id: 'folder-existing' });
 
     setGoogleServiceState({
@@ -532,11 +543,46 @@ test('DriveJsonStore readJsonFileWithStatus distinguishes missing files and fail
 
     assert.deepEqual(await store.readJsonFileWithStatus('missing.json'), { kind: 'missing-file' });
 
-    const failed = await store.readJsonFileWithStatus<{ hello: string }>('data.json');
-    assert.deepEqual(failed, { kind: 'error', message: '500 Nope' });
+    assert.deepEqual(await store.readJsonFileWithStatus<{ source: string }>('data.json'), {
+        kind: 'loaded',
+        fileId: 'file-existing',
+        data: { source: 'result' },
+        etag: '"strong-etag:bytes"',
+    });
+    assert.deepEqual(await store.readJsonFileWithStatus<{ source: string }>('data.json'), {
+        kind: 'loaded',
+        fileId: 'file-existing',
+        data: { source: 'body' },
+    });
+    assert.deepEqual(await store.readJsonFileWithStatus<{ source: string }>('data.json'), {
+        kind: 'loaded',
+        fileId: 'file-existing',
+        data: { source: 'empty-etag' },
+    });
+    assert.deepEqual(await store.readJsonFileWithStatus<{ source: string }>('data.json'), {
+        kind: 'loaded',
+        fileId: 'file-existing',
+        data: { source: 'weak-etag' },
+    });
+    assert.deepEqual(await store.readJsonFileWithStatus('data.json'), {
+        kind: 'error',
+        message: 'Drive JSON media read failed: 503 Unavailable',
+    });
 
-    const loaded = await store.readJsonFileWithStatus<{ hello: string }>('data.json');
-    assert.deepEqual(loaded, { kind: 'loaded', fileId: 'file-existing', data: { hello: 'world' } });
+    mediaResponses.push(new Error('GAPI transport rejected'));
+    assert.deepEqual(await store.readJsonFileWithStatus('data.json'), {
+        kind: 'error',
+        message: 'GAPI transport rejected',
+    });
+
+    assert.deepEqual(mediaRequests.map(({ path, method, headers, body }) => ({ path, method, headers, body })), [
+        ...Array.from({ length: 6 }, () => ({
+            path: '/drive/v3/files/file-existing?alt=media&supportsAllDrives=true',
+            method: 'GET',
+            headers: {},
+            body: '',
+        })),
+    ]);
 });
 
 test('buildMultipartRawJsonBody preserves the exact canonical protocol bytes', () => {

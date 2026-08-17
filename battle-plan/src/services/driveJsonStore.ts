@@ -120,6 +120,12 @@ function getDriveResponseEtag(response: DriveUploadResponse): string | undefined
     return key ? headers[key] : undefined;
 }
 
+function getStrongDriveResponseEtag(response: DriveUploadResponse): string | undefined {
+    const etag = getDriveResponseEtag(response);
+    if (!etag || /^W\//i.test(etag) || !etag.startsWith('"') || !etag.endsWith('"')) return undefined;
+    return etag;
+}
+
 function escapeDriveQueryValue(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -518,17 +524,23 @@ export class DriveJsonStore {
         if (!this.isInitialized || !this.folderId) {
             return { kind: 'store-unavailable', status: this.lastStatusValue };
         }
-        const accessToken = await this.getAccessToken();
+        await this.getAccessToken();
+        const client = this.getClient();
+        if (!client) return { kind: 'error', message: 'GAPI client není dostupný' };
 
-        const resp = await fetch(
-            `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-            { headers: { 'Authorization': `Bearer ${accessToken}` } },
-        );
-        if (!resp.ok) {
-            return { kind: 'error', message: `${resp.status} ${resp.statusText}`.trim() };
+        try {
+            const response = await client.request({
+                path: `/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`,
+                method: 'GET',
+                headers: {},
+                body: '',
+            });
+            const data = responseObject<T>(response, 'Drive JSON media read');
+            const etag = getStrongDriveResponseEtag(response);
+            return { kind: 'loaded', fileId, data, ...(etag ? { etag } : {}) };
+        } catch (error) {
+            return { kind: 'error', message: error instanceof Error ? error.message : String(error) };
         }
-        const etag = resp.headers?.get?.('etag') ?? undefined;
-        return { kind: 'loaded', fileId, data: await resp.json() as T, ...(etag ? { etag } : {}) };
     }
 
     async trashFile(fileId: string): Promise<void> {
