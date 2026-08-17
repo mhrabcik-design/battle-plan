@@ -189,6 +189,41 @@ test('DriveJsonStore sends an If-Match precondition for conditional journal upda
     assert.equal(result?.etag, '"etag-8"');
 });
 
+test('DriveJsonStore create-only JSON writes use POST without a conditional header', async () => {
+    const requests: Array<{ path: string; method: string; headers: Record<string, string>; body: string }> = [];
+    installDriveGlobals({
+        drive: { files: { list: async () => { throw new Error('create-only must not search for an update target'); } } },
+        request: async (args: { path: string; method: string; headers: Record<string, string>; body: string }) => {
+            requests.push(args);
+            return { status: 200, result: { id: 'created-snapshot' } };
+        },
+    }, {
+        bp_folder_id: 'folder-123',
+        google_access_token: 'token-123',
+    });
+    setGoogleServiceState({
+        accessToken: 'token-123',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        userEmail: 'user@example.com',
+    });
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+
+    const result = await store.writeJsonFile(
+        'agent-suggestion-decisions.json',
+        { version: 1 },
+        'must-not-be-patched',
+        { createOnly: true },
+    );
+
+    assert.equal(result?.fileId, 'created-snapshot');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, 'POST');
+    assert.equal(requests[0].path, '/upload/drive/v3/files?uploadType=multipart');
+    assert.equal('If-Match' in requests[0].headers, false);
+    assert.match(requests[0].body, /"parents":\["folder-123"\]/);
+});
+
 test('DriveJsonStore lists every duplicate JSON page deterministically and trashes an exact id', async () => {
     const listArguments: Array<{ pageSize?: number; pageToken?: string }> = [];
     const requests: Array<{ path: string; method: string; body: string }> = [];

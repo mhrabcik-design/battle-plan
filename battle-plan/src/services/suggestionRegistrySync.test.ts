@@ -59,8 +59,8 @@ class FakeRegistryStore implements SuggestionRegistryStore {
     writeCount = 0;
     initialized = true;
     dropNextWrite = false;
-    rejectNextWriteAsStale = false;
-    staleReplacementData: SuggestionRegistryFile | null = null;
+    failReadCounts = new Set<number>();
+    writeError: Error | null = null;
     etag = '"registry-etag-a"';
     omitEtag = false;
 
@@ -71,8 +71,12 @@ class FakeRegistryStore implements SuggestionRegistryStore {
     async readJsonFilesWithStatus<T>(): Promise<
         | { kind: 'loaded'; files: Array<{ fileId: string; etag?: string; data: T }> }
         | { kind: 'missing-file' }
+        | { kind: 'error'; message: string }
     > {
         this.readCount++;
+        if (this.failReadCounts.has(this.readCount)) {
+            return { kind: 'error', message: 'Drive read failed' };
+        }
         return this.data
             ? {
                 kind: 'loaded',
@@ -100,20 +104,18 @@ class FakeRegistryStore implements SuggestionRegistryStore {
     ): Promise<{ fileId: string } | null> {
         this.writeCount++;
         this.writeCalls.push({ fileId, options });
-        if (this.rejectNextWriteAsStale) {
-            this.rejectNextWriteAsStale = false;
-            if (this.staleReplacementData) {
-                this.data = structuredClone(this.staleReplacementData);
-                this.etag = '"registry-etag-b"';
-            }
-            throw Object.assign(new Error('stale Drive revision'), { status: 412 });
-        }
+        if (this.writeError) throw this.writeError;
         if (this.dropNextWrite) {
             this.dropNextWrite = false;
         } else {
-            this.data = structuredClone(payload) as SuggestionRegistryFile;
+            const snapshot = structuredClone(payload) as SuggestionRegistryFile;
+            if (this.data && (options as { createOnly?: boolean } | undefined)?.createOnly) {
+                this.duplicateData.push(snapshot);
+            } else {
+                this.data = snapshot;
+            }
         }
-        return { fileId: 'registry-a' };
+        return { fileId: `registry-${String.fromCharCode(97 + this.duplicateData.length)}` };
     }
 
     async trashFile(fileId: string): Promise<void> {
@@ -123,7 +125,7 @@ class FakeRegistryStore implements SuggestionRegistryStore {
     }
 }
 
-test('publishing verifies the journal and retries a lost whole-file write', async () => {
+test('publishing verifies the journal and retries a lost create response', async () => {
     const registry = createRegistry();
     const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
     const store = new FakeRegistryStore();
@@ -138,10 +140,23 @@ test('publishing verifies the journal and retries a lost whole-file write', asyn
     assert.ok((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt);
 });
 
-test('publishing retries after Drive rejects a stale conditional revision', async () => {
+test('publishing recognizes an already-created snapshot without creating a duplicate', async () => {
     const registry = createRegistry();
     const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
-    const initialRemote = createRegistry();
+    const store = new FakeRegistryStore();
+    store.data = await registry.exportSnapshot();
+    const sync = new SuggestionRegistrySync(registry, store);
+
+    const result = await sync.publishPending();
+
+    assert.deepEqual(result, { kind: 'published', decisionCount: 1 });
+    assert.equal(store.writeCount, 0);
+    assert.ok((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt);
+});
+
+test('publishing creates a snapshot without requiring an ETag and preserves a concurrent registry', async () => {
+    const registry = createRegistry();
+    const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
     const concurrentRemote = createRegistry();
     await concurrentRemote.recordDecision(
         suggestion({
@@ -158,38 +173,22 @@ test('publishing retries after Drive rejects a stale conditional revision', asyn
         1_100,
     );
     const store = new FakeRegistryStore();
-    store.data = await initialRemote.exportSnapshot();
-    store.rejectNextWriteAsStale = true;
-    store.staleReplacementData = await concurrentRemote.exportSnapshot();
-    const sync = new SuggestionRegistrySync(registry, store);
-
-    const result = await sync.publishPending();
-
-    assert.equal(result.kind, 'published');
-    assert.equal(store.writeCount, 2);
-    assert.equal(store.readCount, 3);
-    assert.deepEqual(store.writeCalls, [
-        { fileId: 'registry-a', options: { ifMatch: '"registry-etag-a"' } },
-        { fileId: 'registry-a', options: { ifMatch: '"registry-etag-b"' } },
-    ]);
-    assert.ok(store.data?.decisions.some((row) => row.id === decision.id));
-    assert.ok(store.data?.decisions.some((row) => row.suggestionId === 'proposal-remote'));
-});
-
-test('publishing fails closed when an existing registry has no ETag', async () => {
-    const registry = createRegistry();
-    const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
-    const emptyRegistry = createRegistry();
-    const store = new FakeRegistryStore();
-    store.data = await emptyRegistry.exportSnapshot();
+    store.data = await concurrentRemote.exportSnapshot();
     store.omitEtag = true;
     const sync = new SuggestionRegistrySync(registry, store);
 
     const result = await sync.publishPending();
 
-    assert.equal(result.kind, 'error');
-    assert.equal(store.writeCount, 0);
-    assert.equal((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt, undefined);
+    assert.equal(result.kind, 'published');
+    assert.equal(store.writeCount, 1);
+    assert.equal(store.readCount, 2);
+    assert.deepEqual(store.writeCalls, [
+        { fileId: null, options: { createOnly: true } },
+    ]);
+    assert.equal(store.trashedFileIds.length, 0);
+    assert.ok(store.duplicateData[0]?.decisions.some((row) => row.id === decision.id));
+    assert.ok(store.duplicateData[0]?.decisions.some((row) => row.suggestionId === 'proposal-remote'));
+    assert.ok((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt);
 });
 
 test('fetching a remote terminal decision protects a new local proposal id', async () => {
@@ -219,6 +218,32 @@ test('a Drive outage keeps the local decision pending and reports the partial st
     const result = await sync.publishPending();
 
     assert.equal(result.kind, 'store-unavailable');
+    assert.equal((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt, undefined);
+});
+
+test('a failed create keeps the local decision pending', async () => {
+    const registry = createRegistry();
+    const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
+    const store = new FakeRegistryStore();
+    store.writeError = new Error('Drive create failed');
+    const sync = new SuggestionRegistrySync(registry, store);
+
+    const result = await sync.publishPending();
+
+    assert.deepEqual(result, { kind: 'error', message: 'Drive create failed' });
+    assert.equal((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt, undefined);
+});
+
+test('a failed verification reread keeps the local decision pending for an idempotent retry', async () => {
+    const registry = createRegistry();
+    const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
+    const store = new FakeRegistryStore();
+    store.failReadCounts = new Set([2, 3]);
+    const sync = new SuggestionRegistrySync(registry, store);
+
+    const result = await sync.publishPending();
+
+    assert.deepEqual(result, { kind: 'error', message: 'Drive read failed' });
     assert.equal((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt, undefined);
 });
 
@@ -271,7 +296,7 @@ test('malformed optional decision fields are rejected before Dexie merge', async
     assert.equal((await localRegistry.exportSnapshot()).decisions.length, 0);
 });
 
-test('duplicate first-use registry files converge into one canonical journal', async () => {
+test('multiple registry snapshots merge without compaction when nothing is pending', async () => {
     const firstRegistry = createRegistry();
     await firstRegistry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
     const secondRegistry = createRegistry();
@@ -288,10 +313,8 @@ test('duplicate first-use registry files converge into one canonical journal', a
 
     assert.equal((await sync.fetchAndMerge()).kind, 'loaded');
 
-    assert.equal(store.data.decisions.length, 2);
-    assert.deepEqual(store.writeCalls, [
-        { fileId: 'registry-a', options: { ifMatch: '"registry-etag-a"' } },
-    ]);
-    assert.deepEqual(store.trashedFileIds, ['registry-b']);
+    assert.equal(store.writeCount, 0);
+    assert.deepEqual(store.writeCalls, []);
+    assert.deepEqual(store.trashedFileIds, []);
     assert.equal((await localRegistry.exportSnapshot()).decisions.length, 2);
 });
