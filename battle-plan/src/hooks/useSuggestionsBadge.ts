@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { suggestionsSync } from '../services/suggestionsSync';
 import { effectiveSuggestionStatus, suggestionRegistry } from '../services/suggestionRegistry';
 import { suggestionRegistrySync } from '../services/suggestionRegistrySync';
@@ -14,6 +14,7 @@ import {
 } from '../utils/driveSyncDiagnostics';
 import { getErrorMessage } from '../utils/errors';
 import { resolveSuggestionsSnapshot } from '../utils/suggestionReplies';
+import { createRegistryErrorLogGate } from '../utils/syncErrorLogGate';
 
 interface UseSuggestionsBadgeArgs {
   googleAuth: GoogleAuthStatus;
@@ -21,8 +22,10 @@ interface UseSuggestionsBadgeArgs {
   updateSyncHealth: (key: string, patch: Partial<SyncHealth>) => void;
   addLog: (message: string, type?: 'info' | 'error') => void;
 }
+
 export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog }: UseSuggestionsBadgeArgs) {
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
+  const registryErrorLogGate = useRef(createRegistryErrorLogGate());
 
   useEffect(() => {
     if (!hasUsableAuthValue) {
@@ -79,7 +82,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
             detail: 'Synchronizace rozhodnutí selhala',
             lastError: message,
           });
-          addLog(message, 'error');
+          if (registryErrorLogGate.current.shouldLog(message)) addLog(message, 'error');
           return;
         }
         const sugs = suggestionsResult.suggestions;
@@ -105,7 +108,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
             detail: 'Uložení rozhodnutí selhalo',
             lastError: message,
           });
-          addLog(message, 'error');
+          if (registryErrorLogGate.current.shouldLog(message)) addLog(message, 'error');
           return;
         }
         const resolutions = await suggestionRegistry.resolveMany(sugs);
@@ -120,6 +123,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
         // useDriveSyncOrchestration.checkSync.
         const authBeforeSuggestionsOk = googleService.getAuthStatus();
         if (!isAuthUnavailable(authBeforeSuggestionsOk.state)) {
+          registryErrorLogGate.current.recovered();
           updateSyncHealth('suggestions', {
             state: 'ok',
             detail: suggestionsResult.kind === 'missing-file' ? emptySuggestionsHealth().detail : `${open} otevřených návrhů`,

@@ -6,7 +6,6 @@ import type {
 import { getErrorMessage } from '../utils/errors.ts';
 import type {
     DriveJsonStore,
-    DriveJsonWrite,
     DriveStoreStatus,
 } from './driveJsonStore.ts';
 import {
@@ -22,7 +21,7 @@ export type SuggestionRegistryFile = SuggestionRegistrySnapshot;
 
 export type SuggestionRegistryStore = Pick<
     DriveJsonStore,
-    'init' | 'readJsonFilesWithStatus' | 'writeJsonFile' | 'trashFile'
+    'init' | 'readJsonFilesWithStatus' | 'writeJsonFile'
 > & Partial<Pick<DriveJsonStore, 'lastStatus'>>;
 
 class LazyDriveRegistryStore implements SuggestionRegistryStore {
@@ -55,10 +54,6 @@ class LazyDriveRegistryStore implements SuggestionRegistryStore {
         options?: { ifMatch?: string; createOnly?: boolean },
     ) {
         return (await this.store()).writeJsonFile(name, payload, fileId, options);
-    }
-
-    async trashFile(fileId: string): Promise<void> {
-        return (await this.store()).trashFile(fileId);
     }
 }
 
@@ -187,60 +182,50 @@ export class SuggestionRegistrySync {
         }
     }
 
-    private async convergeRemote(
-        pendingIds: readonly string[],
-        createIfMissing: boolean,
-    ): Promise<SuggestionRegistrySyncResult> {
+    private async convergeRemote(pendingIds: readonly string[]): Promise<SuggestionRegistrySyncResult> {
         try {
             for (let attempt = 0; attempt < MAX_PUBLISH_ATTEMPTS; attempt++) {
                 const read = await this.store.readJsonFilesWithStatus<unknown>(REGISTRY_FILENAME);
                 if (read.kind === 'store-unavailable' || read.kind === 'error') return read;
-                if (read.kind === 'missing-file' && !createIfMissing) return { kind: 'missing-file' };
+                if (read.kind === 'missing-file' && pendingIds.length === 0) return { kind: 'missing-file' };
                 const files = read.kind === 'loaded' ? read.files : [];
+                const remoteIds = new Set<string>();
                 for (const file of files) {
-                    await this.registry.mergeSnapshot(parseRegistryFile(file.data));
+                    const remoteSnapshot = parseRegistryFile(file.data);
+                    await this.registry.mergeSnapshot(remoteSnapshot);
+                    for (const decision of remoteSnapshot.decisions) remoteIds.add(decision.id);
                 }
-                if (pendingIds.length === 0 && files.length <= 1) return { kind: 'loaded' };
+                if (pendingIds.length === 0) return { kind: 'loaded' };
+                if (pendingIds.every((id) => remoteIds.has(id))) {
+                    await this.registry.markPublished(pendingIds);
+                    return { kind: 'published', decisionCount: pendingIds.length };
+                }
 
-                const canonical = files[0];
-                if (canonical && !canonical.etag) {
-                    return { kind: 'error', message: 'Registr rozhodnutí nemá ETag pro bezpečný souběžný zápis.' };
-                }
                 const snapshot = await this.registry.exportSnapshot();
-                let saved: DriveJsonWrite | null;
-                try {
-                    saved = await this.store.writeJsonFile(
-                        REGISTRY_FILENAME,
-                        snapshot,
-                        canonical?.fileId ?? null,
-                        canonical
-                            ? { ifMatch: canonical.etag }
-                            : { createOnly: true },
-                    );
-                } catch (error) {
-                    if (error && typeof error === 'object' && 'status' in error && error.status === 412) continue;
-                    throw error;
-                }
+                const saved = await this.store.writeJsonFile(
+                    REGISTRY_FILENAME,
+                    snapshot,
+                    null,
+                    { createOnly: true },
+                );
                 if (!saved) continue;
 
                 const verification = await this.store.readJsonFilesWithStatus<unknown>(REGISTRY_FILENAME);
                 if (verification.kind !== 'loaded') continue;
+                const verifiedIds = new Set<string>();
+                const verifiedSnapshots: SuggestionRegistryFile[] = [];
                 for (const file of verification.files) {
-                    await this.registry.mergeSnapshot(parseRegistryFile(file.data));
+                    const verifiedSnapshot = parseRegistryFile(file.data);
+                    verifiedSnapshots.push(verifiedSnapshot);
+                    for (const decision of verifiedSnapshot.decisions) verifiedIds.add(decision.id);
                 }
-                const localAfterMerge = await this.registry.exportSnapshot();
-                const canonicalVerified = verification.files[0];
-                const canonicalSnapshot = parseRegistryFile(canonicalVerified.data);
-                const canonicalIds = new Set(canonicalSnapshot.decisions.map((decision) => decision.id));
-                if (localAfterMerge.decisions.some((decision) => !canonicalIds.has(decision.id))) continue;
+                if (pendingIds.some((id) => !verifiedIds.has(id))) continue;
+                for (const verifiedSnapshot of verifiedSnapshots) {
+                    await this.registry.mergeSnapshot(verifiedSnapshot);
+                }
 
-                for (const duplicate of verification.files.slice(1)) {
-                    await this.store.trashFile(duplicate.fileId);
-                }
                 await this.registry.markPublished(pendingIds);
-                return pendingIds.length > 0
-                    ? { kind: 'published', decisionCount: pendingIds.length }
-                    : { kind: 'loaded' };
+                return { kind: 'published', decisionCount: pendingIds.length };
             }
             return { kind: 'error', message: 'Zápis registru rozhodnutí se nepodařilo ověřit.' };
         } catch (error) {
@@ -251,7 +236,7 @@ export class SuggestionRegistrySync {
     async fetchAndMerge(): Promise<SuggestionRegistrySyncResult> {
         const unavailable = await this.initStore();
         if (unavailable) return unavailable;
-        return this.convergeRemote([], false);
+        return this.convergeRemote([]);
     }
 
     async publishPending(): Promise<SuggestionRegistrySyncResult> {
@@ -263,7 +248,7 @@ export class SuggestionRegistrySync {
             .map((decision) => decision.id);
         if (pendingIds.length === 0) return { kind: 'nothing-pending' };
 
-        return this.convergeRemote(pendingIds, true);
+        return this.convergeRemote(pendingIds);
     }
 }
 

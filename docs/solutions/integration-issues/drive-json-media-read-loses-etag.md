@@ -44,27 +44,25 @@ The shared Drive JSON store downloaded file content through browser `fetch`. In 
 
 ## Solution
 
-Use the application's authenticated GAPI request surface for the media GET and extract both the parsed JSON and the response header from that single response. The store now requests `/drive/v3/files/{id}?alt=media&supportsAllDrives=true`, parses either GAPI's `result` or raw `body`, and performs a case-insensitive header lookup (`battle-plan/src/services/driveJsonStore.ts:523`).
+The first attempted fix moved the media read from browser `fetch` to `gapi.client.request` and parsed a response ETag when present. Production version 4.3.52 proved that this was not a dependable contract: the same missing-ETag failure remained. Drive API v3 documents `alt=media` as a content download, not as a source of a browser-readable concurrency validator.
 
-Only a syntactically strong quoted ETag crosses the generic store boundary. Empty and weak validators remain absent, and the exact strong value—including its quotes—is preserved for the later `If-Match` request (`battle-plan/src/services/driveJsonStore.ts:116`, `battle-plan/src/services/driveJsonStore.ts:123`). Non-success responses and transport rejections become structured read errors rather than missing-file or empty-data results.
+The suggestion decision registry therefore no longer performs a mutable whole-file update. When local decisions are pending, it creates a new complete `agent-suggestion-decisions.json` snapshot with `createOnly: true`, rereads every exact-name file, merges them through the existing conflict checks, and marks the pending decisions published only after the merged union contains them. It never chooses a canonical file, sends `If-Match`, retries a 412, or trashes duplicates.
 
-The domain guards remain unchanged. Registry publication still retries after a stale conditional revision and still performs zero writes when an existing registry has no ETag (`battle-plan/src/services/suggestionRegistrySync.test.ts:126`, `battle-plan/src/services/suggestionRegistrySync.test.ts:140`).
+The missing-ETag guard remains correct for mutable aggregate writers that have not yet migrated. WorkLogs, the reply journal, and other writers must either adopt their own immutable protocol or move compare-and-swap to a trusted server; they must not copy the registry change without preserving their domain-specific merge and deletion semantics.
 
 ## Why This Works
 
-The precondition now belongs to the same Drive response revision as the JSON being merged. A concurrent update after that read makes the old validator stale, so Drive can reject the conditional update and the domain service can reread and merge rather than overwrite.
+Concurrent devices create separate snapshots instead of competing to replace one blob. The registry already uses stable decision IDs, immutable decision payload checks, and deterministic union merges across all matching files. Replayed or duplicated snapshots are therefore idempotent, while contradictory records still fail closed.
 
-The fix is intentionally transport-level because the same store supplies validators to the suggestion registry, reply journal, and WorkLogs synchronization. Keeping validator extraction in one place restores the input expected by each consumer without weakening their different retry and verification protocols.
-
-Google Drive API v3 does not expose an `etag` field in the `File` JSON resource and does not explicitly document every conditional-update detail used here. Treat browser-visible strong ETags and stale-`If-Match` rejection as a release contract to smoke-test; if either disappears, fail closed and move compare-and-swap to a trusted server or adopt an immutable append-only protocol.
+The repair is intentionally domain-level. A generic transport cannot invent safe merge semantics for replies or WorkLog tombstones. The registry can use create-only snapshots because its complete snapshot contains decisions plus their subject and occurrence identity graph.
 
 ## Prevention
 
-- Regression-test the real transport boundary: assert that media reads use GAPI, preserve a mixed-case strong ETag exactly, parse both `result` and `body`, and reject empty or weak validators (`battle-plan/src/services/driveJsonStore.test.ts:504`).
-- Keep at least one test proving that a missing validator causes zero writes and another proving that HTTP 412 triggers a reread/merge path.
+- Do not treat a GAPI media-response ETag as a supported production contract merely because a mock exposes one.
+- Keep tests proving that registry publication succeeds without an ETag, creates rather than updates, verifies the merged union, and never trashes duplicate snapshots.
 - Never derive `If-Match` from a Drive metadata field that is not an HTTP ETag.
-- Keep JSON and validator acquisition in one response; avoid metadata-after-content sequences.
-- Run an authenticated browser smoke test for ETag visibility and stale-write rejection before releasing changes to this transport.
+- Preserve fail-closed missing-validator guards for mutable writers until each domain has a safe replacement protocol.
+- Run an authenticated GitHub Pages smoke test that publishes a decision and remains healthy across two polling intervals.
 
 ## Related Issues
 
