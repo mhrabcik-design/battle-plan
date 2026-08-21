@@ -41,6 +41,7 @@ import {
   getUrgencyColor
 } from './utils/calendarUtils';
 import { isTaskCleanupCandidate, isTaskVisibleInWeek } from './utils/taskHistory';
+import { getTaskGridPresentation, sortTasksActiveFirst } from './utils/taskListPresentation';
 import { buildInfo } from './utils/buildInfo';
 import { getErrorMessage } from './utils/errors';
 
@@ -89,6 +90,7 @@ function App() {
   const [googleTaskLists, setGoogleTaskLists] = useState<GoogleTaskList[]>([]);
   const [activeTaskList, setActiveTaskList] = useState<string>('@default');
   const [googleTasksRaw, setGoogleTasksRaw] = useState<GoogleTaskRaw[]>([]);
+  const [showCompletedTasks, setShowCompletedTasks] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
@@ -313,11 +315,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     else if (viewMode === 'meetings') collection = db.tasks.where('type').equals('meeting').and(t => !t.isDeleted);
     else collection = db.tasks.where('type').anyOf(['thought', 'note']).and(t => !t.isDeleted);
 
-    const all = await collection.toArray();
-    return all.sort((a, b) => {
-      if (a.status === b.status) return (b.urgency || 0) - (a.urgency || 0);
-      return a.status === 'completed' ? 1 : -1;
-    });
+    return await collection.toArray();
   }, [viewMode, weekOffset]) ?? EMPTY_TASKS;
 
   // Mapped Google Tasks
@@ -355,10 +353,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
       });
     }
 
-    return combined.sort((a, b) => {
-      if (a.status === b.status) return (b.urgency || 0) - (a.urgency || 0);
-      return a.status === 'completed' ? 1 : -1;
-    });
+    return sortTasksActiveFirst(combined);
   }, [localTasks, googleTasksMapped, viewMode]);
 
   useDriveSyncOrchestration({
@@ -575,6 +570,10 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   const memoizedGetDeadlineColor = useCallback((date?: string, time?: string) => getDeadlineColor(currentTime, date, time), [currentTime]);
   const memoizedFormatTimeLeft = useCallback((date?: string, time?: string) => formatTimeLeft(currentTime, date, time), [currentTime]);
   const showTaskGrid = TASK_GRID_VIEW_MODES.includes(viewMode);
+  const { completedTaskCount, visibleTasks: visibleGridTasks } = useMemo(
+    () => getTaskGridPresentation(tasks, viewMode, showCompletedTasks),
+    [showCompletedTasks, tasks, viewMode]
+  );
   const isWorkLogVoiceMode = viewMode === 'worklogs';
   const activeWorkLogVoiceController = isWorkLogVoiceMode ? workLogVoiceController : null;
   const floatingMicIsRecording = activeWorkLogVoiceController?.isRecording ?? isRecording;
@@ -785,19 +784,40 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           )}
 
 
+          {viewMode === 'tasks' && (
+            <div className="mb-4 flex justify-end">
+              <button
+                type="button"
+                aria-pressed={showCompletedTasks}
+                onClick={() => setShowCompletedTasks(current => !current)}
+                className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-black uppercase tracking-wider transition-all ${showCompletedTasks
+                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                  : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                  }`}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                {showCompletedTasks ? 'Skrýt splněné' : 'Zobrazit splněné'}
+                <span className="rounded-md bg-black/20 px-1.5 py-0.5 text-[10px]">{completedTaskCount}</span>
+              </button>
+            </div>
+          )}
+
           {showTaskGrid && (
             <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-start">
               <AnimatePresence mode="popLayout">
-                {tasks.length === 0 ? (
+                {visibleGridTasks.length === 0 ? (
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-20 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
                     <AlertCircle className="w-12 h-12 text-slate-800 mx-auto mb-4" />
-                    <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">Seznam je prázdný</p>
+                    <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">
+                      {viewMode === 'tasks' && completedTaskCount > 0 ? 'Všechny úkoly jsou splněné' : 'Seznam je prázdný'}
+                    </p>
                   </motion.div>
                 ) : (
-                  tasks.map((task) => (
+                  visibleGridTasks.map((task) => (
                     <TaskCard
                       key={task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`}
                       task={task}
+                      useCompletedTaskTreatment={viewMode === 'tasks'}
                       activeVoiceUpdateId={activeVoiceUpdateId}
                       isOverCapacity={memoizedIsOverCapacity}
                       getUrgencyColor={getUrgencyColor}

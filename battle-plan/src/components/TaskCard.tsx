@@ -1,9 +1,11 @@
 import { motion } from 'framer-motion';
 import { AlertCircle, Mail, X, Clock, Users, Lightbulb, CheckCircle2, Hourglass, Mic, FileText, Trash2 } from 'lucide-react';
 import type { UnifiedTask } from '../types';
+import { getTaskCompletionClasses } from '../utils/taskListPresentation';
 
 interface TaskCardProps {
     task: UnifiedTask;
+    useCompletedTaskTreatment?: boolean;
     activeVoiceUpdateId: number | null;
     isOverCapacity: (task: UnifiedTask) => boolean;
     getUrgencyColor: (urgency: number | undefined) => string;
@@ -22,6 +24,7 @@ interface TaskCardProps {
 
 export function TaskCard({
     task,
+    useCompletedTaskTreatment = false,
     activeVoiceUpdateId,
     isOverCapacity,
     getUrgencyColor,
@@ -37,13 +40,16 @@ export function TaskCard({
     activeVoiceUpdateIdRef,
     startRecording
 }: TaskCardProps) {
+    const isCompleted = task.status === 'completed';
+    const completionClasses = getTaskCompletionClasses(isCompleted, useCompletedTaskTreatment);
+
     return (
         <motion.div
             layout
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.98 }}
-            className={`office-card group relative ${task.status === 'completed' ? 'opacity-50 grayscale-[0.3]' : ''} ${isOverCapacity(task) ? 'animate-pulse-red border-red-500/40 bg-red-950/20' : ''}`}
+            className={`office-card group relative ${completionClasses.card} ${isOverCapacity(task) ? 'animate-pulse-red border-red-500/40 bg-red-950/20' : ''}`}
         >
             {isOverCapacity(task) && (
                 <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 bg-red-500/20 border border-red-500/40 rounded-full text-red-400 z-20">
@@ -79,7 +85,7 @@ export function TaskCard({
                         {task.type === 'meeting' ? <Users className="w-4 h-4" /> : task.type === 'thought' ? <Lightbulb className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                        <h3 className="text-sm font-black text-white uppercase tracking-tight leading-tight mb-1 group-hover:text-indigo-400 transition-colors">{task.title}</h3>
+                        <h3 className={`text-sm font-black uppercase tracking-tight leading-tight mb-1 transition-colors ${completionClasses.title}`}>{task.title}</h3>
                         <p className="text-xs text-slate-500 line-clamp-2 font-medium leading-relaxed mb-3">{task.description}</p>
 
                         {task.type === 'task' && task.deadline && (
@@ -135,10 +141,10 @@ export function TaskCard({
                 </button>
                 <button
                     onClick={async () => handleToggleTask(task)}
-                    className={`h-9 px-4 flex-1 rounded-lg text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${task.status === 'completed' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                    className={`h-9 px-4 flex-1 rounded-lg text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${isCompleted ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
                 >
-                    {task.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
-                    {task.status === 'completed' ? 'Hotovo' : 'Splnit'}
+                    {isCompleted ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
+                    {isCompleted ? 'Hotovo' : 'Splnit'}
                 </button>
                 <button onClick={() => setEditingTask(task)} className="h-9 px-4 flex-1 rounded-lg bg-slate-800/50 text-slate-400 hover:text-slate-200 hover:bg-slate-700 text-xs font-black uppercase transition-all flex items-center justify-center gap-2">
                     <FileText className="w-3.5 h-3.5" /> Detaily
