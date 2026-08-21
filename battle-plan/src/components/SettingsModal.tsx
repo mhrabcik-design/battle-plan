@@ -1,9 +1,9 @@
 import React from 'react';
-import { motion } from 'framer-motion';
 import { X, Save } from 'lucide-react';
 import { googleService } from '../services/googleService';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
+import { OverlaySurface } from './ui/OverlaySurface';
 
 interface SettingsModalProps {
     apiKey: string;
@@ -33,16 +33,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setShowSettings
 }) => {
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-slate-950/95 backdrop-blur-md">
-            <motion.div
-                initial={{ y: 50, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 50, opacity: 0 }}
-                className="glass-card w-full max-w-sm p-8 space-y-6"
-            >
+        <OverlaySurface
+            title="Nastavení AI"
+            onRequestClose={() => setShowSettings(false)}
+            className="glass-card max-h-[min(90dvh,48rem)] w-full max-w-sm space-y-6 overflow-y-auto p-6 custom-scrollbar sm:p-8"
+        >
                 <div className="flex justify-between items-center">
                     <h2 className="text-2xl font-display font-bold text-white">Nastavení AI</h2>
-                    <button onClick={() => setShowSettings(false)} className="text-slate-500 hover:text-white transition-colors">
+                    <button aria-label="Zavřít nastavení" onClick={() => setShowSettings(false)} className="surface-action h-11 w-11 text-slate-400 hover:text-white">
                         <X />
                     </button>
                 </div>
@@ -127,7 +125,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Save className="w-4 h-4" />
                     Uložit vše
                 </button>
-            </motion.div>
-        </div>
+        </OverlaySurface>
     );
 };

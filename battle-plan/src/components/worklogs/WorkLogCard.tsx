@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Trash2, Edit3, Save, X } from 'lucide-react';
 import { db, type WorkLog, type Project } from '../../db';
@@ -160,9 +161,10 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
     };
 
     return (
-        <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-4 hover:border-slate-700 transition-all">
+        <motion.article layout className="overflow-clip rounded-xl border border-slate-800 bg-slate-900/40 p-4 transition-colors hover:border-slate-700">
+            <AnimatePresence initial={false} mode="wait">
             {editing ? (
-                <div className="space-y-3">
+                <motion.div key="editing" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-3 overflow-hidden">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <input
                             type="date"
@@ -257,9 +259,9 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
                             {saving ? 'Ukládám…' : 'Uložit'}
                         </button>
                     </div>
-                </div>
+                </motion.div>
             ) : (
-                <div className="flex items-start justify-between gap-3">
+                <motion.div key="summary" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1.5">
                             <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${PROJECT_COLOR_DOT[projectDisplay.color]}`} />
@@ -306,11 +308,13 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
                             <Trash2 className="w-3.5 h-3.5" />
                         </button>
                     </div>
-                </div>
+                </motion.div>
             )}
+            </AnimatePresence>
 
+            <AnimatePresence initial={false}>
             {confirmDelete && !editing && (
-                <div className="mt-3 flex items-center gap-2 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+                <motion.div key="delete-confirm" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
                     <span className="text-xs text-red-400 flex-1">Opravdu smazat?</span>
                     <button
                         type="button"
@@ -326,8 +330,9 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
                     >
                         Smazat
                     </button>
-                </div>
+                </motion.div>
             )}
-        </div>
+            </AnimatePresence>
+        </motion.article>
     );
 }

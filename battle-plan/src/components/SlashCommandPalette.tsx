@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Brain, Briefcase, FileText, Mic, X } from 'lucide-react';
+import { OverlaySurface } from './ui/OverlaySurface';
 
 interface SlashCommandPaletteProps {
     onOpenVoice: () => void;
@@ -19,10 +20,6 @@ export function SlashCommandPalette({ onOpenVoice, onOpenWorklogs, onOpenSuggest
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                setOpen(false);
-                return;
-            }
             if (event.key !== '/' || isTypingTarget(event.target)) return;
             event.preventDefault();
             setOpen(true);
@@ -41,8 +38,7 @@ export function SlashCommandPalette({ onOpenVoice, onOpenWorklogs, onOpenSuggest
     ];
 
     return (
-        <div className="fixed inset-0 z-[220] flex items-start justify-center pt-24 px-4 bg-slate-950/70 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Anu příkazy">
-            <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/50 overflow-hidden">
+        <OverlaySurface title="Anu příkazy" onRequestClose={() => setOpen(false)} className="w-full max-w-xl overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/50">
                 <div className="flex items-center justify-between gap-3 p-4 border-b border-white/5">
                     <div>
                         <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-300">/ příkazy</p>
@@ -68,7 +64,6 @@ export function SlashCommandPalette({ onOpenVoice, onOpenWorklogs, onOpenSuggest
                         </button>
                     ))}
                 </div>
-            </div>
-        </div>
+        </OverlaySurface>
     );
 }

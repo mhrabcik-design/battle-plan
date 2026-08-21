@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, Save, X, AlertTriangle, RotateCcw, Trash2 } from 'lucide-react';
 import { db, type Project, type WorkLog } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
@@ -7,6 +6,7 @@ import { findProjectByName, type ExtractedWorkLog, type ExtractedWorkLogBatch } 
 import { derivePersonHourMetadata, getWorkLogRowIssues, parseDecimalHours } from '../../utils/workLogBatch';
 import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
 import { getErrorMessage } from '../../utils/errors';
+import { OverlaySurface } from '../ui/OverlaySurface';
 import {
     addWorkLogsWithActiveProjects,
     ProjectUnavailableError,
@@ -154,21 +154,12 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
     };
 
     return (
-        <AnimatePresence>
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md flex items-stretch justify-center overflow-y-auto"
-                onClick={onCancelled}
-            >
-                <motion.div
-                    initial={{ y: 20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ y: 20, opacity: 0 }}
-                    className="w-full max-w-5xl bg-slate-900 border-l border-white/5 shadow-2xl flex flex-col"
-                    onClick={(e) => e.stopPropagation()}
-                >
+        <OverlaySurface
+            title="Ověřit diktování práce"
+            onRequestClose={onCancelled}
+            variant="sheet"
+            className="flex h-full w-full max-w-5xl flex-col overflow-hidden border-l border-white/10 bg-slate-900 shadow-2xl"
+        >
                     <div className="p-5 border-b border-slate-800 flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3">
                             <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
@@ -337,8 +328,6 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                             {saving ? 'Ukládám…' : `Uložit ${entries.length}×`}
                         </button>
                     </div>
-                </motion.div>
-            </motion.div>
-        </AnimatePresence>
+        </OverlaySurface>
     );
 }

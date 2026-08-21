@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   Clock,
   Paperclip,
@@ -204,7 +204,7 @@ export function SuggestionCard({
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`p-5 rounded-2xl border bg-slate-900/40 transition-all ${
+      className={`overflow-clip rounded-2xl border bg-slate-900/40 p-5 transition-[background-color,border-color,opacity,transform] ${
         isResolved
           ? 'border-emerald-900/40 bg-emerald-950/20 opacity-70'
           : 'border-slate-800 hover:border-slate-700'
@@ -381,8 +381,9 @@ export function SuggestionCard({
       )}
 
       {/* TEXT REPLY INLINE */}
+      <AnimatePresence initial={false}>
       {expandedTextReply && !isResolved && (
-        <div className="mb-3 p-3 rounded-xl bg-slate-950/50 border border-slate-800/50 space-y-2">
+        <motion.div key="text-reply" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-3 space-y-2 overflow-hidden rounded-xl border border-slate-800/50 bg-slate-950/50 p-3">
           <textarea
             value={textValue}
             onChange={(e) => setTextValue(e.target.value)}
@@ -406,12 +407,14 @@ export function SuggestionCard({
               <Check className="w-3 h-3 inline-block mr-1" /> Odeslat
             </button>
           </div>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       {/* DEFER PICKER */}
+      <AnimatePresence initial={false}>
       {showDeferPicker && !isResolved && (
-        <div className="mb-3 p-3 rounded-xl bg-slate-950/50 border border-slate-800/50 space-y-2">
+        <motion.div key="defer-picker" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-3 space-y-2 overflow-hidden rounded-xl border border-slate-800/50 bg-slate-950/50 p-3">
           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Odložit do:</div>
           <input
             type="date"
@@ -434,8 +437,9 @@ export function SuggestionCard({
               <Hourglass className="w-3 h-3 inline-block mr-1" /> Odložit
             </button>
           </div>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       {/* ACTION BUTTONS */}
       {!isResolved && !requiresDuplicateDecision && (

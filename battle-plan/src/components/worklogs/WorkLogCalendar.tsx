@@ -1,5 +1,4 @@
 import { useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, ChevronRight, Filter, X } from 'lucide-react';
 import { type WorkLog } from '../../db';
 import { currentMonthKey, monthKeyToDate, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
@@ -10,6 +9,7 @@ import {
     type WorkLogProjectIndex,
 } from '../../utils/workLogProjectGrouping';
 import { WorkLogCard } from './WorkLogCard';
+import { OverlaySurface } from '../ui/OverlaySurface';
 
 interface WorkLogCalendarProps {
     logs: WorkLog[];
@@ -166,7 +166,8 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
             </div>
 
             {/* Grid kalendáře */}
-            <div className="bg-slate-900/30 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="custom-scrollbar overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900/30" tabIndex={0} aria-label="Měsíční kalendář, vodorovně posuvný">
+                <div className="min-w-[784px]">
                 {/* Hlavička — dny v týdnu */}
                 <div className="grid grid-cols-7 border-b border-slate-800 bg-slate-900/50">
                     {WEEKDAYS_CS.map((d, i) => (
@@ -231,6 +232,7 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
                         );
                     })}
                 </div>
+                </div>
             </div>
 
             {/* Legenda barev projektů */}
@@ -249,22 +251,13 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
             )}
 
             {/* Modal — detail dne */}
-            <AnimatePresence>
-                {selectedDate && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-md flex items-stretch justify-center overflow-y-auto"
-                        onClick={() => setSelectedDate(null)}
-                    >
-                        <motion.div
-                            initial={{ y: 20, opacity: 0 }}
-                            animate={{ y: 0, opacity: 1 }}
-                            exit={{ y: 20, opacity: 0 }}
-                            className="w-full max-w-2xl bg-slate-900 border-l border-white/5 shadow-2xl flex flex-col"
-                            onClick={(e) => e.stopPropagation()}
-                        >
+            {selectedDate && (
+                <OverlaySurface
+                    title={`Detail dne ${selectedDate}`}
+                    onRequestClose={() => setSelectedDate(null)}
+                    variant="sheet"
+                    className="flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-white/10 bg-slate-900 shadow-2xl"
+                >
                             <div className="p-5 border-b border-slate-800 flex items-center justify-between">
                                 <div>
                                     <h3 className="text-lg font-black text-white uppercase tracking-tight">
@@ -278,7 +271,8 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
                                 <button
                                     type="button"
                                     onClick={() => setSelectedDate(null)}
-                                    className="p-2 text-slate-500 hover:text-white transition-all"
+                                    aria-label="Zavřít detail dne"
+                                    className="surface-action h-11 w-11 text-slate-400 hover:text-white"
                                 >
                                     <X className="w-5 h-5" />
                                 </button>
@@ -294,10 +288,8 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
                                     ))
                                 )}
                             </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                </OverlaySurface>
+            )}
         </div>
     );
 }

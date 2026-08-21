@@ -97,6 +97,7 @@ function App() {
   const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLogBatch | null>(null);
   const [workLogVoiceController, setWorkLogVoiceController] = useState<WorkLogVoiceController | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const { syncHealth, updateSyncHealth } = useSyncDiagnostics();
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
@@ -167,6 +168,12 @@ function App() {
     document.documentElement.style.setProperty('--app-font-size', `${uiScale}px`);
     db.settings.put({ id: 'ui_scale', value: uiScale.toString() });
   }, [uiScale]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     document.querySelector('main')?.scrollTo(0, 0);
@@ -269,17 +276,8 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     };
     window.addEventListener('google-auth-change', handleAuthChange);
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setEditingTask(null);
-        setShowSettings(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-
     return () => {
       window.removeEventListener('google-auth-change', handleAuthChange);
-      window.removeEventListener('keydown', handleKeyDown);
     };
   }, [updateSyncHealth]);
 
@@ -877,7 +875,15 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                 isOverCapacity={memoizedIsOverCapacity}
                 getDeadlineColor={memoizedGetDeadlineColor}
                 formatTimeLeft={memoizedFormatTimeLeft}
+                onNotice={setNotice}
               />
+            )}
+          </AnimatePresence>
+          <AnimatePresence>
+            {notice && (
+              <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} role="status" className="fixed left-1/2 top-4 z-[260] max-w-[min(92vw,36rem)] -translate-x-1/2 rounded-xl border border-amber-400/40 bg-amber-950/95 px-4 py-3 text-sm font-bold text-amber-100 shadow-2xl">
+                {notice}
+              </motion.div>
             )}
           </AnimatePresence>
 

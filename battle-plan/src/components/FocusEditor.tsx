@@ -1,10 +1,12 @@
-import { motion } from 'framer-motion';
 import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass, Sun } from 'lucide-react';
 import type { UnifiedTask, GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import React, { useState, useEffect } from 'react';
 import type { Task } from '../db';
 import { formatDuration, parseDuration } from '../utils/calendarUtils';
+import type { EditorSaveOutcome } from '../hooks/useTaskCommands';
+import { getEditorCloseIntent } from '../utils/editorInteraction';
+import { OverlaySurface } from './ui/OverlaySurface';
 
 interface FocusEditorProps {
     editingTask: UnifiedTask;
@@ -15,14 +17,15 @@ interface FocusEditorProps {
     startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void | Promise<void>;
     setActiveVoiceUpdateId: (id: number | null) => void;
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
-    handleDeleteTask: (task: UnifiedTask) => void;
+    handleDeleteTask: (task: UnifiedTask) => Promise<boolean>;
     handleSyncToGoogle: (task: UnifiedTask) => void;
-    handleSaveEdit: () => void;
+    handleSaveEdit: () => Promise<EditorSaveOutcome>;
     handleToggleTask: (task: UnifiedTask) => Promise<UnifiedTask | null>;
     googleAuth: GoogleAuthStatus;
     isOverCapacity: (task: UnifiedTask) => boolean;
     getDeadlineColor: (date?: string, time?: string) => string;
     formatTimeLeft: (date?: string, time?: string) => string;
+    onNotice: (message: string) => void;
 }
 
 export function FocusEditor({
@@ -41,9 +44,60 @@ export function FocusEditor({
     googleAuth,
     isOverCapacity,
     getDeadlineColor,
-    formatTimeLeft
+    formatTimeLeft,
+    onNotice,
 }: FocusEditorProps) {
     const [isTogglingTask, setIsTogglingTask] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [editorError, setEditorError] = useState<string | null>(null);
+    const initialSnapshot = React.useRef(JSON.stringify({ ...editingTask, updatedAt: 0 }));
+    const isDirty = initialSnapshot.current !== JSON.stringify({ ...editingTask, updatedAt: 0 });
+
+    const requestClose = () => {
+        const intent = getEditorCloseIntent({
+            recording: isRecording && activeVoiceUpdateId === editingTask.id,
+            dirty: isDirty,
+        });
+        if (intent === 'stop-recording') {
+            stopRecording();
+            return;
+        }
+        if (intent === 'confirm-discard' && !confirm('Zahodit neuložené změny?')) return;
+        setEditingTask(null);
+    };
+
+    const deleteTask = async () => {
+        if (isDeleting || isSaving) return;
+        setIsDeleting(true);
+        setEditorError(null);
+        try {
+            if (await handleDeleteTask(editingTask)) setEditingTask(null);
+        } catch (error) {
+            setEditorError(error instanceof Error ? error.message : 'Záznam se nepodařilo smazat.');
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    const saveTask = async () => {
+        if (isSaving || isDeleting) return;
+        setIsSaving(true);
+        setEditorError(null);
+        try {
+            const outcome = await handleSaveEdit();
+            if (outcome.status === 'failed') {
+                setEditorError(outcome.message);
+                return;
+            }
+            setEditingTask(null);
+            if (outcome.status === 'success-sync-warning') onNotice(outcome.message);
+        } catch (error) {
+            setEditorError(error instanceof Error ? error.message : 'Změny se nepodařilo uložit.');
+        } finally {
+            setIsSaving(false);
+        }
+    };
 
     const toggleWholeTask = async () => {
         if (isTogglingTask) return;
@@ -57,14 +111,13 @@ export function FocusEditor({
     };
 
     return (
-        <div className="fixed inset-0 md:left-64 z-[100] flex items-stretch justify-center bg-slate-950/80 backdrop-blur-md overflow-hidden">
-            <motion.div
-                initial={{ x: '100%', opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: '100%', opacity: 0 }}
-                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                className="w-full h-full bg-slate-900 border-l border-white/5 shadow-[0_0_50px_rgba(0,0,0,0.5)] flex flex-col relative"
-            >
+        <OverlaySurface
+            title={`Focus editor: ${editingTask.title}`}
+            onRequestClose={requestClose}
+            variant="sheet"
+            closeOnBackdrop={false}
+            className="relative flex h-full w-full flex-col overflow-hidden border-l border-white/10 bg-slate-900 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+        >
                 <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-indigo-600 to-blue-500" />
 
                 {/* EDITOR HEADER */}
@@ -81,6 +134,7 @@ export function FocusEditor({
                     <div className="flex items-center gap-3">
                         {!editingTask.isGoogleTask && (
                             <button
+                                aria-label={activeVoiceUpdateId === editingTask.id ? 'Zastavit diktování' : 'Spustit diktování'}
                                 onClick={() => {
                                     if (activeVoiceUpdateId === editingTask.id) {
                                         stopRecording();
@@ -104,7 +158,8 @@ export function FocusEditor({
                         )}
                         <button
                             disabled={isRecording && activeVoiceUpdateId === editingTask.id}
-                            onClick={() => setEditingTask(null)}
+                            onClick={requestClose}
+                            aria-label="Zavřít editor"
                             className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 text-slate-700 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
                         >
                             <X className="w-6 h-6" />
@@ -114,6 +169,11 @@ export function FocusEditor({
 
                 {/* EDITOR CONTENT - SCROLLABLE AREA */}
                 <div className="flex-1 overflow-y-auto no-scrollbar">
+                    {editorError && (
+                        <div role="alert" className="mx-4 mt-4 rounded-xl border border-red-500/40 bg-red-950/70 px-4 py-3 text-sm font-bold text-red-200 md:mx-10">
+                            {editorError}
+                        </div>
+                    )}
                     <div className="grid grid-cols-1 lg:grid-cols-12 h-full w-full">
 
                         {/* MAIN CONTENT (LEFT) */}
@@ -305,16 +365,16 @@ export function FocusEditor({
                 </div>
 
                 {/* EDITOR FOOTER */}
-                <div className="p-6 md:px-12 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-4">
+                <div className="grid grid-cols-1 gap-3 border-t border-slate-800 bg-slate-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:flex md:items-center md:justify-between md:px-12">
                     <button
-                        disabled={isRecording && activeVoiceUpdateId === editingTask.id}
-                        onClick={() => { handleDeleteTask(editingTask); setEditingTask(null); }}
-                        className={`px-4 md:px-6 py-3.5 rounded-xl border transition-all shadow-lg shadow-red-500/5 text-xs md:text-sm font-black uppercase ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 border-slate-700 text-slate-600 cursor-not-allowed' : 'bg-red-600/10 border-red-500/20 text-red-500 hover:bg-red-600 hover:text-white'}`}
+                        disabled={(isRecording && activeVoiceUpdateId === editingTask.id) || isDeleting || isSaving}
+                        onClick={() => { void deleteTask(); }}
+                        className={`surface-action min-h-11 px-4 text-xs uppercase md:px-6 md:text-sm ${isRecording && activeVoiceUpdateId === editingTask.id ? 'cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-600' : 'border-red-500/20 bg-red-600/10 text-red-400 hover:bg-red-600 hover:text-white'}`}
                     >
-                        {window.innerWidth < 768 ? 'Smazat' : 'Odstranit záznam'}
+                        {isDeleting ? 'Mažu…' : 'Odstranit záznam'}
                     </button>
 
-                    <div className="flex items-center gap-4">
+                    <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:justify-end">
                         {editingTask.type === 'task' && (
                             <button
                                 type="button"
@@ -322,7 +382,7 @@ export function FocusEditor({
                                 disabled={isTogglingTask}
                                 aria-pressed={editingTask.status === 'completed'}
                                 aria-busy={isTogglingTask}
-                                className={`px-4 md:px-6 py-3.5 rounded-xl border transition-all text-xs md:text-sm font-black uppercase flex items-center gap-2 ${editingTask.status === 'completed' ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-200 hover:border-emerald-500/60'} disabled:opacity-50 disabled:cursor-wait`}
+                                className={`surface-action min-w-0 gap-2 px-4 text-xs uppercase md:px-6 md:text-sm ${editingTask.status === 'completed' ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-200 hover:border-emerald-500/60'} disabled:opacity-50 disabled:cursor-wait`}
                             >
                                 <CheckCircle2 className="w-4 h-4" />
                                 {isTogglingTask ? 'Ukládám…' : editingTask.status === 'completed' ? 'Znovu otevřít' : 'Označit splněno'}
@@ -331,52 +391,25 @@ export function FocusEditor({
                         {editingTask.type === 'meeting' && !editingTask.isGoogleTask && hasUsableAuth(googleAuth) && (
                             <button
                                 onClick={() => handleSyncToGoogle(editingTask)}
-                                className={`px-8 py-3.5 rounded-xl text-sm font-black uppercase flex items-center gap-2 transition-all ${editingTask.googleEventId ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-emerald-400 border border-emerald-500/30'}`}
+                                className={`surface-action min-w-0 gap-2 px-5 text-xs uppercase md:text-sm ${editingTask.googleEventId ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-emerald-400 border-emerald-500/30'}`}
                             >
                                 <Share2 className="w-4 h-4" />
                                 {editingTask.googleEventId ? 'Synchronizováno' : 'Odeslat do Kalendáře'}
                             </button>
                         )}
 
-                        <div className="flex items-center gap-3">
-                            {!editingTask.isGoogleTask && (
-                                <button
-                                    onClick={() => {
-                                        if (activeVoiceUpdateId === editingTask.id) {
-                                            stopRecording();
-                                        } else {
-                                            activeVoiceUpdateIdRef.current = editingTask.id!;
-                                            setActiveVoiceUpdateId(editingTask.id!);
-                                            void Promise.resolve(startRecording({
-                                                enableFeedback: true,
-                                                onSilence: () => stopRecording(),
-                                                silenceThreshold: -45,
-                                                silenceDuration: 4000
-                                            })).catch((err: unknown) => {
-                                                console.error('Focus voice recording failed', err);
-                                            });
-                                        }
-                                    }}
-                                    className={`h-11 px-4 rounded-xl transition-all border flex items-center gap-2 font-black uppercase text-xs ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-orange-600/10 border-orange-500/30 text-orange-500 hover:bg-orange-600/20 shadow-lg shadow-orange-950/10'}`}
-                                >
-                                    <Mic className="w-4 h-4" />
-                                    {activeVoiceUpdateId === editingTask.id ? 'Zastavit' : 'Diktovat'}
-                                </button>
-                            )}
-
-                            <button
-                                onClick={handleSaveEdit}
-                                className="px-6 md:px-12 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-xs rounded-xl shadow-xl shadow-indigo-600/30 transition-all active:scale-95 whitespace-nowrap"
-                            >
-                                <Save className="w-4 h-4 md:mr-2 inline" />
-                                <span className="hidden md:inline">Uložit změny</span>
-                                <span className="md:hidden">Uložit</span>
-                            </button>
-                        </div>
+                        <button
+                            onClick={() => { void saveTask(); }}
+                            disabled={isSaving || isDeleting}
+                            aria-busy={isSaving}
+                            className="surface-action min-w-0 gap-2 border-indigo-500/40 bg-indigo-600 px-6 text-xs uppercase text-white shadow-xl shadow-indigo-600/30 hover:bg-indigo-500 disabled:cursor-wait disabled:opacity-60 md:px-10"
+                        >
+                            <Save className="h-4 w-4" />
+                            {isSaving ? 'Ukládám…' : 'Uložit změny'}
+                        </button>
                     </div>
                 </div>
-            </motion.div>
-        </div>
+        </OverlaySurface>
     );
 }
 
