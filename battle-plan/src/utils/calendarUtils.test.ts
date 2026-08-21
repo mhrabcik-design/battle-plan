@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getWeeklyReschedulePatch, snapWeeklyMinute } from './calendarUtils.ts';
+import { getWeeklyReschedulePatch, isWeeklyScheduleNoop, snapWeeklyMinute } from './calendarUtils.ts';
 import type { UnifiedTask } from '../types.ts';
 
 const task = (overrides: Partial<UnifiedTask>): UnifiedTask => ({
@@ -40,4 +40,10 @@ test('weekly minutes snap to quarter hours and clamp a full block into the day',
     assert.equal(snapWeeklyMinute(8 * 60 + 8, 60), 8 * 60 + 15);
     assert.equal(snapWeeklyMinute(6 * 60, 60), 7 * 60);
     assert.equal(snapWeeklyMinute(19 * 60, 60), 18 * 60);
+});
+
+test('weekly no-op comparison uses the semantic task and meeting fields', () => {
+    const original = task({ date: '2026-08-12', deadline: '2026-08-12', startTime: '11:00', isAllDay: false });
+    assert.equal(isWeeklyScheduleNoop(original, { date: '2026-08-12', deadline: '2026-08-12', startTime: '11:00', isAllDay: false }), true);
+    assert.equal(isWeeklyScheduleNoop(original, { date: '2026-08-13', deadline: '2026-08-13', startTime: '11:00', isAllDay: false }), false);
 });

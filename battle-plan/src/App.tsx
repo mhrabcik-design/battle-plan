@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
 import { useDriveSyncOrchestration } from './hooks/useDriveSyncOrchestration';
@@ -583,6 +583,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
     : isProcessing;
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
       <Sidebar
         viewMode={viewMode}
@@ -803,7 +804,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           )}
 
           {showTaskGrid && (
-            <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-start">
+            <section className="task-grid">
               <AnimatePresence mode="popLayout">
                 {visibleGridTasks.length === 0 ? (
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-20 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
@@ -946,6 +947,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
         </div>
       </main>
     </div>
+    </MotionConfig>
   );
 }
 

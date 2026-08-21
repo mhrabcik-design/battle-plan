@@ -1,7 +1,14 @@
 import { motion } from 'framer-motion';
-import { AlertCircle, Mail, X, Clock, Users, Lightbulb, CheckCircle2, Hourglass, Mic, FileText, Trash2 } from 'lucide-react';
+import { AlertCircle, Mail, Clock, Users, Lightbulb, CheckCircle2, Hourglass, Mic, FileText, Trash2 } from 'lucide-react';
 import type { UnifiedTask } from '../types';
-import { getTaskCompletionClasses } from '../utils/taskListPresentation';
+import { getTaskCompletionClasses, getTaskVisualTone, type TaskVisualTone } from '../utils/taskListPresentation';
+
+const toneStyles: Record<TaskVisualTone, { accent: string; label: string }> = {
+    task: { accent: 'rgb(99 102 241)', label: 'Úkol' },
+    meeting: { accent: 'rgb(249 115 22)', label: 'Schůzka' },
+    completed: { accent: 'rgb(16 185 129)', label: 'Splněno' },
+    danger: { accent: 'rgb(239 68 68)', label: 'Nedostatek kapacity' },
+};
 
 interface TaskCardProps {
     task: UnifiedTask;
@@ -42,41 +49,42 @@ export function TaskCard({
 }: TaskCardProps) {
     const isCompleted = task.status === 'completed';
     const completionClasses = getTaskCompletionClasses(isCompleted, useCompletedTaskTreatment);
+    const overCapacity = isOverCapacity(task);
+    const visualTone = getTaskVisualTone(task, overCapacity);
 
     return (
-        <motion.div
+        <motion.article
             layout
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98 }}
-            className={`office-card group relative ${completionClasses.card} ${isOverCapacity(task) ? 'animate-pulse-red border-red-500/40 bg-red-950/20' : ''}`}
+            exit={{ opacity: 0, scale: 0.985 }}
+            transition={{ layout: { type: 'spring', stiffness: 420, damping: 36, mass: 0.7 }, opacity: { duration: 0.18 } }}
+            style={{ '--task-accent': toneStyles[visualTone].accent } as React.CSSProperties}
+            className={`office-card task-card group relative flex min-w-0 flex-col overflow-clip ${completionClasses.card} ${overCapacity ? 'animate-pulse-red border-red-500/40 bg-red-950/20' : ''}`}
         >
-            {isOverCapacity(task) && (
-                <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 bg-red-500/20 border border-red-500/40 rounded-full text-red-400 z-20">
-                    <AlertCircle className="w-3 h-3" />
-                    <span className="text-xs font-black uppercase tracking-widest">Nedostatek kapacity</span>
-                </div>
-            )}
-
-            <div className="flex justify-between items-start mb-3">
-                <div className="flex items-center gap-2">
+            <span className="sr-only">{toneStyles[visualTone].label}</span>
+            <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <div className={`text-xs font-black uppercase tracking-widest px-2 py-0.5 rounded border ${getUrgencyColor(task.urgency)}`}>
                         {task.isGoogleTask ? 'Google Task' : task.urgency === 3 ? 'Urgentní' : task.urgency === 1 ? 'Bez urgentnosti' : 'Normální'}
                     </div>
                     {task.isGoogleTask && (
                         <div className="w-4 h-4 bg-blue-600 rounded flex items-center justify-center text-xs font-black text-white shadow-sm">G</div>
                     )}
-                </div>
-                <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-500 hover:text-white transition-all"><Mail className="w-3.5 h-3.5" /></button>
-                    <button onClick={(e) => { e.stopPropagation(); handleDeleteTask(task); }} className="p-1.5 rounded-lg bg-red-900/10 text-red-500/50 hover:text-red-400 hover:bg-red-900/20 transition-all"><X className="w-3.5 h-3.5" /></button>
+                    {overCapacity && (
+                        <div className="flex min-w-0 items-center gap-1.5 rounded-full border border-red-500/40 bg-red-500/15 px-2 py-1 text-red-300">
+                            <AlertCircle className="h-3 w-3 shrink-0" />
+                            <span className="truncate text-xs font-black uppercase tracking-wider">Nedostatek kapacity</span>
+                        </div>
+                    )}
                     {task.startTime && (
-                        <div className="h-6 px-2 bg-slate-800 rounded-md flex items-center gap-1.5 border border-slate-700">
-                            <Clock className="w-3 h-3 text-indigo-400" />
+                        <div className="flex h-7 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2">
+                            <Clock className="h-3 w-3 text-indigo-400" />
                             <span className="text-xs font-black text-white">{task.startTime}</span>
                         </div>
                     )}
                 </div>
+                <button aria-label={`Exportovat ${task.title}`} onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="surface-action h-11 w-11 shrink-0 bg-slate-800/60 text-slate-400 hover:border-indigo-500/40 hover:text-white"><Mail className="h-4 w-4" /></button>
             </div>
 
             <div className="mb-4">
@@ -89,11 +97,11 @@ export function TaskCard({
                         <p className="text-xs text-slate-500 line-clamp-2 font-medium leading-relaxed mb-3">{task.description}</p>
 
                         {task.type === 'task' && task.deadline && (
-                            <div className={`mt-2 flex items-center gap-2 p-2 rounded-lg border ${isOverCapacity(task) ? 'bg-red-500/10 border-red-500/30' : 'bg-slate-800/40 border-slate-700/60'}`}>
-                                <Hourglass className={`w-3.5 h-3.5 ${isOverCapacity(task) ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`} />
+                            <div className={`mt-2 flex min-w-0 flex-wrap items-center gap-2 p-2 rounded-lg border ${overCapacity ? 'bg-red-500/10 border-red-500/30' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                <Hourglass className={`w-3.5 h-3.5 ${overCapacity ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`} />
                                 <div className="flex flex-col">
                                     <span className="text-xs font-black text-slate-500 uppercase tracking-widest">Do termínu zbývá</span>
-                                    <span className={`text-xs font-black uppercase tracking-tight ${isOverCapacity(task) ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`}>
+                                    <span className={`text-xs font-black uppercase tracking-tight ${overCapacity ? 'text-red-400' : getDeadlineColor(task.deadline, task.startTime)}`}>
                                         {formatTimeLeft(task.deadline, task.startTime)}
                                     </span>
                                 </div>
@@ -131,22 +139,23 @@ export function TaskCard({
                 </div>
             )}
 
-            <div className="flex gap-2 pt-3 border-t border-slate-800/50 mt-auto">
+            <div className="task-action-rail mt-auto border-t border-slate-800/50 pt-3">
                 <button
                     onClick={(e) => { e.stopPropagation(); handleDeleteTask(task); }}
-                    className="h-9 px-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 hover:bg-red-500/20 transition-all flex items-center justify-center"
+                    aria-label={`Smazat ${task.title}`}
+                    className="surface-action h-11 bg-red-500/10 text-red-400 hover:border-red-500/40 hover:bg-red-500/20"
                     title="Smazat"
                 >
                     <Trash2 className="w-3.5 h-3.5" />
                 </button>
                 <button
                     onClick={async () => handleToggleTask(task)}
-                    className={`h-9 px-4 flex-1 rounded-lg text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${isCompleted ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                    className={`surface-action h-11 min-w-0 gap-2 px-2 text-xs uppercase ${isCompleted ? 'border-emerald-500/40 bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
                 >
                     {isCompleted ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
                     {isCompleted ? 'Hotovo' : 'Splnit'}
                 </button>
-                <button onClick={() => setEditingTask(task)} className="h-9 px-4 flex-1 rounded-lg bg-slate-800/50 text-slate-400 hover:text-slate-200 hover:bg-slate-700 text-xs font-black uppercase transition-all flex items-center justify-center gap-2">
+                <button onClick={() => setEditingTask(task)} className="surface-action h-11 min-w-0 gap-2 bg-slate-800/50 px-2 text-xs uppercase text-slate-300 hover:bg-slate-700 hover:text-white">
                     <FileText className="w-3.5 h-3.5" /> Detaily
                 </button>
                 {!task.isGoogleTask && (
@@ -167,12 +176,13 @@ export function TaskCard({
                                 });
                             }
                         }}
-                        className={`h-9 px-3 rounded-lg transition-all border ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-orange-600/10 border-orange-500/20 text-orange-500 hover:bg-orange-600/20'}`}
+                        aria-label={activeVoiceUpdateId === task.id ? `Zastavit diktování pro ${task.title}` : `Diktovat aktualizaci pro ${task.title}`}
+                        className={`surface-action h-11 ${activeVoiceUpdateId === task.id ? 'bg-red-500 border-red-500 text-white' : 'bg-orange-600/10 border-orange-500/20 text-orange-400 hover:bg-orange-600/20'}`}
                     >
                         <Mic className="w-3.5 h-3.5" />
                     </button>
                 )}
             </div>
-        </motion.div>
+        </motion.article>
     );
 }
