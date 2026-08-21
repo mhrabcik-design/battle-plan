@@ -447,21 +447,21 @@ export function SuggestionCard({
           <button
             onClick={() => onAccept(true)}
             disabled={isProcessing}
-            className="px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 text-[11px] font-black uppercase tracking-widest border border-emerald-600/30 hover:bg-emerald-600/30 transition-all disabled:opacity-40"
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 text-[11px] font-black uppercase tracking-widest border border-emerald-600/30 hover:bg-emerald-600/30 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
           >
             <CheckCircle2 className="w-3 h-3 inline-block mr-1" /> Přijmout + task
           </button>
           <button
             onClick={onReject}
             disabled={isProcessing}
-            className="px-3 py-1.5 rounded-lg bg-red-600/15 text-red-300 text-[11px] font-black uppercase tracking-widest border border-red-600/25 hover:bg-red-600/25 transition-all disabled:opacity-40"
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-red-600/15 text-red-300 text-[11px] font-black uppercase tracking-widest border border-red-600/25 hover:bg-red-600/25 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
           >
             <X className="w-3 h-3 inline-block mr-1" /> Zamítnout
           </button>
           <button
             onClick={() => setShowDeferPicker((v) => !v)}
             disabled={isProcessing}
-            className="px-3 py-1.5 rounded-lg bg-amber-600/15 text-amber-300 text-[11px] font-black uppercase tracking-widest border border-amber-600/25 hover:bg-amber-600/25 transition-all disabled:opacity-40"
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-amber-600/15 text-amber-300 text-[11px] font-black uppercase tracking-widest border border-amber-600/25 hover:bg-amber-600/25 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
           >
             <Hourglass className="w-3 h-3 inline-block mr-1" /> Odložit
           </button>
@@ -472,7 +472,7 @@ export function SuggestionCard({
             }}
             disabled={isProcessing}
             title="Smazat návrh"
-            className="px-3 py-1.5 rounded-lg bg-slate-800/30 text-slate-500 text-[11px] font-black uppercase tracking-widest border border-slate-700/50 hover:text-red-400 hover:border-red-500/30 transition-all disabled:opacity-40"
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-slate-800/30 text-slate-500 text-[11px] font-black uppercase tracking-widest border border-slate-700/50 hover:text-red-400 hover:border-red-500/30 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
           >
             <Trash2 className="w-3 h-3 inline-block mr-1" /> Smazat
           </button>
@@ -480,14 +480,14 @@ export function SuggestionCard({
           <button
             onClick={() => onExpandTextReply(!expandedTextReply)}
             disabled={isProcessing}
-            className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-slate-300 text-[11px] font-black uppercase tracking-widest border border-slate-700/50 hover:bg-slate-800 transition-all disabled:opacity-40"
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-slate-800/50 text-slate-300 text-[11px] font-black uppercase tracking-widest border border-slate-700/50 hover:bg-slate-800 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
           >
             <FileText className="w-3 h-3 inline-block mr-1" /> Text
           </button>
           <button
             onClick={isRecording ? stopVoice : startVoice}
             disabled={isProcessing}
-            className={`px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest border transition-all disabled:opacity-40 ${
+            className={`min-h-9 px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest border transition-[background-color,border-color,color,opacity] disabled:opacity-40 ${
               isRecording
                 ? 'bg-red-600/20 text-red-300 border-red-600/30 animate-pulse'
                 : 'bg-slate-800/50 text-slate-300 border-slate-700/50 hover:bg-slate-800'

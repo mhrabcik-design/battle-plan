@@ -151,7 +151,7 @@ export function FocusEditor({
                                         });
                                     }
                                 }}
-                                className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 border ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-orange-600/20 border-orange-600/30 text-orange-500 hover:bg-orange-600/40'}`}
+                                className={`min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl transition-[background-color,border-color,color,transform] shadow-lg active:scale-95 border ${activeVoiceUpdateId === editingTask.id ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-orange-600/20 border-orange-600/30 text-orange-500 hover:bg-orange-600/40'}`}
                             >
                                 {activeVoiceUpdateId === editingTask.id ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
                             </button>
@@ -160,7 +160,7 @@ export function FocusEditor({
                             disabled={isRecording && activeVoiceUpdateId === editingTask.id}
                             onClick={requestClose}
                             aria-label="Zavřít editor"
-                            className={`p-3 rounded-xl transition-all shadow-lg active:scale-95 ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 text-slate-700 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+                            className={`min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl transition-[background-color,color,transform] shadow-lg active:scale-95 ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 text-slate-700 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
                         >
                             <X className="w-6 h-6" />
                         </button>
@@ -185,7 +185,7 @@ export function FocusEditor({
                                     disabled={editingTask.isGoogleTask}
                                     value={editingTask.title}
                                     onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value, updatedAt: Date.now() })}
-                                    className="w-full bg-slate-800/30 border border-slate-800 rounded-2xl px-6 py-5 text-2xl font-black text-white focus:border-indigo-500 transition-all outline-none"
+                                    className="w-full bg-slate-800/30 border border-slate-800 rounded-2xl px-6 py-5 text-2xl font-black text-white focus:border-indigo-500 transition-[background-color,border-color,color] outline-none"
                                     placeholder="Na čem pracujeme?"
                                 />
                             </div>
@@ -196,7 +196,7 @@ export function FocusEditor({
                                     rows={12}
                                     value={editingTask.description}
                                     onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value, updatedAt: Date.now() })}
-                                    className="w-full bg-slate-800/20 border border-slate-800 rounded-2xl px-6 py-6 text-base font-medium text-slate-300 leading-relaxed focus:bg-slate-800/40 focus:border-indigo-500 transition-all outline-none resize-none"
+                                    className="w-full bg-slate-800/20 border border-slate-800 rounded-2xl px-6 py-6 text-base font-medium text-slate-300 leading-relaxed focus:bg-slate-800/40 focus:border-indigo-500 transition-[background-color,border-color,color] outline-none resize-none"
                                     placeholder="Zde rozveďte své myšlenky..."
                                 />
                             </div>
@@ -208,7 +208,7 @@ export function FocusEditor({
                                         rows={8}
                                         value={editingTask.internalNotes || ''}
                                         onChange={(e) => setEditingTask({ ...editingTask, internalNotes: e.target.value, updatedAt: Date.now() })}
-                                        className="w-full bg-indigo-950/10 border border-indigo-900/20 rounded-2xl px-6 py-6 text-sm italic font-medium text-indigo-300/60 leading-relaxed focus:border-indigo-500 transition-all outline-none resize-none"
+                                        className="w-full bg-indigo-950/10 border border-indigo-900/20 rounded-2xl px-6 py-6 text-sm italic font-medium text-indigo-300/60 leading-relaxed focus:border-indigo-500 transition-[background-color,border-color,color] outline-none resize-none"
                                         placeholder="Dodatečné technické poznámky nebo AI instrukce..."
                                     />
                                 </div>
@@ -319,7 +319,7 @@ export function FocusEditor({
                                                 const newSubTasks = [...(editingTask.subTasks || []), { id: Date.now().toString(), title: '', completed: false }];
                                                 setEditingTask({ ...editingTask, subTasks: newSubTasks, updatedAt: Date.now() });
                                             }}
-                                            className="text-sm bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-all font-black uppercase"
+                                            className="min-h-9 text-sm bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-[background-color,border-color,color] font-black uppercase"
                                         >
                                             + Přidat krok
                                         </button>
@@ -333,7 +333,7 @@ export function FocusEditor({
                                                         const newSubTasks = editingTask.subTasks?.map(item => item.id === st.id ? { ...item, completed: !item.completed } : item);
                                                         setEditingTask({ ...editingTask, subTasks: newSubTasks, updatedAt: Date.now() });
                                                     }}
-                                                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-slate-700 hover:border-indigo-500'}`}
+                                                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 mt-0.5 transition-[background-color,border-color] ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-slate-700 hover:border-indigo-500'}`}
                                                 >
                                                     {st.completed && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
                                                 </button>
@@ -351,7 +351,7 @@ export function FocusEditor({
                                                         const newSubTasks = editingTask.subTasks?.filter(item => item.id !== st.id);
                                                         setEditingTask({ ...editingTask, subTasks: newSubTasks, updatedAt: Date.now() });
                                                     }}
-                                                    className="p-1 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                                                    className="min-h-9 min-w-9 inline-flex items-center justify-center rounded-lg text-slate-600 hover:bg-red-500/10 hover:text-red-400 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-[background-color,color,opacity]"
                                                 >
                                                     <X className="w-4 h-4" />
                                                 </button>
@@ -463,7 +463,7 @@ function DurationAllDayEditor({
                 type="button"
                 onClick={handleAllDayToggle}
                 disabled={isGoogleTask}
-                className={`w-full flex items-center justify-between gap-3 p-3 rounded-xl border transition-all ${isAllDay ? 'bg-amber-500/10 border-amber-500/40 shadow-lg shadow-amber-500/5' : 'bg-slate-800/40 border-slate-700/60 hover:border-slate-600'} ${isGoogleTask ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer active:scale-[0.99]'}`}
+                className={`w-full flex items-center justify-between gap-3 p-3 rounded-xl border transition-[background-color,border-color,color,opacity,transform] ${isAllDay ? 'bg-amber-500/10 border-amber-500/40 shadow-lg shadow-amber-500/5' : 'bg-slate-800/40 border-slate-700/60 hover:border-slate-600'} ${isGoogleTask ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer active:scale-[0.99]'}`}
             >
                 <div className="flex items-center gap-2.5">
                     <Sun className={`w-4 h-4 ${isAllDay ? 'text-amber-400' : 'text-slate-500'}`} />
@@ -476,8 +476,8 @@ function DurationAllDayEditor({
                         </span>
                     </div>
                 </div>
-                <div className={`w-10 h-5 rounded-full transition-all relative ${isAllDay ? 'bg-amber-500' : 'bg-slate-700'}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-md transition-all ${isAllDay ? 'left-5' : 'left-0.5'}`} />
+                <div className={`w-10 h-5 rounded-full transition-colors relative ${isAllDay ? 'bg-amber-500' : 'bg-slate-700'}`}>
+                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-md transition-[left] ${isAllDay ? 'left-5' : 'left-0.5'}`} />
                 </div>
             </button>
 
@@ -496,7 +496,7 @@ function DurationAllDayEditor({
                         onChange={(e) => setDurationText(e.target.value)}
                         onBlur={handleDurationBlur}
                         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 focus:border-indigo-500 transition-all"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 focus:border-indigo-500 transition-[background-color,border-color,color]"
                     />
                 </div>
             )}

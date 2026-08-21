@@ -115,7 +115,7 @@ export function TaskCard({
                 <div className="space-y-2 mb-6 ml-11">
                     {task.subTasks.slice(0, 3).map(st => (
                         <button key={st.id} onClick={() => toggleSubtask(task, st.id)} className="flex items-center gap-2 group/st w-full">
-                            <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-slate-700 group-hover/st:border-indigo-500'}`}>
+                            <div className={`w-4 h-4 rounded-md border-2 flex items-center justify-center shrink-0 transition-[background-color,border-color] ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-slate-700 group-hover/st:border-indigo-500'}`}>
                                 {st.completed && <CheckCircle2 className="w-3 h-3 text-white" />}
                             </div>
                             <span className={`text-sm font-bold ${st.completed ? 'text-slate-600 line-through' : 'text-slate-400 group-hover/st:text-slate-200'}`}>{st.title}</span>

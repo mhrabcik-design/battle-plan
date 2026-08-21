@@ -52,7 +52,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             type="password"
                             value={apiKey}
                             onChange={(e) => setApiKey(e.target.value)}
-                            className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm focus:border-indigo-500/50 outline-none transition-all"
+                            className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm focus:border-indigo-500/50 outline-none transition-[background-color,border-color,color]"
                             placeholder="Vložte svůj klíč..."
                         />
                     </div>
@@ -110,7 +110,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         ) : (
                             <button
                                 onClick={() => googleService.signIn()}
-                                className="w-full py-4 bg-white hover:bg-slate-200 text-slate-900 rounded-2xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-all active:scale-95"
+                                className="w-full py-4 bg-white hover:bg-slate-200 text-slate-900 rounded-2xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-[background-color,color,transform] active:scale-95"
                             >
                                 Google Přihlášení
                             </button>
@@ -120,7 +120,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 <button
                     onClick={saveSettings}
-                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 transition-all active:scale-95 rounded-2xl text-white font-black uppercase text-xs flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/20"
+                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 transition-[background-color,color,transform] active:scale-95 rounded-2xl text-white font-black uppercase text-xs flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/20"
                 >
                     <Save className="w-4 h-4" />
                     Uložit vše

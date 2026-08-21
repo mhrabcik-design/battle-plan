@@ -177,7 +177,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                         <button
                             type="button"
                             onClick={onCancelled}
-                            className="p-2 text-slate-500 hover:text-white transition-all"
+                            className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-800/70 hover:text-white transition-[background-color,color]"
                         >
                             <X className="w-5 h-5" />
                         </button>
@@ -218,7 +218,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                                         <button
                                             type="button"
                                             onClick={() => removeEntry(entry.localId)}
-                                            className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-all"
+                                            className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg text-red-400 hover:bg-red-500/10 transition-colors"
                                             title="Odebrat řádek"
                                         >
                                             <Trash2 className="w-4 h-4" />

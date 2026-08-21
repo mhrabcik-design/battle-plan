@@ -106,14 +106,14 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
                     <button
                         type="button"
                         onClick={() => setMonthKey(currentMonthKey(monthKeyToOffset(monthKey) - 1))}
-                        className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"
+                        className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-[background-color,border-color,color] border border-slate-700/50"
                     >
                         <ChevronLeft className="w-4 h-4" />
                     </button>
                     <button
                         type="button"
                         onClick={() => setMonthKey(currentMonthKey(0))}
-                        className="px-3 py-1 rounded-lg bg-slate-800/50 text-xs font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-all border border-slate-700/50"
+                        className="min-h-11 px-3 py-1 rounded-lg bg-slate-800/50 text-xs font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-[background-color,border-color,color] border border-slate-700/50"
                     >
                         Dnes
                     </button>
@@ -123,7 +123,7 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
                     <button
                         type="button"
                         onClick={() => setMonthKey(currentMonthKey(monthKeyToOffset(monthKey) + 1))}
-                        className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"
+                        className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-[background-color,border-color,color] border border-slate-700/50"
                     >
                         <ChevronRight className="w-4 h-4" />
                     </button>
@@ -202,7 +202,7 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
                                 type="button"
                                 onClick={() => dayLogs.length > 0 && setSelectedDate(cell.dateKey)}
                                 disabled={dayLogs.length === 0}
-                                className={`min-h-[90px] p-2 border-r border-b border-slate-800/30 text-left transition-all relative ${
+                                className={`min-h-[90px] p-2 border-r border-b border-slate-800/30 text-left transition-[background-color,border-color,color,opacity] relative ${
                                     dayLogs.length > 0 ? 'hover:bg-slate-800/40 cursor-pointer' : 'cursor-default'
                                 } ${isToday ? 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/40' : ''}`}
                             >

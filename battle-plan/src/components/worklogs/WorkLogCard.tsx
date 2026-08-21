@@ -294,7 +294,7 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
                         <button
                             type="button"
                             onClick={startEditing}
-                            className="p-1.5 text-slate-500 hover:text-indigo-400 transition-all"
+                            className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-800/70 hover:text-indigo-400 transition-[background-color,color]"
                             title="Upravit"
                         >
                             <Edit3 className="w-3.5 h-3.5" />
@@ -302,7 +302,7 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
                         <button
                             type="button"
                             onClick={() => setConfirmDelete((c) => !c)}
-                            className="p-1.5 text-slate-500 hover:text-red-400 transition-all"
+                            className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-red-500/10 hover:text-red-400 transition-[background-color,color]"
                             title="Smazat"
                         >
                             <Trash2 className="w-3.5 h-3.5" />
