@@ -28,6 +28,8 @@ interface FocusEditorProps {
     onNotice: (message: string) => void;
 }
 
+const taskSnapshot = (task: UnifiedTask) => JSON.stringify({ ...task, updatedAt: 0 });
+
 export function FocusEditor({
     editingTask,
     setEditingTask,
@@ -51,8 +53,8 @@ export function FocusEditor({
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [editorError, setEditorError] = useState<string | null>(null);
-    const initialSnapshot = React.useRef(JSON.stringify({ ...editingTask, updatedAt: 0 }));
-    const isDirty = initialSnapshot.current !== JSON.stringify({ ...editingTask, updatedAt: 0 });
+    const initialSnapshot = React.useRef(taskSnapshot(editingTask));
+    const isDirty = initialSnapshot.current !== taskSnapshot(editingTask);
 
     const requestClose = () => {
         const intent = getEditorCloseIntent({
@@ -73,6 +75,7 @@ export function FocusEditor({
         setEditorError(null);
         try {
             if (await handleDeleteTask(editingTask)) setEditingTask(null);
+            else setEditorError('Záznam se nepodařilo smazat. Zkontrolujte připojení a přihlášení.');
         } catch (error) {
             setEditorError(error instanceof Error ? error.message : 'Záznam se nepodařilo smazat.');
         } finally {
@@ -104,7 +107,10 @@ export function FocusEditor({
         setIsTogglingTask(true);
         try {
             const updatedTask = await handleToggleTask(editingTask);
-            if (updatedTask) setEditingTask(updatedTask);
+            if (updatedTask) {
+                initialSnapshot.current = taskSnapshot(updatedTask);
+                setEditingTask(updatedTask);
+            }
         } finally {
             setIsTogglingTask(false);
         }

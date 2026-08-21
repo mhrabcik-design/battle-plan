@@ -607,25 +607,27 @@ class GoogleService {
         }
     }
 
-    async deleteGoogleTask(taskId: string, taskListId: string = '@default') {
-        if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
-        if (!this.googleTasksScopeAvailable) return;
+    async deleteGoogleTask(taskId: string, taskListId: string = '@default'): Promise<boolean> {
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') return false;
+        if (!this.googleTasksScopeAvailable) return false;
         try {
             await window.gapi.client.tasks.tasks.delete({
                 tasklist: taskListId,
                 task: taskId
             });
+            return true;
         } catch (e: unknown) {
             if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
-                return;
+                return false;
             }
             if (isInsufficientScopeError(e)) {
                 this.googleTasksScopeAvailable = false;
                 console.warn('Google Tasks scope unavailable; keeping Google auth active', e);
-                return;
+                return false;
             }
             console.error('Error deleting Google Task', e);
+            return false;
         }
     }
 

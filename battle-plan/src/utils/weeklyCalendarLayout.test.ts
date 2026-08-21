@@ -42,6 +42,17 @@ test('cascades dense groups instead of shrinking below the minimum width', () =>
   ], 100);
   assert.equal(result.filter(item => item.visible).length, 1);
   assert.equal(result.find(item => item.visible)?.hiddenCount, 2);
+  assert.deepEqual(result.find(item => item.visible)?.hiddenIds, ['b', 'c']);
+});
+
+test('keeps hidden disclosure available across transitive overlap carriers', () => {
+  const result = layoutCalendarIntervals([
+    { id: 'a', startMinute: 540, endMinute: 600 },
+    { id: 'b', startMinute: 570, endMinute: 660 },
+    { id: 'c', startMinute: 600, endMinute: 720 },
+  ], 56);
+  assert.deepEqual(result.find(item => item.id === 'a')?.hiddenIds, ['b']);
+  assert.deepEqual(result.find(item => item.id === 'c')?.hiddenIds, ['b']);
 });
 
 test('density exposes only content that fits the rendered block', () => {

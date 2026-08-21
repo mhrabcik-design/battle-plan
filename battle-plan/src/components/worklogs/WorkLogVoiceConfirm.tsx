@@ -40,6 +40,9 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
         })),
     );
     const [saving, setSaving] = useState(false);
+    const requestClose = () => {
+        if (!saving) onCancelled();
+    };
     const [saveError, setSaveError] = useState<string | null>(null);
     const [catalogLoadError, setCatalogLoadError] = useState<string | null>(null);
 
@@ -156,7 +159,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
     return (
         <OverlaySurface
             title="Ověřit diktování práce"
-            onRequestClose={onCancelled}
+            onRequestClose={requestClose}
             variant="sheet"
             className="flex h-full w-full max-w-5xl flex-col overflow-hidden border-l border-white/10 bg-slate-900 shadow-2xl"
         >
@@ -176,7 +179,9 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                         </div>
                         <button
                             type="button"
-                            onClick={onCancelled}
+                            onClick={requestClose}
+                            disabled={saving}
+                            aria-label="Zavřít ověření diktování"
                             className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-800/70 hover:text-white transition-[background-color,color]"
                         >
                             <X className="w-5 h-5" />
@@ -312,7 +317,8 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                     <div className="p-5 border-t border-slate-800 flex justify-end gap-2">
                         <button
                             type="button"
-                            onClick={onCancelled}
+                            onClick={requestClose}
+                            disabled={saving}
                             className="flex items-center gap-1.5 px-4 py-2 text-slate-400 hover:text-white text-xs font-black uppercase tracking-widest rounded-lg"
                         >
                             <RotateCcw className="w-3.5 h-3.5" />

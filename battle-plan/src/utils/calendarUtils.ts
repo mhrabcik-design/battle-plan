@@ -160,10 +160,9 @@ export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTa
 };
 
 export const isWeeklyScheduleNoop = (task: UnifiedTask, patch: WeeklySchedulePatch): boolean => (
-    task.date === patch.date
-    && task.deadline === patch.deadline
+    (task.type === 'task' ? task.deadline === patch.deadline : task.date === patch.date)
     && task.startTime === patch.startTime
-    && Boolean(task.isAllDay) === Boolean(patch.isAllDay)
+    && Boolean(task.isAllDay ?? !task.startTime) === Boolean(patch.isAllDay)
 );
 
 export const getUrgencyColor = (urgency?: number) => {

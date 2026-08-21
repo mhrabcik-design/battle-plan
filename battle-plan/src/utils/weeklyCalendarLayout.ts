@@ -11,6 +11,7 @@ export type CalendarLayoutItem = CalendarInterval & {
   columnCount: number;
   visible: boolean;
   hiddenCount: number;
+  hiddenIds: string[];
 };
 
 const DAY_START = 7 * 60;
@@ -40,6 +41,38 @@ export function getCalendarDensity(height: number): 'compact' | 'standard' | 'co
   return 'comfortable';
 }
 
+const heapPush = <T,>(heap: T[], value: T, compare: (left: T, right: T) => number) => {
+  heap.push(value);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (compare(heap[parent], heap[index]) <= 0) break;
+    [heap[parent], heap[index]] = [heap[index], heap[parent]];
+    index = parent;
+  }
+};
+
+const heapPop = <T,>(heap: T[], compare: (left: T, right: T) => number): T | undefined => {
+  if (!heap.length) return undefined;
+  const first = heap[0];
+  const last = heap.pop()!;
+  if (heap.length) {
+    heap[0] = last;
+    let index = 0;
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      let smallest = index;
+      if (left < heap.length && compare(heap[left], heap[smallest]) < 0) smallest = left;
+      if (right < heap.length && compare(heap[right], heap[smallest]) < 0) smallest = right;
+      if (smallest === index) break;
+      [heap[index], heap[smallest]] = [heap[smallest], heap[index]];
+      index = smallest;
+    }
+  }
+  return first;
+};
+
 export function layoutCalendarIntervals(
   intervals: readonly CalendarInterval[],
   availableWidth: number,
@@ -50,36 +83,45 @@ export function layoutCalendarIntervals(
   const output: CalendarLayoutItem[] = [];
   let group: Array<CalendarInterval & { column: number }> = [];
   let active: Array<CalendarInterval & { column: number }> = [];
+  let reusableColumns: number[] = [];
+  let nextColumn = 0;
+  const byEnd = (left: CalendarInterval & { column: number }, right: CalendarInterval & { column: number }) => left.endMinute - right.endMinute || left.column - right.column;
+  const byColumn = (left: number, right: number) => left - right;
 
   const flush = () => {
     if (!group.length) return;
-    const columnCount = Math.max(...group.map(item => item.column)) + 1;
+    const columnCount = nextColumn;
     const visibleColumns = Math.max(1, Math.min(columnCount, Math.floor((availableWidth + gap) / (minimumColumnWidth + gap))));
-    const hiddenCount = group.filter(item => item.column >= visibleColumns).length;
-    let indicatorAssigned = false;
+    const hiddenItems = group.filter(item => item.column >= visibleColumns);
     for (const item of group) {
       const visible = item.column < visibleColumns;
+      const hiddenIds = visible
+        ? hiddenItems.filter(hidden => hidden.startMinute < item.endMinute && hidden.endMinute > item.startMinute).map(hidden => hidden.id)
+        : [];
       output.push({
         ...item,
         columnCount: visibleColumns,
         visible,
-        hiddenCount: visible && !indicatorAssigned && hiddenCount > 0 ? hiddenCount : 0,
+        hiddenCount: hiddenIds.length,
+        hiddenIds,
       });
-      if (visible && !indicatorAssigned) indicatorAssigned = true;
     }
     group = [];
     active = [];
+    reusableColumns = [];
+    nextColumn = 0;
   };
 
   for (const interval of sorted) {
-    active = active.filter(item => item.endMinute > interval.startMinute);
+    while (active.length && active[0].endMinute <= interval.startMinute) {
+      const expired = heapPop(active, byEnd)!;
+      heapPush(reusableColumns, expired.column, byColumn);
+    }
     if (group.length && active.length === 0) flush();
-    const used = new Set(active.map(item => item.column));
-    let column = 0;
-    while (used.has(column)) column += 1;
+    const column = heapPop(reusableColumns, byColumn) ?? nextColumn++;
     const placed = { ...interval, column };
     group.push(placed);
-    active.push(placed);
+    heapPush(active, placed, byEnd);
   }
   flush();
 

@@ -312,7 +312,7 @@ test('lazy refresh: expired token, silent refresh fails — getTasks returns [] 
     assert.deepEqual(tasksResult, []);
     assert.equal(createResult, null);
     assert.equal(updateResult, null);
-    assert.equal(deleteResult, undefined);
+    assert.equal(deleteResult, false);
     assert.equal(addResult, undefined);
     assert.equal(deleteCalResult, undefined);
     assert.equal(signOutCalls, 0);
@@ -1187,7 +1187,7 @@ test('R9: updateGoogleTask 403 keeps Google auth active and returns null', async
     assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
 
-test('R9: deleteGoogleTask PERMISSION_DENIED keeps Google auth active (void return)', async () => {
+test('R9: deleteGoogleTask PERMISSION_DENIED keeps Google auth active and returns false', async () => {
     clearStore();
     seedSignedInStorage();
     installGapiMockThrowing403({
@@ -1196,8 +1196,9 @@ test('R9: deleteGoogleTask PERMISSION_DENIED keeps Google auth active (void retu
     const svc = freshService();
     stubSilentRefresh(svc);
 
-    await svc.deleteGoogleTask('task-1');
+    const result = await svc.deleteGoogleTask('task-1');
 
+    assert.equal(result, false);
     assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
 });
 

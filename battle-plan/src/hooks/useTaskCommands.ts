@@ -145,12 +145,17 @@ export function useTaskCommands({
   const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
     if (!confirm('Opravdu smazat tento záznam?')) return false;
 
-    if (task.isGoogleTask && task.googleId && hasUsableAuth(googleAuth)) {
-      await googleService.deleteGoogleTask(task.googleId, task.googleListId);
-      if (isAuthUnavailableNow()) {
+    if (task.isGoogleTask && task.googleId) {
+      if (!hasUsableAuth(googleAuth)) {
         alert(AUTH_UNAVAILABLE_MSG);
+        return false;
       }
-      refreshGoogleTasks();
+      const deleted = await googleService.deleteGoogleTask(task.googleId, task.googleListId);
+      if (!deleted) {
+        if (isAuthUnavailableNow()) alert(AUTH_UNAVAILABLE_MSG);
+        return false;
+      }
+      await refreshGoogleTasks();
     } else if (task.id) {
       if (task.googleEventId && hasUsableAuth(googleAuth)) {
         try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }

@@ -2,10 +2,26 @@ import { motion } from 'framer-motion';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-const overlayStack: string[] = [];
-let modalCount = 0;
+type OverlayEntry = { id: string; host: HTMLElement };
+
+const overlayStack: OverlayEntry[] = [];
 let previousBodyOverflow = '';
 const inertedElements = new Map<HTMLElement, boolean>();
+
+const syncOverlayInertness = () => {
+  const topHost = overlayStack.at(-1)?.host;
+  if (!topHost) {
+    document.body.style.overflow = previousBodyOverflow;
+    for (const [element, previous] of inertedElements) element.inert = previous;
+    inertedElements.clear();
+    return;
+  }
+  for (const child of Array.from(document.body.children)) {
+    if (!(child instanceof HTMLElement)) continue;
+    if (!inertedElements.has(child)) inertedElements.set(child, child.inert);
+    child.inert = child !== topHost;
+  }
+};
 
 const focusableSelector = [
   'button:not([disabled])',
@@ -56,18 +72,13 @@ export function OverlaySurface({
   }, [host, id]);
 
   useEffect(() => {
-    overlayStack.push(id);
+    overlayStack.push({ id, host });
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    modalCount += 1;
-    if (modalCount === 1) {
+    if (overlayStack.length === 1) {
       previousBodyOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
-      for (const child of Array.from(document.body.children)) {
-        if (!(child instanceof HTMLElement) || child === host) continue;
-        inertedElements.set(child, child.inert);
-        child.inert = true;
-      }
     }
+    syncOverlayInertness();
 
     const focusPanel = requestAnimationFrame(() => {
       const autofocus = panelRef.current?.querySelector<HTMLElement>('[autofocus]');
@@ -76,7 +87,7 @@ export function OverlaySurface({
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (overlayStack.at(-1) !== id) return;
+      if (overlayStack.at(-1)?.id !== id) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -105,15 +116,11 @@ export function OverlaySurface({
     return () => {
       cancelAnimationFrame(focusPanel);
       document.removeEventListener('keydown', onKeyDown, true);
-      const index = overlayStack.lastIndexOf(id);
+      const index = overlayStack.findIndex(entry => entry.id === id);
+      const wasTopmost = index === overlayStack.length - 1;
       if (index >= 0) overlayStack.splice(index, 1);
-      modalCount = Math.max(0, modalCount - 1);
-      if (modalCount === 0) {
-        document.body.style.overflow = previousBodyOverflow;
-        for (const [element, previous] of inertedElements) element.inert = previous;
-        inertedElements.clear();
-      }
-      requestAnimationFrame(() => returnFocusRef.current?.isConnected && returnFocusRef.current.focus());
+      syncOverlayInertness();
+      if (wasTopmost) requestAnimationFrame(() => returnFocusRef.current?.isConnected && returnFocusRef.current.focus());
     };
   }, [host, id]);
 

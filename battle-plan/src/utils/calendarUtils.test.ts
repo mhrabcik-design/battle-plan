@@ -43,7 +43,13 @@ test('weekly minutes snap to quarter hours and clamp a full block into the day',
 });
 
 test('weekly no-op comparison uses the semantic task and meeting fields', () => {
-    const original = task({ date: '2026-08-12', deadline: '2026-08-12', startTime: '11:00', isAllDay: false });
-    assert.equal(isWeeklyScheduleNoop(original, { date: '2026-08-12', deadline: '2026-08-12', startTime: '11:00', isAllDay: false }), true);
-    assert.equal(isWeeklyScheduleNoop(original, { date: '2026-08-13', deadline: '2026-08-13', startTime: '11:00', isAllDay: false }), false);
+    const scheduledTask = task({ deadline: '2026-08-12', startTime: '11:00', isAllDay: false });
+    const meeting = task({ type: 'meeting', date: '2026-08-12', startTime: '11:00', isAllDay: false });
+    assert.equal(isWeeklyScheduleNoop(scheduledTask, { date: '2026-08-12', deadline: '2026-08-12', startTime: '11:00', isAllDay: false }), true);
+    assert.equal(isWeeklyScheduleNoop(meeting, { date: '2026-08-12', deadline: '2026-08-12', startTime: '11:00', isAllDay: false }), true);
+    assert.equal(isWeeklyScheduleNoop(scheduledTask, { date: '2026-08-13', deadline: '2026-08-13', startTime: '11:00', isAllDay: false }), false);
+    assert.equal(isWeeklyScheduleNoop(meeting, { date: '2026-08-13', deadline: '2026-08-13', startTime: '11:00', isAllDay: false }), false);
+    assert.equal(isWeeklyScheduleNoop(task({ deadline: '2026-08-12', startTime: undefined, isAllDay: undefined }), {
+        date: '2026-08-12', deadline: '2026-08-12', startTime: undefined, isAllDay: true,
+    }), true);
 });
