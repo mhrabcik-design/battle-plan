@@ -21,6 +21,7 @@ import {
   effectiveSuggestionStatus,
   type SuggestionResolution,
 } from '../services/suggestionRegistry';
+import { MonthDatePicker } from './ui/MonthDatePicker';
 
 interface SuggestionCardProps {
   suggestion: AgentSuggestion;
@@ -287,25 +288,26 @@ export function SuggestionCard({
         )}
         {!isResolved && (
           <>
-            <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1.5">
-              <Clock className="w-3 h-3" />
-              <input
-                type="date"
+            <div className="flex min-w-0 items-center gap-1 rounded-md bg-slate-800/50 p-1 text-slate-400">
+              <MonthDatePicker
                 value={deadlineInput}
-                onChange={(e) => setDeadlineInput(e.target.value)}
+                onChange={setDeadlineInput}
+                label="Vybrat termín návrhu"
                 disabled={isProcessing}
-                className="bg-transparent border-none outline-none text-slate-300 font-mono text-[11px] w-[110px] disabled:opacity-50"
-                title="Upravit deadline"
+                allowClear
+                className="min-h-8 max-w-48 border-0 bg-transparent px-2 py-1 hover:bg-slate-800"
               />
               {deadlineInput !== (suggestion.context.deadline ? new Date(suggestion.context.deadline).toISOString().split('T')[0] : '') && (
                 <button
+                  type="button"
                   onClick={handleSaveDeadline}
                   disabled={isProcessing}
-                  className="text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-emerald-400 transition-colors hover:bg-emerald-500/10 hover:text-emerald-300 disabled:opacity-50"
                   title="Uložit deadline"
+                  aria-label="Uložit termín návrhu"
                 >✓</button>
               )}
-            </span>
+            </div>
             <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1.5">
               <Zap className="w-3 h-3" />
               <select
@@ -416,11 +418,12 @@ export function SuggestionCard({
       {showDeferPicker && !isResolved && (
         <motion.div key="defer-picker" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-3 space-y-2 overflow-hidden rounded-xl border border-slate-800/50 bg-slate-950/50 p-3">
           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Odložit do:</div>
-          <input
-            type="date"
+          <MonthDatePicker
             value={deferDate}
-            onChange={(e) => setDeferDate(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-600"
+            onChange={setDeferDate}
+            label="Odložit návrh do"
+            disabled={isProcessing}
+            className="w-full justify-start"
           />
           <div className="flex gap-2 justify-end">
             <button
