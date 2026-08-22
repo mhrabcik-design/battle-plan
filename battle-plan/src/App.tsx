@@ -91,6 +91,7 @@ function App() {
   const [activeTaskList, setActiveTaskList] = useState<string>('@default');
   const [googleTasksRaw, setGoogleTasksRaw] = useState<GoogleTaskRaw[]>([]);
   const [showCompletedTasks, setShowCompletedTasks] = useState(false);
+  const [showCompletedMeetings, setShowCompletedMeetings] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
@@ -568,9 +569,14 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   const memoizedGetDeadlineColor = useCallback((date?: string, time?: string) => getDeadlineColor(currentTime, date, time), [currentTime]);
   const memoizedFormatTimeLeft = useCallback((date?: string, time?: string) => formatTimeLeft(currentTime, date, time), [currentTime]);
   const showTaskGrid = TASK_GRID_VIEW_MODES.includes(viewMode);
-  const { completedTaskCount, visibleTasks: visibleGridTasks } = useMemo(
-    () => getTaskGridPresentation(tasks, viewMode, showCompletedTasks),
-    [showCompletedTasks, tasks, viewMode]
+  const supportsCompletedFilter = viewMode === 'tasks' || viewMode === 'meetings';
+  const showCompletedInCurrentView = viewMode === 'meetings' ? showCompletedMeetings : showCompletedTasks;
+  const { completedTaskCount: completedItemCount, visibleTasks: visibleGridTasks } = useMemo(
+    () => getTaskGridPresentation(tasks, viewMode, {
+      tasks: showCompletedTasks,
+      meetings: showCompletedMeetings,
+    }),
+    [showCompletedMeetings, showCompletedTasks, tasks, viewMode]
   );
   const isWorkLogVoiceMode = viewMode === 'worklogs';
   const activeWorkLogVoiceController = isWorkLogVoiceMode ? workLogVoiceController : null;
@@ -783,20 +789,28 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           )}
 
 
-          {viewMode === 'tasks' && (
+          {supportsCompletedFilter && (
             <div className="mb-4 flex justify-end">
               <button
                 type="button"
-                aria-pressed={showCompletedTasks}
-                onClick={() => setShowCompletedTasks(current => !current)}
-                className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-black uppercase tracking-wider transition-all ${showCompletedTasks
+                aria-pressed={showCompletedInCurrentView}
+                onClick={() => {
+                  if (viewMode === 'meetings') {
+                    setShowCompletedMeetings(current => !current);
+                  } else {
+                    setShowCompletedTasks(current => !current);
+                  }
+                }}
+                className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-black uppercase tracking-wider transition-all ${showCompletedInCurrentView
                   ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
                   : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700 hover:text-slate-200'
                   }`}
               >
                 <CheckCircle2 className="h-4 w-4" />
-                {showCompletedTasks ? 'Skrýt splněné' : 'Zobrazit splněné'}
-                <span className="rounded-md bg-black/20 px-1.5 py-0.5 text-[10px]">{completedTaskCount}</span>
+                {viewMode === 'meetings'
+                  ? showCompletedInCurrentView ? 'Skrýt hotové' : 'Zobrazit hotové'
+                  : showCompletedInCurrentView ? 'Skrýt splněné' : 'Zobrazit splněné'}
+                <span className="rounded-md bg-black/20 px-1.5 py-0.5 text-[10px]">{completedItemCount}</span>
               </button>
             </div>
           )}
@@ -808,7 +822,9 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-20 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
                     <AlertCircle className="w-12 h-12 text-slate-800 mx-auto mb-4" />
                     <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">
-                      {viewMode === 'tasks' && completedTaskCount > 0 ? 'Všechny úkoly jsou splněné' : 'Seznam je prázdný'}
+                      {completedItemCount > 0
+                        ? viewMode === 'meetings' ? 'Všechny schůzky jsou hotové' : 'Všechny úkoly jsou splněné'
+                        : 'Seznam je prázdný'}
                     </p>
                   </motion.div>
                 ) : (
@@ -816,7 +832,7 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
                     <TaskCard
                       key={task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`}
                       task={task}
-                      useCompletedTaskTreatment={viewMode === 'tasks'}
+                      useCompletedTaskTreatment={supportsCompletedFilter}
                       activeVoiceUpdateId={activeVoiceUpdateId}
                       isOverCapacity={memoizedIsOverCapacity}
                       getUrgencyColor={getUrgencyColor}
