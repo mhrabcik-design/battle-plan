@@ -7,16 +7,6 @@ export const ACTIVE_TASK_TITLE_CLASSES = 'text-white group-hover:text-indigo-400
 
 export type TaskVisualTone = 'task' | 'meeting' | 'completed' | 'danger';
 
-export interface CompletedItemVisibility {
-    tasks: boolean;
-    meetings: boolean;
-}
-
-const DEFAULT_COMPLETED_ITEM_VISIBILITY: CompletedItemVisibility = {
-    tasks: false,
-    meetings: false,
-};
-
 export function getTaskVisualTone<T extends Pick<UnifiedTask, 'type' | 'status'>>(
     task: T,
     overCapacity: boolean,
@@ -47,14 +37,10 @@ export function getTaskListPresentation<T extends Pick<UnifiedTask, 'status'>>(
 export function getTaskGridPresentation<T extends Pick<UnifiedTask, 'status'>>(
     tasks: readonly T[],
     viewMode: ViewMode,
-    completedVisibility: CompletedItemVisibility = DEFAULT_COMPLETED_ITEM_VISIBILITY,
+    showCompleted = false,
 ): { completedTaskCount: number; visibleTasks: readonly T[] } {
-    if (viewMode === 'tasks') {
-        return getTaskListPresentation(tasks, completedVisibility.tasks);
-    }
-
-    if (viewMode === 'meetings') {
-        return getTaskListPresentation(tasks, completedVisibility.meetings);
+    if (viewMode === 'tasks' || viewMode === 'meetings') {
+        return getTaskListPresentation(tasks, showCompleted);
     }
 
     return { completedTaskCount: 0, visibleTasks: tasks };

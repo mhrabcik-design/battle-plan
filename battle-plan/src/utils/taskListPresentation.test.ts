@@ -57,29 +57,17 @@ test('completed items are hidden by default in Tasks and Meetings views', () => 
     }
 });
 
-test('Tasks and Meetings keep independent completed-item visibility', () => {
+test('Tasks and Meetings can independently include completed items', () => {
     const tasks = [task('Active', 'pending', 2), task('Completed', 'completed', 3)];
 
-    const tasksExpanded = getTaskGridPresentation(tasks, 'tasks', {
-        tasks: true,
-        meetings: false,
-    });
-    const meetingsStillCollapsed = getTaskGridPresentation(tasks, 'meetings', {
-        tasks: true,
-        meetings: false,
-    });
+    const tasksExpanded = getTaskGridPresentation(tasks, 'tasks', true);
+    const meetingsStillCollapsed = getTaskGridPresentation(tasks, 'meetings', false);
 
     assert.equal(tasksExpanded.visibleTasks, tasks);
     assert.deepEqual(meetingsStillCollapsed.visibleTasks, [tasks[0]]);
 
-    const meetingsExpanded = getTaskGridPresentation(tasks, 'meetings', {
-        tasks: false,
-        meetings: true,
-    });
-    const tasksStillCollapsed = getTaskGridPresentation(tasks, 'tasks', {
-        tasks: false,
-        meetings: true,
-    });
+    const meetingsExpanded = getTaskGridPresentation(tasks, 'meetings', true);
+    const tasksStillCollapsed = getTaskGridPresentation(tasks, 'tasks', false);
 
     assert.equal(meetingsExpanded.visibleTasks, tasks);
     assert.deepEqual(tasksStillCollapsed.visibleTasks, [tasks[0]]);

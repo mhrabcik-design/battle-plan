@@ -572,11 +572,8 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
   const supportsCompletedFilter = viewMode === 'tasks' || viewMode === 'meetings';
   const showCompletedInCurrentView = viewMode === 'meetings' ? showCompletedMeetings : showCompletedTasks;
   const { completedTaskCount: completedItemCount, visibleTasks: visibleGridTasks } = useMemo(
-    () => getTaskGridPresentation(tasks, viewMode, {
-      tasks: showCompletedTasks,
-      meetings: showCompletedMeetings,
-    }),
-    [showCompletedMeetings, showCompletedTasks, tasks, viewMode]
+    () => getTaskGridPresentation(tasks, viewMode, showCompletedInCurrentView),
+    [showCompletedInCurrentView, tasks, viewMode]
   );
   const isWorkLogVoiceMode = viewMode === 'worklogs';
   const activeWorkLogVoiceController = isWorkLogVoiceMode ? workLogVoiceController : null;
