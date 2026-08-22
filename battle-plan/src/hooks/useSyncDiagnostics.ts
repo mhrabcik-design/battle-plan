@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 
-export type SyncState = 'idle' | 'ok' | 'stale' | 'error';
+export type SyncState = 'idle' | 'ok' | 'stale' | 'error' | 'disabled';
 
 export interface SyncHealth {
     label: string;

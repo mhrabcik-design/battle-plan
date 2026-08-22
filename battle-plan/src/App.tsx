@@ -19,9 +19,10 @@ import { googleService } from './services/googleService';
 import { taskDriveBackup } from './services/taskDriveBackup';
 import { mergeLocalToCloudDetailed } from './services/workLogsSync';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList, GoogleTaskRaw } from './types';
-import { hasUsableAuth as checkUsableAuth, isAuthUnavailable } from './types';
+import { hasUsableAuth as checkUsableAuth } from './types';
 import { Sidebar } from './components/Sidebar';
 import { syncIconFor } from './components/syncIcon';
+import { deriveSyncVisualState } from './utils/syncVisualState';
 import { TaskCard } from './components/TaskCard';
 import { FocusEditor } from './components/FocusEditor';
 import { SettingsModal } from './components/SettingsModal';
@@ -128,7 +129,7 @@ function App() {
     addLog(`Hermes receiver identity: ${detail}`, persistenceGranted ? 'info' : 'error');
     updateSyncHealth('agentProtocol', {
       label: 'Hermes receiver identity',
-      state: persistenceGranted ? 'idle' : 'error',
+      state: persistenceGranted ? 'disabled' : 'error',
       detail,
       lastSuccess: persistenceGranted ? new Date().toLocaleString('cs-CZ') : null,
       lastError: persistenceGranted ? null : `Persistence: ${state.persistenceStatus}`,
@@ -194,23 +195,11 @@ function App() {
 
   const isAiActive = !!apiKey && isOnline;
 const hasUsableAuth = checkUsableAuth(googleAuth);
-const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
-    if (isAuthUnavailable(googleAuth.state)) {
-        return 'failed';
-    }
-    const healthValues = Object.values(syncHealth);
-    if (healthValues.some(h => h.state === 'error')) {
-        return 'failed';
-    }
-    if (
-        googleAuth.state === 'REFRESH_PENDING' ||
-        isProcessing ||
-        healthValues.some(h => h.state === 'idle' || h.state === 'stale')
-    ) {
-        return 'pending';
-    }
-    return 'ok';
-}, [googleAuth.state, syncHealth, isProcessing]);
+const syncVisualState = deriveSyncVisualState({
+    authState: googleAuth.state,
+    syncHealth,
+    isProcessing,
+});
 
   useEffect(() => {
     const cleanup = async () => {
