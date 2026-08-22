@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import type {
   DriveJsonRead,
+  DriveJsonReadManyResult,
   DriveJsonReadResult,
   DriveJsonWrite,
   DriveStoreStatus,
@@ -59,6 +60,81 @@ test('the first reply creates the replies file instead of reporting a false succ
     (store.writtenPayload as { replies: Array<{ suggestion_id: string }> }).replies.map((reply) => reply.suggestion_id),
     ['proposal-1'],
   );
+});
+
+class DeleteSuggestionStore implements SuggestionsStore {
+  readonly lastStatus: DriveStoreStatus = { code: 'ready', message: 'ready' };
+  readonly rejectedWrites: Set<string>;
+  readonly writes: string[] = [];
+
+  constructor(...rejectedWrites: string[]) {
+    this.rejectedWrites = new Set(rejectedWrites);
+  }
+
+  async init(): Promise<boolean> { return true; }
+  async readJsonFile<T>(name: string): Promise<DriveJsonRead<T> | null> {
+    if (name === 'agent-suggestions.json') {
+      return {
+        fileId: 'suggestions-file',
+        etag: '"suggestions-etag"',
+        data: { suggestions: [{ id: 'proposal-1' }] } as unknown as T,
+      };
+    }
+    if (name === 'agent-suggestion-replies.json') {
+      return {
+        fileId: 'replies-file',
+        etag: '"replies-etag"',
+        data: { replies: [{ suggestion_id: 'proposal-1' }] } as unknown as T,
+      };
+    }
+    return null;
+  }
+  async readJsonFileWithStatus<T>(): Promise<DriveJsonReadResult<T>> {
+    return {
+      kind: 'loaded',
+      fileId: 'suggestions-file',
+      etag: '"suggestions-etag"',
+      data: { suggestions: [{ id: 'proposal-1' }] } as unknown as T,
+    };
+  }
+  async readJsonFilesWithStatus<T>(): Promise<DriveJsonReadManyResult<T>> {
+    return { kind: 'missing-file' };
+  }
+  async writeJsonFile(name: string): Promise<DriveJsonWrite | null> {
+    this.writes.push(name);
+    return this.rejectedWrites.has(name) ? null : { fileId: `${name}-written` };
+  }
+  async trashFile(): Promise<void> {}
+  async uploadBlob(): Promise<DriveJsonWrite | null> { return null; }
+}
+
+test('suggestion deletion reports a rejected producer-file write and stops before replies', async () => {
+  const { SuggestionsSync } = await import('./suggestionsSync.ts');
+  const store = new DeleteSuggestionStore('agent-suggestions.json');
+  const sync = new SuggestionsSync(store);
+  await sync.init();
+  await sync.fetchSuggestionsDetailed();
+
+  assert.deepEqual(await sync.deleteSuggestion('proposal-1'), {
+    success: false,
+    suggestions: false,
+  });
+  assert.deepEqual(store.writes, ['agent-suggestions.json']);
+});
+
+test('suggestion deletion reports a rejected replies write after deleting the producer row', async () => {
+  const { SuggestionsSync } = await import('./suggestionsSync.ts');
+  const store = new DeleteSuggestionStore('agent-suggestion-replies.json');
+  const sync = new SuggestionsSync(store);
+  await sync.init();
+  await sync.fetchSuggestionsDetailed();
+
+  assert.deepEqual(await sync.deleteSuggestion('proposal-1'), {
+    success: false,
+    suggestions: true,
+    replies: false,
+  });
+  assert.deepEqual(store.writes, ['agent-suggestions.json', 'agent-suggestion-replies.json']);
 });
 
 class ConcurrentRepliesStore implements SuggestionsStore {

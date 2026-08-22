@@ -13,12 +13,16 @@ import {
 } from '../services/suggestionRegistry';
 import {
   suggestionRegistrySync,
-  type SuggestionRegistrySyncResult,
+  type SuggestionRegistryPublishResult,
 } from '../services/suggestionRegistrySync';
 import { SuggestionCard } from '../components/SuggestionCard';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import { resolveSuggestionsSnapshot } from '../utils/suggestionReplies';
+import {
+  describeSuggestionPartialSync,
+  type SuggestionLegacyMirrors,
+} from '../utils/suggestionSyncDiagnostics';
 
 type FilterMode = 'all' | 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted';
 
@@ -59,21 +63,13 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     setResolutionsBySuggestion((previous) => ({ ...previous, [suggestion.id]: resolution }));
   }, []);
 
-  const registryWriteSucceeded = (result: SuggestionRegistrySyncResult): boolean =>
-    result.kind === 'published' || result.kind === 'nothing-pending';
-
   const reportPartialSync = (
     action: string,
-    registryResult: SuggestionRegistrySyncResult,
-    legacyWriteSucceeded: boolean,
+    registryResult: SuggestionRegistryPublishResult,
+    mirrors: SuggestionLegacyMirrors,
   ) => {
-    if (registryWriteSucceeded(registryResult) && legacyWriteSucceeded) return;
-    const detail = registryWriteSucceeded(registryResult)
-      ? 'starší soubor návrhů se nepodařilo aktualizovat'
-      : legacyWriteSucceeded
-        ? 'registr rozhodnutí čeká na synchronizaci'
-        : 'změna je zatím uložená jen v tomto zařízení';
-    onAddLog(`Suggestions: ${action} — ${detail}.`, 'error');
+    const message = describeSuggestionPartialSync(action, registryResult, mirrors);
+    if (message) onAddLog(message, 'error');
   };
 
   const loadAll = useCallback(async () => {
@@ -211,7 +207,11 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         }),
         suggestionsSync.updateSuggestionStatus(suggestion.id, 'converted'),
       ]);
-      reportPartialSync('task byl vytvořen', registryResult, replyResult.success && statusResult.success);
+      reportPartialSync('task byl vytvořen', registryResult, {
+        replyMirror: replyResult.success,
+        producerStatusMirror: statusResult.success,
+        primaryArtifact: 'decision-and-task',
+      });
 
       // Local optimistic update
       setSuggestions((prev) =>
@@ -247,7 +247,10 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         }),
         suggestionsSync.updateSuggestionStatus(suggestion.id, 'rejected'),
       ]);
-      reportPartialSync('zamítnutí bylo zaznamenáno', registryResult, replyResult.success && statusResult.success);
+      reportPartialSync('zamítnutí bylo zaznamenáno', registryResult, {
+        replyMirror: replyResult.success,
+        producerStatusMirror: statusResult.success,
+      });
       setSuggestions((prev) =>
         prev.map((s) =>
           s.id === suggestion.id
@@ -271,7 +274,12 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
       await suggestionRegistry.recordDecision(suggestion, { kind: 'dismissed' });
       const registryResult = await suggestionRegistrySync.publishPending();
       const result = await suggestionsSync.deleteSuggestion(suggestion.id);
-      reportPartialSync('smazání bylo zaznamenáno', registryResult, result.success);
+      reportPartialSync('smazání bylo zaznamenáno', registryResult, {
+        deletionMirror: {
+          suggestions: result.suggestions,
+          replies: result.replies,
+        },
+      });
       if (result.success) {
         setSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
         setRepliesBySuggestion((prev) => {
@@ -309,7 +317,10 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         }),
         suggestionsSync.updateSuggestionStatus(suggestion.id, 'deferred'),
       ]);
-      reportPartialSync('odložení bylo zaznamenáno', registryResult, replyResult.success && statusResult.success);
+      reportPartialSync('odložení bylo zaznamenáno', registryResult, {
+        replyMirror: replyResult.success,
+        producerStatusMirror: statusResult.success,
+      });
       setSuggestions((prev) =>
         prev.map((s) =>
           s.id === suggestion.id
@@ -340,7 +351,9 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           action: null,
         }),
       ]);
-      reportPartialSync('komentář byl zaznamenán', registryResult, result.success);
+      reportPartialSync('komentář byl zaznamenán', registryResult, {
+        replyMirror: result.success,
+      });
       if (result.success && result.id) {
         setRepliesBySuggestion((prev) => ({
           ...prev,
@@ -358,8 +371,6 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         }));
         await refreshResolution(suggestion);
         onAddLog(`Suggestions: 💬 Text reply odeslán`);
-      } else {
-        onAddLog('Suggestions: Komentář je uložen v registru, ale odpověď pro Anu se neodeslala', 'error');
       }
     } catch (e) {
       console.error('Text reply failed', e);
@@ -387,7 +398,9 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           action: null,
         }),
       ]);
-      reportPartialSync('hlasová reakce byla zaznamenána', registryResult, result.success);
+      reportPartialSync('hlasová reakce byla zaznamenána', registryResult, {
+        replyMirror: result.success,
+      });
       if (result.success && result.id) {
         setRepliesBySuggestion((prev) => ({
           ...prev,
@@ -420,7 +433,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     try {
       await suggestionRegistry.confirmSameOccurrence(suggestion, targetOccurrenceKey);
       const registryResult = await suggestionRegistrySync.publishPending();
-      reportPartialSync('sloučení návrhů bylo zaznamenáno', registryResult, true);
+      reportPartialSync('sloučení návrhů bylo zaznamenáno', registryResult, {});
       await refreshResolution(suggestion);
       onAddLog(`Suggestions: Duplicitní návrh „${suggestion.title.slice(0, 50)}“ byl sloučen.`);
     } catch (e) {
@@ -436,7 +449,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     try {
       await suggestionRegistry.confirmDistinctSubjects(suggestion, targetOccurrenceKey);
       const registryResult = await suggestionRegistrySync.publishPending();
-      reportPartialSync('nová samostatná událost byla zaznamenána', registryResult, true);
+      reportPartialSync('nová samostatná událost byla zaznamenána', registryResult, {});
       await refreshResolution(suggestion);
       onAddLog(`Suggestions: „${suggestion.title.slice(0, 50)}“ zůstává jako nový návrh.`);
     } catch (e) {

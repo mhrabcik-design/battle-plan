@@ -4,6 +4,7 @@ import type { SyncHealth } from '../hooks/useSyncDiagnostics';
 import { ProjectIdentityConflictError } from './projectIdentityReconciliation.ts';
 import { getErrorMessage } from './errors.ts';
 import { DriveTransportError } from '../services/agentProtocol/driveTransport.ts';
+import type { WorkLogsPublishResult } from '../services/workLogsSync.ts';
 
 const DRIVE_SCOPE_ERROR_PATTERN = /403|PERMISSION_DENIED|Insufficient Authentication Scopes/i;
 
@@ -35,6 +36,18 @@ export function taskBackupHealth(result: Exclude<TaskDriveBackupLoadResult, { ki
         state: 'idle',
         detail: 'Drive záloha úkolů zatím neexistuje',
         lastError: null,
+    };
+}
+
+export function workLogsBackupHealth(
+    result: Exclude<WorkLogsPublishResult, { kind: 'published' }>,
+): Partial<SyncHealth> {
+    return {
+        state: 'error',
+        detail: result.kind === 'verification-failed'
+            ? 'WorkLogs zálohu se nepodařilo ověřit'
+            : 'WorkLogs záloha na Disk selhala',
+        lastError: result.message,
     };
 }
 

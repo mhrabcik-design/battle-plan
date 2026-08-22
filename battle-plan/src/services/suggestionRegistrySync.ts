@@ -65,6 +65,16 @@ export type SuggestionRegistrySyncResult =
     | { kind: 'store-unavailable'; status?: DriveStoreStatus }
     | { kind: 'error'; message: string };
 
+export type SuggestionRegistryPublishResult = Exclude<
+    SuggestionRegistrySyncResult,
+    { kind: 'loaded' } | { kind: 'missing-file' }
+>;
+
+type SuggestionRegistryUnavailableResult = Extract<
+    SuggestionRegistrySyncResult,
+    { kind: 'store-unavailable' } | { kind: 'error' }
+>;
+
 function isStringArray(value: unknown): value is string[] {
     return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
@@ -172,7 +182,7 @@ export class SuggestionRegistrySync {
         this.store = store;
     }
 
-    private async initStore(): Promise<SuggestionRegistrySyncResult | null> {
+    private async initStore(): Promise<SuggestionRegistryUnavailableResult | null> {
         try {
             if (await this.store.init({ createFolder: true })) return null;
             const status = this.store.lastStatus;
@@ -239,7 +249,7 @@ export class SuggestionRegistrySync {
         return this.convergeRemote([]);
     }
 
-    async publishPending(): Promise<SuggestionRegistrySyncResult> {
+    async publishPending(): Promise<SuggestionRegistryPublishResult> {
         const unavailable = await this.initStore();
         if (unavailable) return unavailable;
         const initial = await this.registry.exportSnapshot();
@@ -248,7 +258,11 @@ export class SuggestionRegistrySync {
             .map((decision) => decision.id);
         if (pendingIds.length === 0) return { kind: 'nothing-pending' };
 
-        return this.convergeRemote(pendingIds);
+        const result = await this.convergeRemote(pendingIds);
+        if (result.kind === 'loaded' || result.kind === 'missing-file') {
+            return { kind: 'error', message: 'Registr rozhodnutí vrátil neplatný stav publikace.' };
+        }
+        return result;
     }
 }
 

@@ -6,6 +6,7 @@ import type { BattlePlanDB, Project, WorkLogDeletionTombstone } from '../db.ts';
 import type {
     mergeCloudToLocal as MergeCloudToLocal,
     mergeLocalToCloud as MergeLocalToCloud,
+    mergeLocalToCloudDetailed as MergeLocalToCloudDetailed,
 } from './workLogsSync.ts';
 
 const storage = new Map<string, string>();
@@ -18,7 +19,6 @@ const storage = new Map<string, string>();
     get length() { return storage.size; },
 };
 
-const { DriveRequestError } = await import('./driveJsonStore.ts');
 const { buildWorkLogsFileMetadata } = await import('./workLogsDriveMetadata.ts');
 // workLogsSync follows the app's extensionless bundler imports, so load this
 // integration seam through Vite rather than Node's stricter ESM resolver.
@@ -30,12 +30,14 @@ const vite = await createServer({
     appType: 'custom',
 });
 const { db } = await vite.ssrLoadModule('/src/db.ts') as { db: BattlePlanDB };
-const { mergeCloudToLocal, mergeLocalToCloud, WorkLogsSync, workLogsSync } = await vite.ssrLoadModule('/src/services/workLogsSync.ts') as {
+const { mergeCloudToLocal, mergeLocalToCloud, mergeLocalToCloudDetailed, WorkLogsSync, workLogsSync } = await vite.ssrLoadModule('/src/services/workLogsSync.ts') as {
     mergeCloudToLocal: typeof MergeCloudToLocal;
     mergeLocalToCloud: typeof MergeLocalToCloud;
+    mergeLocalToCloudDetailed: typeof MergeLocalToCloudDetailed;
     WorkLogsSync: new (store: unknown) => {
         init: () => Promise<void>;
         loadAllDetailed: () => Promise<unknown>;
+        saveAllDetailed: (payload: unknown) => Promise<unknown>;
         saveAll: (payload: unknown) => Promise<number | null>;
     };
     workLogsSync: unknown;
@@ -537,11 +539,11 @@ test('mergeLocalToCloud aborts without writing when the Drive pull fails', async
     const sync = workLogsSync as {
         isInitialized: boolean;
         loadAllDetailed: () => Promise<unknown>;
-        saveAll: (payload: unknown) => Promise<number | null>;
+        saveAllDetailed: (payload: unknown) => Promise<unknown>;
     };
     const originalInitialized = sync.isInitialized;
     const originalLoad = sync.loadAllDetailed;
-    const originalSave = sync.saveAll;
+    const originalSaveDetailed = sync.saveAllDetailed;
     let saveCalls = 0;
     try {
         sync.isInitialized = true;
@@ -549,9 +551,9 @@ test('mergeLocalToCloud aborts without writing when the Drive pull fails', async
             kind: 'error', message: 'temporary Drive read failure',
             data: { workLogs: [], projects: [], timestamp: 0 },
         });
-        sync.saveAll = async () => {
+        sync.saveAllDetailed = async () => {
             saveCalls += 1;
-            return 123;
+            return { kind: 'published', timestamp: 123 };
         };
 
         assert.equal(await mergeLocalToCloud(), false);
@@ -559,44 +561,7 @@ test('mergeLocalToCloud aborts without writing when the Drive pull fails', async
     } finally {
         sync.isInitialized = originalInitialized;
         sync.loadAllDetailed = originalLoad;
-        sync.saveAll = originalSave;
-    }
-});
-
-test('mergeLocalToCloud retries the full pull after a conditional save conflict', async () => {
-    await resetDb();
-    const sync = workLogsSync as {
-        isInitialized: boolean;
-        loadAllDetailed: () => Promise<unknown>;
-        saveAll: (payload: unknown) => Promise<number | null>;
-    };
-    const originalInitialized = sync.isInitialized;
-    const originalLoad = sync.loadAllDetailed;
-    const originalSave = sync.saveAll;
-    let loadCalls = 0;
-    let saveCalls = 0;
-    try {
-        sync.isInitialized = true;
-        sync.loadAllDetailed = async () => {
-            loadCalls += 1;
-            return {
-                kind: 'missing-file',
-                data: { workLogs: [], projects: [], workLogDeletionTombstones: [], timestamp: 0 },
-            };
-        };
-        sync.saveAll = async () => {
-            saveCalls += 1;
-            if (saveCalls === 1) throw new DriveRequestError(412, 'stale Drive revision');
-            return 21;
-        };
-
-        assert.equal(await mergeLocalToCloud(), true);
-        assert.equal(loadCalls, 2);
-        assert.equal(saveCalls, 2);
-    } finally {
-        sync.isInitialized = originalInitialized;
-        sync.loadAllDetailed = originalLoad;
-        sync.saveAll = originalSave;
+        sync.saveAllDetailed = originalSaveDetailed;
     }
 });
 
@@ -626,14 +591,14 @@ test('durable tombstones stop a stale second device from resurrecting confirmed 
     const sync = workLogsSync as {
         isInitialized: boolean;
         loadAllDetailed: () => Promise<unknown>;
-        saveAll: (payload: {
+        saveAllDetailed: (payload: {
             workLogs: Array<{ syncId?: string }>;
             workLogDeletionTombstones: WorkLogDeletionTombstone[];
-        }) => Promise<number | null>;
+        }) => Promise<unknown>;
     };
     const originalInitialized = sync.isInitialized;
     const originalLoad = sync.loadAllDetailed;
-    const originalSave = sync.saveAll;
+    const originalSaveDetailed = sync.saveAllDetailed;
     let savedSyncIds: Array<string | undefined> = [];
     try {
         sync.isInitialized = true;
@@ -649,10 +614,10 @@ test('durable tombstones stop a stale second device from resurrecting confirmed 
                 workLogDeletionTombstones: [],
             },
         });
-        sync.saveAll = async (payload) => {
+        sync.saveAllDetailed = async (payload) => {
             savedSyncIds = payload.workLogs.map((workLog) => workLog.syncId).sort();
             assert.deepEqual(payload.workLogDeletionTombstones, [tombstone]);
-            return 21;
+            return { kind: 'published', timestamp: 21 };
         };
 
         assert.equal(await mergeLocalToCloud(), true);
@@ -664,7 +629,7 @@ test('durable tombstones stop a stale second device from resurrecting confirmed 
     } finally {
         sync.isInitialized = originalInitialized;
         sync.loadAllDetailed = originalLoad;
-        sync.saveAll = originalSave;
+        sync.saveAllDetailed = originalSaveDetailed;
     }
 });
 
@@ -723,6 +688,67 @@ test('duplicate WorkLogs snapshots merge, publish a create-only union, and retry
 
     assert.ok(await sync.saveAll(payload));
     assert.equal(store.writes.length, 1, 'verified retry must not create another equivalent snapshot');
+});
+
+test('mergeLocalToCloudDetailed preserves actionable read, store, verification, and unexpected failures', async () => {
+    await resetDb();
+    const sync = workLogsSync as {
+        isInitialized: boolean;
+        loadAllDetailed: () => Promise<unknown>;
+        saveAllDetailed: (payload: unknown) => Promise<unknown>;
+    };
+    const originalInitialized = sync.isInitialized;
+    const originalLoad = sync.loadAllDetailed;
+    const originalSaveDetailed = sync.saveAllDetailed;
+    try {
+        sync.isInitialized = true;
+        sync.loadAllDetailed = async () => ({
+            kind: 'error', message: 'temporary Drive read failure',
+            data: { workLogs: [], projects: [], workLogDeletionTombstones: [], timestamp: 0 },
+        });
+        assert.deepEqual(await mergeLocalToCloudDetailed(), {
+            kind: 'read-unavailable',
+            message: 'temporary Drive read failure',
+        });
+
+        sync.loadAllDetailed = async () => ({
+            kind: 'store-unavailable',
+            status: { code: 'drive-client-unavailable', message: 'Drive client missing' },
+            data: { workLogs: [], projects: [], workLogDeletionTombstones: [], timestamp: 0 },
+        });
+        assert.deepEqual(await mergeLocalToCloudDetailed(), {
+            kind: 'store-unavailable',
+            status: { code: 'drive-client-unavailable', message: 'Drive client missing' },
+            message: 'Drive client missing',
+        });
+
+        sync.loadAllDetailed = async () => ({
+            kind: 'missing-file',
+            data: { workLogs: [], projects: [], workLogDeletionTombstones: [], timestamp: 0 },
+        });
+        sync.saveAllDetailed = async () => ({
+            kind: 'verification-failed', message: 'Snapshot se po zápisu nepodařilo ověřit',
+        });
+        assert.deepEqual(await mergeLocalToCloudDetailed(), {
+            kind: 'verification-failed',
+            message: 'Snapshot se po zápisu nepodařilo ověřit',
+        });
+
+        sync.saveAllDetailed = async () => {
+            throw new Error('Drive write exploded');
+        };
+        assert.deepEqual(await mergeLocalToCloudDetailed(), {
+            kind: 'unexpected-error',
+            message: 'Drive write exploded',
+        });
+
+        sync.saveAllDetailed = async () => ({ kind: 'published', timestamp: 42 });
+        assert.deepEqual(await mergeLocalToCloudDetailed(), { kind: 'published', timestamp: 42 });
+    } finally {
+        sync.isInitialized = originalInitialized;
+        sync.loadAllDetailed = originalLoad;
+        sync.saveAllDetailed = originalSaveDetailed;
+    }
 });
 
 test('WorkLogs existing files without ETags publish verified create-only snapshots', async () => {
@@ -816,7 +842,13 @@ test('WorkLogs publication retries verification and fails without an observable 
     const originalConsoleError = console.error;
     console.error = () => undefined;
     try {
-        assert.equal(await sync.saveAll({ workLogs: [], projects: [], workLogDeletionTombstones: [] }), null);
+        assert.deepEqual(
+            await sync.saveAllDetailed({ workLogs: [], projects: [], workLogDeletionTombstones: [] }),
+            {
+                kind: 'verification-failed',
+                message: 'Zápis WorkLogs snapshotu se nepodařilo ověřit',
+            },
+        );
     } finally {
         console.error = originalConsoleError;
     }
@@ -937,11 +969,11 @@ test('WorkLogs Drive sync serializes overlapping backup triggers', async () => {
     const sync = workLogsSync as {
         isInitialized: boolean;
         loadAllDetailed: () => Promise<unknown>;
-        saveAll: (payload: unknown) => Promise<number | null>;
+        saveAllDetailed: (payload: unknown) => Promise<unknown>;
     };
     const originalInitialized = sync.isInitialized;
     const originalLoad = sync.loadAllDetailed;
-    const originalSave = sync.saveAll;
+    const originalSaveDetailed = sync.saveAllDetailed;
     let releaseFirstRead: (() => void) | undefined;
     let activeReads = 0;
     let maxActiveReads = 0;
@@ -959,7 +991,7 @@ test('WorkLogs Drive sync serializes overlapping backup triggers', async () => {
                 data: { workLogs: [], projects: [], workLogDeletionTombstones: [], timestamp: 0 },
             };
         };
-        sync.saveAll = async () => 21;
+        sync.saveAllDetailed = async () => ({ kind: 'published', timestamp: 21 });
 
         const first = mergeLocalToCloud();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -970,7 +1002,7 @@ test('WorkLogs Drive sync serializes overlapping backup triggers', async () => {
     } finally {
         sync.isInitialized = originalInitialized;
         sync.loadAllDetailed = originalLoad;
-        sync.saveAll = originalSave;
+        sync.saveAllDetailed = originalSaveDetailed;
     }
 });
 

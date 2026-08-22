@@ -66,6 +66,12 @@ export type RepliesFetchResult =
   | { kind: 'store-unavailable'; status: DriveStoreStatus; replies: AgentSuggestionReply[] }
   | { kind: 'error'; message: string; replies: AgentSuggestionReply[] };
 
+export interface SuggestionDeleteResult {
+  success: boolean;
+  suggestions: boolean;
+  replies?: boolean;
+}
+
 const SUGGESTIONS_FILENAME = 'agent-suggestions.json';
 const REPLIES_FILENAME = 'agent-suggestion-replies.json';
 
@@ -201,28 +207,42 @@ export class SuggestionsSync {
     }
   }
 
-  async deleteSuggestion(suggestionId: string): Promise<{ success: boolean }> {
+  async deleteSuggestion(suggestionId: string): Promise<SuggestionDeleteResult> {
     if (!this.isInitialized || !this.suggestionsFileId) {
-      return { success: false };
+      return { success: false, suggestions: false };
     }
     try {
       const [loadedSuggestions, loadedReplies] = await Promise.all([
         this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME),
         this.drive.readJsonFile<RepliesFile>(REPLIES_FILENAME),
       ]);
-      if (!loadedSuggestions) return { success: false };
+      if (!loadedSuggestions) return { success: false, suggestions: false };
       this.suggestionsFileId = loadedSuggestions.fileId;
       const nextSuggestions = (loadedSuggestions.data.suggestions ?? []).filter((s) => s.id !== suggestionId);
-      await this.writeSuggestions({ ...loadedSuggestions.data, suggestions: nextSuggestions, last_updated: Date.now() });
+      const suggestionsResult = await this.writeSuggestions({
+        ...loadedSuggestions.data,
+        suggestions: nextSuggestions,
+        last_updated: Date.now(),
+      });
+      if (!suggestionsResult.success) return { success: false, suggestions: false };
       if (loadedReplies) {
         this.repliesFileId = loadedReplies.fileId;
         const nextReplies = (loadedReplies.data.replies ?? []).filter((r) => r.suggestion_id !== suggestionId);
-        await this.writeReplies({ ...loadedReplies.data, replies: nextReplies, last_updated: Date.now() });
+        const repliesResult = await this.writeReplies({
+          ...loadedReplies.data,
+          replies: nextReplies,
+          last_updated: Date.now(),
+        });
+        return {
+          success: repliesResult.success,
+          suggestions: true,
+          replies: repliesResult.success,
+        };
       }
-      return { success: true };
+      return { success: true, suggestions: true };
     } catch (e) {
       console.error('SuggestionsSync: deleteSuggestion failed', e);
-      return { success: false };
+      return { success: false, suggestions: false };
     }
   }
 

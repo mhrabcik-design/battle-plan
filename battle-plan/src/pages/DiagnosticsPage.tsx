@@ -79,7 +79,7 @@ export function DiagnosticsPage({
                     <span className="text-[10px] font-black uppercase">{item.state}</span>
                   </div>
                   <p className="mt-1 text-[11px] text-slate-300">{item.detail}</p>
-                  {item.lastSuccess && <p className="mt-1 text-[10px] text-slate-500">OK: {item.lastSuccess}</p>}
+                  {item.lastSuccess && <p className="mt-1 text-[10px] text-slate-500">{item.state === 'ok' ? 'OK' : 'Poslední úspěch'}: {item.lastSuccess}</p>}
                   {item.lastError && <p className="mt-1 text-[10px] text-red-300 break-all">Chyba: {item.lastError}</p>}
                 </div>
               );

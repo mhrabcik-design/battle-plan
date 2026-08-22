@@ -5,9 +5,10 @@ import {
     type Project,
 } from '../db';
 import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
-import { getWorkLogSyncKey, mergeWorkLogSnapshots } from '../utils/workLogSyncIdentity';
+import { getSyncTimestamp, getWorkLogSyncKey, mergeWorkLogSnapshots } from '../utils/workLogSyncIdentity';
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 import { normalizeProjectName } from './projectCatalog';
+import { getErrorMessage } from '../utils/errors';
 import {
     buildProjectIdentityIndex,
     normalizeProjectAliases,
@@ -45,6 +46,23 @@ interface WorkLogDeletionTombstonesFile {
 const WORKLOG_TOMBSTONES_FILENAME = 'work_log_deletion_tombstones.json';
 const MAX_SNAPSHOT_PUBLISH_ATTEMPTS = 3;
 
+class WorkLogsStoreUnavailableError extends Error {
+    readonly status: DriveStoreStatus;
+
+    constructor(status: DriveStoreStatus) {
+        super(status.message);
+        this.name = 'WorkLogsStoreUnavailableError';
+        this.status = status;
+    }
+}
+
+class WorkLogsReadUnavailableError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'WorkLogsReadUnavailableError';
+    }
+}
+
 export interface WorkLogsLoadData {
     workLogs: WorkLog[];
     projects: Project[];
@@ -57,6 +75,13 @@ export type WorkLogsLoadResult =
     | { kind: 'missing-file'; data: WorkLogsLoadData }
     | { kind: 'store-unavailable'; status: DriveStoreStatus; data: WorkLogsLoadData }
     | { kind: 'error'; message: string; data: WorkLogsLoadData };
+
+export type WorkLogsPublishResult =
+    | { kind: 'published'; timestamp: number }
+    | { kind: 'store-unavailable'; status: DriveStoreStatus; message: string }
+    | { kind: 'read-unavailable'; message: string }
+    | { kind: 'verification-failed'; message: string }
+    | { kind: 'unexpected-error'; message: string };
 
 const emptyWorkLogsLoadData = (): WorkLogsLoadData => ({
     workLogs: [],
@@ -71,10 +96,6 @@ interface PublishedWorkLogsState {
     projects: Project[];
     journalTombstones: WorkLogDeletionTombstone[];
 }
-
-const isDrivePreconditionConflict = (error: unknown): boolean => (
-    !!error && typeof error === 'object' && 'status' in error && error.status === 412
-);
 
 function parseWorkLogDeletionTombstone(value: unknown): WorkLogDeletionTombstone {
     if (!value || typeof value !== 'object') throw new Error('WorkLog tombstone nemá platný formát');
@@ -113,10 +134,6 @@ function mergeWorkLogDeletionTombstones(
         }
     }
     return [...bySyncId.values()].sort((left, right) => left.syncId.localeCompare(right.syncId));
-}
-
-function syncTimestamp(value: Pick<WorkLog | Project, 'createdAt' | 'updatedAt'>): number {
-    return value.updatedAt ?? value.createdAt ?? 0;
 }
 
 function stableComparable(value: unknown, omittedKeys: ReadonlySet<string>): unknown {
@@ -197,12 +214,14 @@ function containsPublishedPayload(
     const workLogsByKey = new Map<string, WorkLog[]>();
     for (const workLog of published.workLogs) {
         const key = getWorkLogSyncKey(workLog);
-        workLogsByKey.set(key, [...(workLogsByKey.get(key) ?? []), workLog]);
+        const candidates = workLogsByKey.get(key);
+        if (candidates) candidates.push(workLog);
+        else workLogsByKey.set(key, [workLog]);
     }
     if (!expected.workLogs.every((workLog) => containsUnambiguousVersion(
         workLogsByKey.get(getWorkLogSyncKey(workLog)) ?? [],
         workLog,
-        syncTimestamp,
+        getSyncTimestamp,
         comparableWorkLog,
     ))) {
         return false;
@@ -210,7 +229,7 @@ function containsPublishedPayload(
     return expected.projects.every((project) => containsUnambiguousVersion(
         published.projects.filter((candidate) => matchingProjectIdentity(candidate, project)),
         project,
-        syncTimestamp,
+        getSyncTimestamp,
         comparableProject,
     ));
 }
@@ -310,13 +329,17 @@ export class WorkLogsSync {
      * Publikuje kompletní immutable snapshot a úspěch potvrdí až po rereadu
      * sjednoceného Drive stavu. Tombstone journal musí být ověřený jako první.
      */
-    async saveAll(payload: {
+    async saveAllDetailed(payload: {
         workLogs: WorkLog[];
         projects: Project[];
         workLogDeletionTombstones: WorkLogDeletionTombstone[];
-    }): Promise<number | null> {
+    }): Promise<WorkLogsPublishResult> {
         if (!this.isInitialized) {
-            return null;
+            return {
+                kind: 'store-unavailable',
+                status: this.drive.lastStatus,
+                message: this.drive.lastStatus.message,
+            };
         }
 
         const timestamp = Date.now();
@@ -337,7 +360,7 @@ export class WorkLogsSync {
 
         try {
             let published = await this.readPublishedState();
-            if (containsPublishedPayload(published, expected)) return timestamp;
+            if (containsPublishedPayload(published, expected)) return { kind: 'published', timestamp };
 
             for (let attempt = 0; attempt < MAX_SNAPSHOT_PUBLISH_ATTEMPTS; attempt++) {
                 if (tombstones.length > 0 && !containsTombstones(published.journalTombstones, tombstones)) {
@@ -349,7 +372,7 @@ export class WorkLogsSync {
                     );
                     published = await this.readPublishedState();
                     if (!containsTombstones(published.journalTombstones, tombstones)) continue;
-                    if (containsPublishedPayload(published, expected)) return timestamp;
+                    if (containsPublishedPayload(published, expected)) return { kind: 'published', timestamp };
                 }
 
                 await this.drive.writeJsonFile(
@@ -359,15 +382,30 @@ export class WorkLogsSync {
                     { createOnly: true },
                 );
                 published = await this.readPublishedState();
-                if (containsPublishedPayload(published, expected)) return timestamp;
+                if (containsPublishedPayload(published, expected)) return { kind: 'published', timestamp };
             }
-            console.error('WorkLogsSync: saveAll failed', new Error('Zápis WorkLogs snapshotu se nepodařilo ověřit'));
-            return null;
+            const message = 'Zápis WorkLogs snapshotu se nepodařilo ověřit';
+            console.error('WorkLogsSync: saveAll failed', new Error(message));
+            return { kind: 'verification-failed', message };
         } catch (e) {
-            if (isDrivePreconditionConflict(e)) throw e;
+            if (e instanceof WorkLogsStoreUnavailableError) {
+                return { kind: 'store-unavailable', status: e.status, message: e.message };
+            }
+            if (e instanceof WorkLogsReadUnavailableError) {
+                return { kind: 'read-unavailable', message: e.message };
+            }
             console.error('WorkLogsSync: saveAll failed', e);
-            return null;
+            return { kind: 'unexpected-error', message: getErrorMessage(e) };
         }
+    }
+
+    async saveAll(payload: {
+        workLogs: WorkLog[];
+        projects: Project[];
+        workLogDeletionTombstones: WorkLogDeletionTombstone[];
+    }): Promise<number | null> {
+        const result = await this.saveAllDetailed(payload);
+        return result.kind === 'published' ? result.timestamp : null;
     }
 
     private async readPublishedState(): Promise<PublishedWorkLogsState> {
@@ -375,11 +413,17 @@ export class WorkLogsSync {
             this.drive.readJsonFilesWithStatus<WorkLogsFile>(WORKLOGS_FILENAME),
             this.drive.readJsonFilesWithStatus<WorkLogDeletionTombstonesFile>(WORKLOG_TOMBSTONES_FILENAME),
         ]);
-        if (workLogsResult.kind === 'store-unavailable' || workLogsResult.kind === 'error') {
-            throw new Error(workLogsResult.kind === 'error' ? workLogsResult.message : workLogsResult.status.message);
+        if (workLogsResult.kind === 'store-unavailable') {
+            throw new WorkLogsStoreUnavailableError(workLogsResult.status);
         }
-        if (tombstoneResult.kind === 'store-unavailable' || tombstoneResult.kind === 'error') {
-            throw new Error(tombstoneResult.kind === 'error' ? tombstoneResult.message : tombstoneResult.status.message);
+        if (workLogsResult.kind === 'error') {
+            throw new WorkLogsReadUnavailableError(workLogsResult.message);
+        }
+        if (tombstoneResult.kind === 'store-unavailable') {
+            throw new WorkLogsStoreUnavailableError(tombstoneResult.status);
+        }
+        if (tombstoneResult.kind === 'error') {
+            throw new WorkLogsReadUnavailableError(tombstoneResult.message);
         }
         const workLogsFiles = workLogsResult.kind === 'loaded' ? workLogsResult.files : [];
         const tombstoneFiles = tombstoneResult.kind === 'loaded' ? tombstoneResult.files : [];
@@ -667,69 +711,85 @@ async function performMergeCloudToLocal(
  * Odešle kompletní payload z IndexedDB do cloudu. Jednoduchý "celé to tam hoď" přístup.
  * Později (F7+) můžeme dělat deltas, ale pro F6 stačí celý payload.
  */
-interface MergeLocalToCloudOptions {
+export interface MergeLocalToCloudOptions {
     excludedWorkLogSyncIds?: readonly string[];
 }
 
-async function performMergeLocalToCloud(
+async function performMergeLocalToCloudDetailed(
     options: MergeLocalToCloudOptions = {},
-): Promise<boolean> {
+): Promise<WorkLogsPublishResult> {
     if (!workLogsSync.initialized) {
         await workLogsSync.init();
-        if (!workLogsSync.initialized) return false;
-    }
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const cloudResult = await workLogsSync.loadAllDetailed();
-        if (cloudResult.kind === 'store-unavailable' || cloudResult.kind === 'error') {
-            return false;
+        if (!workLogsSync.initialized) {
+            return {
+                kind: 'store-unavailable',
+                status: workLogsSync.status,
+                message: workLogsSync.status.message,
+            };
         }
-        if (
-            cloudResult.kind === 'loaded'
-            || cloudResult.data.workLogDeletionTombstones.length > 0
-        ) {
-            const excludedSyncIds = new Set(options.excludedWorkLogSyncIds ?? []);
-            const cloudWorkLogs = excludedSyncIds.size === 0
-                ? cloudResult.data.workLogs
-                : cloudResult.data.workLogs.filter(
-                    (workLog) => !workLog.syncId || !excludedSyncIds.has(workLog.syncId),
-                );
-            await performMergeCloudToLocal(
-                cloudWorkLogs,
-                cloudResult.data.projects,
-                cloudResult.data.workLogDeletionTombstones ?? [],
+    }
+    const cloudResult = await workLogsSync.loadAllDetailed();
+    if (cloudResult.kind === 'store-unavailable') {
+        return {
+            kind: 'store-unavailable',
+            status: cloudResult.status,
+            message: cloudResult.status.message,
+        };
+    }
+    if (cloudResult.kind === 'error') {
+        return { kind: 'read-unavailable', message: cloudResult.message };
+    }
+    if (
+        cloudResult.kind === 'loaded'
+        || cloudResult.data.workLogDeletionTombstones.length > 0
+    ) {
+        const excludedSyncIds = new Set(options.excludedWorkLogSyncIds ?? []);
+        const cloudWorkLogs = excludedSyncIds.size === 0
+            ? cloudResult.data.workLogs
+            : cloudResult.data.workLogs.filter(
+                (workLog) => !workLog.syncId || !excludedSyncIds.has(workLog.syncId),
             );
-        }
-        const [storedTombstones, storedWorkLogs, allProjects] = await db.transaction(
-            'r',
-            [db.workLogDeletionTombstones, db.workLogs, db.projects],
-            () => Promise.all([
-                db.workLogDeletionTombstones.toArray(),
-                db.workLogs.toArray(),
-                db.projects.toArray(),
-            ]),
+        await performMergeCloudToLocal(
+            cloudWorkLogs,
+            cloudResult.data.projects,
+            cloudResult.data.workLogDeletionTombstones ?? [],
         );
-        const tombstones = mergeWorkLogDeletionTombstones(storedTombstones);
-        const tombstonedIds = new Set(tombstones.map((tombstone) => tombstone.syncId));
-        const allWorkLogs = storedWorkLogs.filter(
-            (workLog) => !workLog.syncId || !tombstonedIds.has(workLog.syncId),
-        );
-        try {
-            const ts = await workLogsSync.saveAll({
-                workLogs: allWorkLogs,
-                projects: allProjects,
-                workLogDeletionTombstones: tombstones,
-            });
-            return ts !== null;
-        } catch (error) {
-            if (isDrivePreconditionConflict(error)) continue;
-            throw error;
-        }
     }
-    return false;
+    const [storedTombstones, storedWorkLogs, allProjects] = await db.transaction(
+        'r',
+        [db.workLogDeletionTombstones, db.workLogs, db.projects],
+        () => Promise.all([
+            db.workLogDeletionTombstones.toArray(),
+            db.workLogs.toArray(),
+            db.projects.toArray(),
+        ]),
+    );
+    const tombstones = mergeWorkLogDeletionTombstones(storedTombstones);
+    const tombstonedIds = new Set(tombstones.map((tombstone) => tombstone.syncId));
+    const allWorkLogs = storedWorkLogs.filter(
+        (workLog) => !workLog.syncId || !tombstonedIds.has(workLog.syncId),
+    );
+    return workLogsSync.saveAllDetailed({
+        workLogs: allWorkLogs,
+        projects: allProjects,
+        workLogDeletionTombstones: tombstones,
+    });
+}
+
+export async function mergeLocalToCloudDetailed(
+    options: MergeLocalToCloudOptions = {},
+): Promise<WorkLogsPublishResult> {
+    return enqueueWorkLogsSync(async () => {
+        try {
+            return await performMergeLocalToCloudDetailed(options);
+        } catch (error) {
+            return { kind: 'unexpected-error', message: getErrorMessage(error) };
+        }
+    });
 }
 
 export async function mergeLocalToCloud(
     options: MergeLocalToCloudOptions = {},
 ): Promise<boolean> {
-    return enqueueWorkLogsSync(() => performMergeLocalToCloud(options));
+    return (await mergeLocalToCloudDetailed(options)).kind === 'published';
 }

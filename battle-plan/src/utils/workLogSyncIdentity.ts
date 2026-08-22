@@ -8,8 +8,9 @@ type WorkLogIdentityFields = Pick<
 const normalize = (value: string | undefined): string =>
     (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-const syncTimestamp = (workLog: WorkLogIdentityFields): number =>
-    workLog.updatedAt ?? workLog.createdAt ?? 0;
+export const getSyncTimestamp = (
+    value: Pick<WorkLog, 'createdAt' | 'updatedAt'>,
+): number => value.updatedAt ?? value.createdAt ?? 0;
 
 const stableWorkLogContent = (workLog: WorkLog): unknown[] => [
     workLog.createdAt,
@@ -162,7 +163,7 @@ export function mergeWorkLogSnapshots<T extends WorkLogIdentityFields>(
     for (const workLog of cloudWorkLogs) {
         const key = getWorkLogSyncKey(workLog);
         const local = mergedByKey.get(key);
-        if (!local || syncTimestamp(workLog) > syncTimestamp(local)) {
+        if (!local || getSyncTimestamp(workLog) > getSyncTimestamp(local)) {
             mergedByKey.set(key, workLog);
         }
     }
