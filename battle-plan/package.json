@@ -1,7 +1,7 @@
 {
   "name": "battle-plan",
   "private": true,
-  "version": "4.3.57",
+  "version": "4.3.58",
   "type": "module",
   "scripts": {
     "dev": "vite",
