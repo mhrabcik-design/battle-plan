@@ -8,6 +8,7 @@ import {
     getTaskCompletionClasses,
     getTaskGridPresentation,
     getTaskListPresentation,
+    getTaskVisualTone,
     LEGACY_COMPLETED_CARD_CLASSES,
     sortTasksActiveFirst,
 } from './taskListPresentation.ts';
@@ -19,6 +20,13 @@ const task = (title: string, status: UnifiedTask['status'], urgency: UnifiedTask
     type: 'task',
     createdAt: 1,
     updatedAt: 1,
+});
+
+test('visual tone uses over-capacity then completed then task type precedence', () => {
+    assert.equal(getTaskVisualTone({ type: 'meeting', status: 'pending' }, false), 'meeting');
+    assert.equal(getTaskVisualTone({ type: 'task', status: 'pending' }, false), 'task');
+    assert.equal(getTaskVisualTone({ type: 'meeting', status: 'completed' }, false), 'completed');
+    assert.equal(getTaskVisualTone({ type: 'meeting', status: 'completed' }, true), 'danger');
 });
 
 test('completed tasks are hidden by default and can be explicitly included', () => {

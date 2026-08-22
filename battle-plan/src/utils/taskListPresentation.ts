@@ -5,6 +5,17 @@ export const COMPLETED_TASK_TITLE_CLASSES = 'text-emerald-200 line-through decor
 export const LEGACY_COMPLETED_CARD_CLASSES = 'opacity-50 grayscale-[0.3]';
 export const ACTIVE_TASK_TITLE_CLASSES = 'text-white group-hover:text-indigo-400';
 
+export type TaskVisualTone = 'task' | 'meeting' | 'completed' | 'danger';
+
+export function getTaskVisualTone<T extends Pick<UnifiedTask, 'type' | 'status'>>(
+    task: T,
+    overCapacity: boolean,
+): TaskVisualTone {
+    if (overCapacity) return 'danger';
+    if (task.status === 'completed') return 'completed';
+    return task.type === 'meeting' ? 'meeting' : 'task';
+}
+
 export function getTaskListPresentation<T extends Pick<UnifiedTask, 'status'>>(
     tasks: readonly T[],
     showCompleted = false,

@@ -1,9 +1,9 @@
 import React from 'react';
-import { motion } from 'framer-motion';
 import { X, Save } from 'lucide-react';
 import { googleService } from '../services/googleService';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
+import { OverlaySurface } from './ui/OverlaySurface';
 
 interface SettingsModalProps {
     apiKey: string;
@@ -33,16 +33,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setShowSettings
 }) => {
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-slate-950/95 backdrop-blur-md">
-            <motion.div
-                initial={{ y: 50, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 50, opacity: 0 }}
-                className="glass-card w-full max-w-sm p-8 space-y-6"
-            >
+        <OverlaySurface
+            title="Nastavení AI"
+            onRequestClose={() => setShowSettings(false)}
+            className="glass-card max-h-[min(90dvh,48rem)] w-full max-w-sm space-y-6 overflow-y-auto p-6 custom-scrollbar sm:p-8"
+        >
                 <div className="flex justify-between items-center">
                     <h2 className="text-2xl font-display font-bold text-white">Nastavení AI</h2>
-                    <button onClick={() => setShowSettings(false)} className="text-slate-500 hover:text-white transition-colors">
+                    <button aria-label="Zavřít nastavení" onClick={() => setShowSettings(false)} className="surface-action h-11 w-11 text-slate-400 hover:text-white">
                         <X />
                     </button>
                 </div>
@@ -54,7 +52,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             type="password"
                             value={apiKey}
                             onChange={(e) => setApiKey(e.target.value)}
-                            className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm focus:border-indigo-500/50 outline-none transition-all"
+                            className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-white text-sm focus:border-indigo-500/50 outline-none transition-[background-color,border-color,color]"
                             placeholder="Vložte svůj klíč..."
                         />
                     </div>
@@ -112,7 +110,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         ) : (
                             <button
                                 onClick={() => googleService.signIn()}
-                                className="w-full py-4 bg-white hover:bg-slate-200 text-slate-900 rounded-2xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-all active:scale-95"
+                                className="w-full py-4 bg-white hover:bg-slate-200 text-slate-900 rounded-2xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-[background-color,color,transform] active:scale-95"
                             >
                                 Google Přihlášení
                             </button>
@@ -122,12 +120,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 <button
                     onClick={saveSettings}
-                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 transition-all active:scale-95 rounded-2xl text-white font-black uppercase text-xs flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/20"
+                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 transition-[background-color,color,transform] active:scale-95 rounded-2xl text-white font-black uppercase text-xs flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/20"
                 >
                     <Save className="w-4 h-4" />
                     Uložit vše
                 </button>
-            </motion.div>
-        </div>
+        </OverlaySurface>
     );
 };

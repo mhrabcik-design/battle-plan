@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, Save, X, AlertTriangle, RotateCcw, Trash2 } from 'lucide-react';
 import { db, type Project, type WorkLog } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
@@ -7,6 +6,7 @@ import { findProjectByName, type ExtractedWorkLog, type ExtractedWorkLogBatch } 
 import { derivePersonHourMetadata, getWorkLogRowIssues, parseDecimalHours } from '../../utils/workLogBatch';
 import { createWorkLogSyncId } from '../../utils/workLogSyncIdentity';
 import { getErrorMessage } from '../../utils/errors';
+import { OverlaySurface } from '../ui/OverlaySurface';
 import {
     addWorkLogsWithActiveProjects,
     ProjectUnavailableError,
@@ -40,6 +40,9 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
         })),
     );
     const [saving, setSaving] = useState(false);
+    const requestClose = () => {
+        if (!saving) onCancelled();
+    };
     const [saveError, setSaveError] = useState<string | null>(null);
     const [catalogLoadError, setCatalogLoadError] = useState<string | null>(null);
 
@@ -154,21 +157,12 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
     };
 
     return (
-        <AnimatePresence>
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md flex items-stretch justify-center overflow-y-auto"
-                onClick={onCancelled}
-            >
-                <motion.div
-                    initial={{ y: 20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ y: 20, opacity: 0 }}
-                    className="w-full max-w-5xl bg-slate-900 border-l border-white/5 shadow-2xl flex flex-col"
-                    onClick={(e) => e.stopPropagation()}
-                >
+        <OverlaySurface
+            title="Ověřit diktování práce"
+            onRequestClose={requestClose}
+            variant="sheet"
+            className="flex h-full w-full max-w-5xl flex-col overflow-hidden border-l border-white/10 bg-slate-900 shadow-2xl"
+        >
                     <div className="p-5 border-b border-slate-800 flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3">
                             <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
@@ -185,8 +179,10 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                         </div>
                         <button
                             type="button"
-                            onClick={onCancelled}
-                            className="p-2 text-slate-500 hover:text-white transition-all"
+                            onClick={requestClose}
+                            disabled={saving}
+                            aria-label="Zavřít ověření diktování"
+                            className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-800/70 hover:text-white transition-[background-color,color]"
                         >
                             <X className="w-5 h-5" />
                         </button>
@@ -227,7 +223,7 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                                         <button
                                             type="button"
                                             onClick={() => removeEntry(entry.localId)}
-                                            className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-all"
+                                            className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg text-red-400 hover:bg-red-500/10 transition-colors"
                                             title="Odebrat řádek"
                                         >
                                             <Trash2 className="w-4 h-4" />
@@ -321,7 +317,8 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                     <div className="p-5 border-t border-slate-800 flex justify-end gap-2">
                         <button
                             type="button"
-                            onClick={onCancelled}
+                            onClick={requestClose}
+                            disabled={saving}
                             className="flex items-center gap-1.5 px-4 py-2 text-slate-400 hover:text-white text-xs font-black uppercase tracking-widest rounded-lg"
                         >
                             <RotateCcw className="w-3.5 h-3.5" />
@@ -337,8 +334,6 @@ export function WorkLogVoiceConfirm({ extracted, onConfirmed, onCancelled }: Wor
                             {saving ? 'Ukládám…' : `Uložit ${entries.length}×`}
                         </button>
                     </div>
-                </motion.div>
-            </motion.div>
-        </AnimatePresence>
+        </OverlaySurface>
     );
 }

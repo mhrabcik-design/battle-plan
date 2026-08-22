@@ -15,6 +15,11 @@ interface UseTaskCommandsArgs {
   setIsProcessing: (isProcessing: boolean) => void;
 }
 
+export type EditorSaveOutcome =
+  | { status: 'success' }
+  | { status: 'success-sync-warning'; message: string }
+  | { status: 'failed'; message: string };
+
 export function useTaskCommands({
   googleAuth,
   activeTaskList,
@@ -138,14 +143,19 @@ export function useTaskCommands({
   }, [googleAuth, refreshGoogleTasks]);
 
   const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
-    if (!confirm('Opravdu smazat tento záznam?')) return;
+    if (!confirm('Opravdu smazat tento záznam?')) return false;
 
-    if (task.isGoogleTask && task.googleId && hasUsableAuth(googleAuth)) {
-      await googleService.deleteGoogleTask(task.googleId, task.googleListId);
-      if (isAuthUnavailableNow()) {
+    if (task.isGoogleTask && task.googleId) {
+      if (!hasUsableAuth(googleAuth)) {
         alert(AUTH_UNAVAILABLE_MSG);
+        return false;
       }
-      refreshGoogleTasks();
+      const deleted = await googleService.deleteGoogleTask(task.googleId, task.googleListId);
+      if (!deleted) {
+        if (isAuthUnavailableNow()) alert(AUTH_UNAVAILABLE_MSG);
+        return false;
+      }
+      await refreshGoogleTasks();
     } else if (task.id) {
       if (task.googleEventId && hasUsableAuth(googleAuth)) {
         try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
@@ -154,10 +164,11 @@ export function useTaskCommands({
         }
       }
       await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
-    }
+    } else return false;
+    return true;
   }, [googleAuth, refreshGoogleTasks]);
 
-  const handleSaveEdit = useCallback(async () => {
+  const handleSaveEdit = useCallback(async (): Promise<EditorSaveOutcome> => {
     if (editingTask) {
       if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth(googleAuth)) {
         const result = await googleService.updateGoogleTask(editingTask.googleId, {
@@ -168,6 +179,7 @@ export function useTaskCommands({
         if (result === null && isAuthUnavailableNow()) {
           alert(AUTH_UNAVAILABLE_MSG);
         }
+        if (result === null) return { status: 'failed', message: 'Google Task se nepodařilo uložit.' };
         refreshGoogleTasks();
       } else if (editingTask.id) {
         const taskData = { ...editingTask };
@@ -175,6 +187,7 @@ export function useTaskCommands({
         delete (taskData as Partial<UnifiedTask>).googleId;
         delete (taskData as Partial<UnifiedTask>).googleListId;
         await db.tasks.update(editingTask.id, { ...taskData, updatedAt: Date.now() });
+        let syncWarning: string | null = null;
         if (editingTask.type === 'meeting' && hasUsableAuth(googleAuth)) {
           try {
             const eventId = await googleService.addToCalendar(editingTask);
@@ -182,16 +195,21 @@ export function useTaskCommands({
               await db.tasks.update(editingTask.id, { googleEventId: eventId, updatedAt: Date.now() });
             }
             if (!eventId && isAuthUnavailableNow()) {
-              alert(AUTH_UNAVAILABLE_MSG);
+              syncWarning = AUTH_UNAVAILABLE_MSG;
+            } else if (!eventId) {
+              syncWarning = 'Změna je uložená lokálně, ale synchronizace s Google Kalendářem selhala.';
             }
           } catch (e) {
             console.error("Save Google sync failed", e);
+            syncWarning = 'Změna je uložená lokálně, ale synchronizace s Google Kalendářem selhala.';
           }
         }
-      }
-      setEditingTask(null);
+        if (syncWarning) return { status: 'success-sync-warning', message: syncWarning };
+      } else return { status: 'failed', message: 'Záznam nemá platnou identitu pro uložení.' };
+      return { status: 'success' };
     }
-  }, [editingTask, googleAuth, refreshGoogleTasks, setEditingTask]);
+    return { status: 'failed', message: 'Editor už není otevřený.' };
+  }, [editingTask, googleAuth, refreshGoogleTasks]);
 
   const handleSyncToGoogle = useCallback(async (task: UnifiedTask) => {
     if (!task.id || !hasUsableAuth(googleAuth)) {
