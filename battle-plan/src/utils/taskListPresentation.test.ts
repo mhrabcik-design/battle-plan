@@ -44,20 +44,36 @@ test('completed tasks are hidden by default and can be explicitly included', () 
     assert.equal(expandedPresentation.visibleTasks, tasks);
 });
 
-test('completed-task filtering applies only to the Tasks view', () => {
+test('completed items are hidden by default in Tasks and Meetings views', () => {
     const tasks = [task('Active', 'pending', 2), task('Completed', 'completed', 3)];
 
     assert.deepEqual(getTaskGridPresentation(tasks, 'tasks').visibleTasks, [tasks[0]]);
-    assert.equal(getTaskGridPresentation(tasks, 'tasks', true).visibleTasks, tasks);
+    assert.deepEqual(getTaskGridPresentation(tasks, 'meetings').visibleTasks, [tasks[0]]);
 
-    for (const viewMode of ['battle', 'week', 'meetings', 'thoughts'] as const) {
+    for (const viewMode of ['battle', 'week', 'thoughts'] as const) {
         const presentation = getTaskGridPresentation(tasks, viewMode);
         assert.equal(presentation.visibleTasks, tasks);
         assert.equal(presentation.completedTaskCount, 0);
     }
 });
 
-test('emerald completed styling is scoped to the Tasks view treatment', () => {
+test('Tasks and Meetings can independently include completed items', () => {
+    const tasks = [task('Active', 'pending', 2), task('Completed', 'completed', 3)];
+
+    const tasksExpanded = getTaskGridPresentation(tasks, 'tasks', true);
+    const meetingsStillCollapsed = getTaskGridPresentation(tasks, 'meetings', false);
+
+    assert.equal(tasksExpanded.visibleTasks, tasks);
+    assert.deepEqual(meetingsStillCollapsed.visibleTasks, [tasks[0]]);
+
+    const meetingsExpanded = getTaskGridPresentation(tasks, 'meetings', true);
+    const tasksStillCollapsed = getTaskGridPresentation(tasks, 'tasks', false);
+
+    assert.equal(meetingsExpanded.visibleTasks, tasks);
+    assert.deepEqual(tasksStillCollapsed.visibleTasks, [tasks[0]]);
+});
+
+test('emerald completed styling is opt-in for filtered list views', () => {
     assert.deepEqual(getTaskCompletionClasses(true, true), {
         card: COMPLETED_TASK_CARD_CLASSES,
         title: COMPLETED_TASK_TITLE_CLASSES,

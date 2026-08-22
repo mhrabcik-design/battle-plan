@@ -39,9 +39,11 @@ export function getTaskGridPresentation<T extends Pick<UnifiedTask, 'status'>>(
     viewMode: ViewMode,
     showCompleted = false,
 ): { completedTaskCount: number; visibleTasks: readonly T[] } {
-    return viewMode === 'tasks'
-        ? getTaskListPresentation(tasks, showCompleted)
-        : { completedTaskCount: 0, visibleTasks: tasks };
+    if (viewMode === 'tasks' || viewMode === 'meetings') {
+        return getTaskListPresentation(tasks, showCompleted);
+    }
+
+    return { completedTaskCount: 0, visibleTasks: tasks };
 }
 
 export function getTaskCompletionClasses(isCompleted: boolean, useCompletedTaskTreatment: boolean) {
