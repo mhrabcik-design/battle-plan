@@ -48,6 +48,11 @@ The browser-side Drive persistence layer for small JSON files in the shared Batt
 
 The shared store owns folder lookup, cached folder identity, file lookup, JSON download, and multipart upload mechanics. Domain services still own payload shape, merge rules, diagnostics, and user-facing error meaning.
 
+### Immutable Drive Snapshot
+A complete domain state written as a new Drive file and accepted only after a reread proves that the conflict-checked union contains the intended change.
+
+Immutable Drive Snapshots avoid unsafe browser-side replacement when Drive does not expose a concurrency validator. Their domain service still owns identity, merge, deletion, ambiguity, and compaction rules.
+
 ### Agent Collaboration Protocol
 A versioned, paired message contract through which an external agent can propose work, request allowlisted domain mutations, receive explicit outcomes, and consume safe BattlePlan change events.
 

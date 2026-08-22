@@ -10,6 +10,7 @@ import {
     GOOGLE_DRIVE_RECONSENT_MESSAGE,
     isDriveScopeError,
     taskBackupHealth,
+    workLogsBackupHealth,
 } from './driveSyncDiagnostics.ts';
 import { ProjectIdentityConflictError } from './projectIdentityReconciliation.ts';
 import { DriveTransportError } from '../services/agentProtocol/driveTransport.ts';
@@ -69,6 +70,25 @@ test('taskBackupHealth preserves real read errors', () => {
         detail: 'Načtení Drive zálohy selhalo',
         lastError: '500 Nope',
     });
+});
+
+test('workLogsBackupHealth never presents a rejected publication as stale', () => {
+    const failures = [
+        { kind: 'store-unavailable' as const, status: { code: 'drive-client-unavailable' as const, message: 'Drive client missing' }, message: 'Drive client missing' },
+        { kind: 'read-unavailable' as const, message: 'Drive read failed' },
+        { kind: 'verification-failed' as const, message: 'Snapshot verification failed' },
+        { kind: 'unexpected-error' as const, message: 'Unexpected write failure' },
+    ];
+
+    assert.deepEqual(
+        failures.map(workLogsBackupHealth),
+        [
+            { state: 'error', detail: 'WorkLogs záloha na Disk selhala', lastError: 'Drive client missing' },
+            { state: 'error', detail: 'WorkLogs záloha na Disk selhala', lastError: 'Drive read failed' },
+            { state: 'error', detail: 'WorkLogs zálohu se nepodařilo ověřit', lastError: 'Snapshot verification failed' },
+            { state: 'error', detail: 'WorkLogs záloha na Disk selhala', lastError: 'Unexpected write failure' },
+        ],
+    );
 });
 
 test('emptySuggestionsHealth reports a healthy empty suggestions file state', () => {

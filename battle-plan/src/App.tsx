@@ -17,7 +17,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
 import { taskDriveBackup } from './services/taskDriveBackup';
-import { mergeLocalToCloud } from './services/workLogsSync';
+import { mergeLocalToCloudDetailed } from './services/workLogsSync';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList, GoogleTaskRaw } from './types';
 import { hasUsableAuth as checkUsableAuth, isAuthUnavailable } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -43,6 +43,7 @@ import {
 import { isTaskCleanupCandidate, isTaskVisibleInWeek } from './utils/taskHistory';
 import { getTaskGridPresentation, sortTasksActiveFirst } from './utils/taskListPresentation';
 import { buildInfo } from './utils/buildInfo';
+import { workLogsBackupHealth } from './utils/driveSyncDiagnostics';
 import { getErrorMessage } from './utils/errors';
 
 const SuggestionsPage = lazy(() => import('./pages/SuggestionsPage').then((module) => ({ default: module.SuggestionsPage })));
@@ -453,9 +454,9 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
       if (disposed || !pending || inFlight) return;
       inFlight = true;
       try {
-        const ok = await mergeLocalToCloud();
+        const result = await mergeLocalToCloudDetailed();
         if (disposed) return;
-        if (ok) {
+        if (result.kind === 'published') {
           pending = false;
           updateSyncHealth('worklogs', {
             state: 'ok',
@@ -465,10 +466,8 @@ const syncVisualState: 'ok' | 'pending' | 'failed' = useMemo(() => {
           });
           addLog('WorkLogs záloha na Disk úspěšná', 'info');
         } else {
-          updateSyncHealth('worklogs', {
-            state: 'stale',
-            detail: 'WorkLogs záloha nebyla provedena',
-          });
+          updateSyncHealth('worklogs', workLogsBackupHealth(result));
+          addLog(`WorkLogs záloha na Disk selhala: ${result.message}`, 'error');
           scheduleRetry();
         }
       } catch (e) {
