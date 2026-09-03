@@ -150,13 +150,10 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         const observer = new ResizeObserver(([entry]) => {
             const nextWidth = Math.max(112, (entry.contentRect.width - 60) / 7);
             setDayWidth(nextWidth);
-            if (dragRef.current?.dragging) {
-                resetDragState('Přesun zrušen kvůli změně rozvržení');
-            }
         });
         observer.observe(calendar);
         return () => observer.disconnect();
-    }, [resetDragState]);
+    }, []);
 
     const captureDropLaneGeometry = useCallback(() => {
         const calendar = calendarRef.current;

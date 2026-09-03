@@ -10,7 +10,8 @@ symptoms:
   - Implementace musela zabránit tomu, aby odchod z hrany těsně před puštěním byl vyhodnocen podle zastaralého stavu.
   - Časovač přechodu mohl doběhnout poté, co ukazatel opustil aktivní hranu.
   - Po přepnutí týdne se tažená karta ztratila a nebylo ji možné položit do nového týdne.
-root_cause: async_timing_and_pointer_capture_lifecycle
+  - U týdnů s odlišnou geometrií se drag zrušil s hláškou „Přesun zrušen kvůli změně rozvržení“.
+root_cause: async_timing_pointer_capture_and_resize_lifecycle
 resolution_type: code_fix
 severity: medium
 tags: [weekly-calendar, drag-and-drop, pointer-events, edge-dwell, cross-week, async-timing]
@@ -31,18 +32,22 @@ Skrytým rizikem je pořadí událostí. Pohyb ukazatele je kvůli plynulosti sl
 - Edge timeout mohl doběhnout poté, co ukazatel fyzicky opustil původně aktivovanou hranu.
 - Drag preview, otevřený týden a finální reschedule cíl se proto mohly rozcházet.
 - Pokud pointer capture vlastnila původní karta, její odmontování při animaci týdne přerušilo další pohybové události.
+- `ResizeObserver` rušil každý aktivní drag. Přechod na týden s jinou výškou obsahu nebo se změnou scrollbaru tak sám vyvolal `resetDragState`, uvolnil capture a odstranil ghost.
 
 ## What Didn't Work
 
 - Navázat celý lifecycle na původní kartu nestačí. Přepnutí klíčovaného týdne nahradí kalendářní DOM a s ním i původní zdrojový element a drop zóny.
 - Ani naposledy publikovaný React stav hrany není spolehlivou autoritou. Aktualizuje se až v naplánovaném animation frame, který může `pointerup` nebo timeout časově předběhnout.
 - Samotný vyzbrojený směr časovače nedokazuje, že ukazatel po celou dobu setrval ve stejné zóně. Podmínky pro navigaci je nutné ověřit znovu v okamžiku, kdy má skutečně nastat.
+- Browser QA se stejnou geometrií obou týdnů neaktivovalo `ResizeObserver`, a proto nemohlo odhalit datově závislé zrušení dragu.
 
 ## Solution
 
 Kalendář má během dragu viditelnou levou a pravou edge zónu. Čistý hit test odmítá body mimo viewport a na úzké ploše omezí zóny tak, aby se nepřekrývaly (`battle-plan/src/utils/calendarUtils.ts:136`, `battle-plan/src/utils/calendarUtils.ts:149`). Vstup do zóny spustí 650ms dwell; jeho průběh je vidět jako výplň hrany a dokončení otevře sousední týden (`battle-plan/src/components/WeeklyCalendar.tsx:56`, `battle-plan/src/components/WeeklyCalendar.tsx:251`).
 
 Drag session žije v refs a globálních pointer listenerech nad klíčovaným týdnem. To samo ale nestačí: během nerozhodnutého stisknutí drží pointer capture karta, aby obyčejné kliknutí dál otevřelo detail. Jakmile pohyb překročí drag threshold, capture se předá stabilnímu scroll kontejneru `calendarRef`, který neleží v klíčovaném podstromu (`battle-plan/src/components/WeeklyCalendar.tsx`). Po změně týdne `useLayoutEffect` znovu změří viewport a denní pruhy a vyhodnotí poslední polohu ukazatele proti novému layoutu. Samotný týden vstupuje směrovým spring přechodem.
+
+`ResizeObserver` nyní pouze aktualizuje šířku dne. Aktivní drag neruší: navazující `useLayoutEffect`, závislý na šířce dne, výšce celodenního pruhu, úkolech a týdnu, znovu zachytí geometrii a přepočítá cíl podle poslední polohy ukazatele.
 
 Dvě terminální cesty rozhodují synchronně:
 
@@ -51,7 +56,7 @@ Dvě terminální cesty rozhodují synchronně:
 
 Finální uložení zůstává sémantické: celodenní cíl odstraní čas, schůzka ukládá začátek bloku a úkol deadline na jeho konec podle délky. Bezezměnový drop se nepersistuje (`battle-plan/src/utils/calendarUtils.ts:175`, `battle-plan/src/utils/calendarUtils.ts:197`).
 
-Regresní unit testy pokrývají hranice zón, jejich nepřekrývání v úzkém viewportu a rozhodovací predikáty (`battle-plan/src/utils/calendarUtils.test.ts`). Skutečný capture lifecycle nemá v projektu komponentový testovací seam, proto jej ověřuje browser QA: nejprve ověří obyčejné kliknutí, potom drží reálný pointer přes dwell, ověří přechod na další týden, přesune jej nad nový den a teprve potom jej pustí.
+Regresní unit testy pokrývají hranice zón, jejich nepřekrývání v úzkém viewportu a rozhodovací predikáty (`battle-plan/src/utils/calendarUtils.test.ts`). Skutečný capture lifecycle nemá v projektu komponentový testovací seam, proto jej ověřuje browser QA: nejprve ověří obyčejné kliknutí, během dragu vynutí změnu rozměru při přepnutí týdne, přesune pointer nad nový den a teprve potom jej pustí.
 
 ## Why This Works
 
@@ -65,6 +70,7 @@ Zároveň odděluje životnost dragu, capture vlastníka a geometrie. Drag sessi
 - Dwell, hover a long-press callbacky musí při doběhnutí znovu ověřit všechny podmínky opravňující akci.
 - Pokud interakce vyvolává keyed remount, držte její lifecycle nad remountovaným podstromem; lokální DOM geometrii naopak považujte za pomíjivou.
 - Před drag threshold ponechte pointer capture na původním interaktivním prvku kvůli správnému click targetu; pro skutečný drag jej předejte prvku, jehož DOM životnost pokryje zbytek interakce.
+- Změnu interní geometrie během dragu řešte novým měřením a přepočtem cíle, ne zrušením celé uživatelské interakce.
 - Čistěte časovače, animation frames a transientní intent při `pointercancel`, blur, skrytí dokumentu a unmountu.
 - Boundary testy doplňte testy pořadí událostí, zejména „odchod před frame“ a „timeout po odchodu“.
 - Perzistujte jediný sémantický výsledek až po vyřešení finálního cíle; zrušený nebo bezezměnový drop nic nezapisuje.
