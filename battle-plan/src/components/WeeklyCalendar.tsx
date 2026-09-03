@@ -38,7 +38,7 @@ type DragState = {
     startX: number;
     startY: number;
     dragging: boolean;
-    source: HTMLButtonElement;
+    captureTarget: Element;
 };
 
 type DropLaneGeometry = {
@@ -130,7 +130,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     const resetDragState = useCallback((message?: string) => {
         const drag = dragRef.current;
         if (drag && drag.pointerId !== -1) {
-            if (drag.source.hasPointerCapture(drag.pointerId)) drag.source.releasePointerCapture(drag.pointerId);
+            if (drag.captureTarget.hasPointerCapture(drag.pointerId)) drag.captureTarget.releasePointerCapture(drag.pointerId);
         }
         dragRef.current = null;
         pointerPositionRef.current = null;
@@ -286,7 +286,8 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     const handlePointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>, task: UnifiedTask) => {
         if (busyTask || event.button !== 0) return;
         clearEdgeIntent();
-        event.currentTarget.setPointerCapture(event.pointerId);
+        const captureTarget = event.currentTarget;
+        captureTarget.setPointerCapture(event.pointerId);
         dropLaneGeometryRef.current = captureDropLaneGeometry();
         dragRef.current = {
             task,
@@ -294,7 +295,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             startX: event.clientX,
             startY: event.clientY,
             dragging: false,
-            source: event.currentTarget,
+            captureTarget,
         };
     }, [busyTask, captureDropLaneGeometry, clearEdgeIntent]);
 
@@ -354,6 +355,11 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
             if (!drag.dragging && distance < DRAG_THRESHOLD) return;
             if (!drag.dragging) {
+                const stableCaptureTarget = calendarRef.current;
+                if (stableCaptureTarget && stableCaptureTarget !== drag.captureTarget) {
+                    stableCaptureTarget.setPointerCapture(event.pointerId);
+                    drag.captureTarget = stableCaptureTarget;
+                }
                 drag.dragging = true;
                 setDraggingTask(drag.task);
             }
@@ -405,7 +411,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         if (!active) {
             event.preventDefault();
             const initialTarget = keyboardTargetFor(task);
-            dragRef.current = { task, pointerId: -1, startX: 0, startY: 0, dragging: true, source: event.currentTarget };
+            dragRef.current = { task, pointerId: -1, startX: 0, startY: 0, dragging: true, captureTarget: event.currentTarget };
             setDraggingTask(task);
             publishTarget(task, initialTarget);
             return;
