@@ -1,0 +1,13 @@
+services:
+  battle-plan:
+    build:
+      context: ./battle-plan
+      dockerfile: Dockerfile
+      args:
+        BP_BUILD_COMMIT: ${BP_BUILD_COMMIT:-docker}
+    image: battle-plan:local
+    container_name: battle-plan
+    ports:
+      - "4173:80"
+    restart: unless-stopped
+
