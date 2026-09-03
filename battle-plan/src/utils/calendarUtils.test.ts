@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getWeeklyReschedulePatch, isWeeklyScheduleNoop, snapWeeklyMinute } from './calendarUtils.ts';
+import {
+    getWeeklyEdgeDirection,
+    getWeeklyEdgeDirectionAtPoint,
+    getWeeklyReschedulePatch,
+    isWeeklyScheduleNoop,
+    shouldNavigateWeeklyEdge,
+    snapWeeklyMinute,
+} from './calendarUtils.ts';
 import type { UnifiedTask } from '../types.ts';
 
 const task = (overrides: Partial<UnifiedTask>): UnifiedTask => ({
@@ -52,4 +59,38 @@ test('weekly no-op comparison uses the semantic task and meeting fields', () => 
     assert.equal(isWeeklyScheduleNoop(task({ deadline: '2026-08-12', startTime: undefined, isAllDay: undefined }), {
         date: '2026-08-12', deadline: '2026-08-12', startTime: undefined, isAllDay: true,
     }), true);
+});
+
+test('weekly edge direction activates only inside the calendar edge zones', () => {
+    assert.equal(getWeeklyEdgeDirection(99, 100, 900), null);
+    assert.equal(getWeeklyEdgeDirection(100, 100, 900), -1);
+    assert.equal(getWeeklyEdgeDirection(171, 100, 900), -1);
+    assert.equal(getWeeklyEdgeDirection(172, 100, 900), -1);
+    assert.equal(getWeeklyEdgeDirection(173, 100, 900), null);
+    assert.equal(getWeeklyEdgeDirection(827, 100, 900), null);
+    assert.equal(getWeeklyEdgeDirection(828, 100, 900), 1);
+    assert.equal(getWeeklyEdgeDirection(900, 100, 900), 1);
+    assert.equal(getWeeklyEdgeDirection(901, 100, 900), null);
+});
+
+test('weekly edge zones never overlap in a narrow calendar', () => {
+    assert.equal(getWeeklyEdgeDirection(120, 100, 140), -1);
+    assert.equal(getWeeklyEdgeDirection(121, 100, 140), 1);
+});
+
+test('weekly pointer exit is authoritative even before the next animation frame', () => {
+    const viewport = { left: 100, right: 900, top: 50, bottom: 650 };
+
+    assert.equal(getWeeklyEdgeDirectionAtPoint(890, 300, viewport), 1);
+    assert.equal(getWeeklyEdgeDirectionAtPoint(500, 300, viewport), null);
+});
+
+test('weekly edge dwell navigates only while the pointer remains in the armed edge', () => {
+    const viewport = { left: 100, right: 900, top: 50, bottom: 650 };
+    const armedEdge = 1;
+
+    assert.equal(shouldNavigateWeeklyEdge(armedEdge, getWeeklyEdgeDirectionAtPoint(890, 300, viewport)), true);
+    assert.equal(shouldNavigateWeeklyEdge(armedEdge, getWeeklyEdgeDirectionAtPoint(500, 300, viewport)), false);
+    assert.equal(shouldNavigateWeeklyEdge(armedEdge, getWeeklyEdgeDirectionAtPoint(890, 700, viewport)), false);
+    assert.equal(shouldNavigateWeeklyEdge(armedEdge, -1), false);
 });

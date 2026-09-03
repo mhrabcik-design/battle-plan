@@ -121,10 +121,45 @@ export type WeeklyDropTarget = {
 };
 
 export type WeeklySchedulePatch = Pick<UnifiedTask, 'date' | 'deadline' | 'startTime' | 'isAllDay'>;
+export type WeeklyEdgeDirection = -1 | 1;
+export type WeeklyEdgeViewport = {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+};
 
 const WEEK_START_MINUTES = 7 * 60;
 const WEEK_END_MINUTES = 19 * 60;
 const WEEK_SNAP_MINUTES = 15;
+
+export const getWeeklyEdgeDirection = (
+    pointerX: number,
+    viewportLeft: number,
+    viewportRight: number,
+    zoneWidth = 72,
+): WeeklyEdgeDirection | null => {
+    if (viewportRight <= viewportLeft || pointerX < viewportLeft || pointerX > viewportRight) return null;
+    const activeWidth = Math.min(Math.max(0, zoneWidth), (viewportRight - viewportLeft) / 2);
+    if (pointerX <= viewportLeft + activeWidth) return -1;
+    if (pointerX >= viewportRight - activeWidth) return 1;
+    return null;
+};
+
+export const getWeeklyEdgeDirectionAtPoint = (
+    pointerX: number,
+    pointerY: number,
+    viewport: WeeklyEdgeViewport,
+    zoneWidth = 72,
+): WeeklyEdgeDirection | null => {
+    if (pointerY < viewport.top || pointerY > viewport.bottom) return null;
+    return getWeeklyEdgeDirection(pointerX, viewport.left, viewport.right, zoneWidth);
+};
+
+export const shouldNavigateWeeklyEdge = (
+    armedDirection: WeeklyEdgeDirection,
+    currentDirection: WeeklyEdgeDirection | null,
+): boolean => currentDirection === armedDirection;
 
 const formatClockMinutes = (minutes: number): string => {
     const hours = Math.floor(minutes / 60);
