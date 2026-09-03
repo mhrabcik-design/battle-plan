@@ -1,18 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, Clock, GripVertical, Hourglass, MapPin, Sun } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Clock, GripVertical, Hourglass, MapPin, Sun } from 'lucide-react';
 import type { UnifiedTask } from '../types';
 import {
     formatTimeLeft,
     getDeadlineColor,
     getTimePosition,
     getWeekDays,
+    getWeeklyEdgeDirectionAtPoint,
     getWeeklyReschedulePatch,
     isWeeklyScheduleNoop,
     isAllDayTask,
     isOverCapacity,
+    shouldNavigateWeeklyEdge,
     snapWeeklyMinute,
     type WeeklyDropTarget,
+    type WeeklyEdgeDirection,
     type WeeklySchedulePatch,
 } from '../utils/calendarUtils';
 import { getCalendarDensity, getWeeklyVisualInterval, layoutCalendarIntervals } from '../utils/weeklyCalendarLayout';
@@ -25,6 +28,7 @@ interface WeeklyCalendarProps {
     currentTime: Date;
     currentHourPosition: number;
     setEditingTask: (task: UnifiedTask) => void;
+    onChangeWeek: (direction: WeeklyEdgeDirection) => void;
     onRescheduleTask: (task: UnifiedTask, patch: WeeklySchedulePatch) => Promise<boolean>;
 }
 
@@ -34,6 +38,7 @@ type DragState = {
     startX: number;
     startY: number;
     dragging: boolean;
+    source: HTMLButtonElement;
 };
 
 type DropLaneGeometry = {
@@ -48,6 +53,7 @@ type DropLaneGeometry = {
 const ALL_DAY_LANE_HEIGHT = 32;
 const ALL_DAY_VISIBLE_ROWS = 3;
 const DRAG_THRESHOLD = 8;
+const EDGE_DWELL_MS = 650;
 
 const taskKey = (task: UnifiedTask) => task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`;
 
@@ -59,6 +65,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     currentTime,
     currentHourPosition,
     setEditingTask,
+    onChangeWeek,
     onRescheduleTask,
 }) => {
     const startHour = calendarHours[0] ?? 7;
@@ -69,12 +76,25 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     const lastTargetKeyRef = useRef<string | null>(null);
     const ghostRef = useRef<HTMLDivElement | null>(null);
     const animationFrameRef = useRef<number | null>(null);
+    const edgeTimerRef = useRef<number | null>(null);
+    const edgeDirectionRef = useRef<WeeklyEdgeDirection | null>(null);
+    const previousWeekOffsetRef = useRef(weekOffset);
     const pointerPositionRef = useRef<{ x: number; y: number } | null>(null);
     const collisionTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
-    const dropLaneGeometryRef = useRef<{ lanes: DropLaneGeometry[]; scrollLeft: number; scrollTop: number } | null>(null);
+    const dropLaneGeometryRef = useRef<{
+        lanes: DropLaneGeometry[];
+        scrollLeft: number;
+        scrollTop: number;
+        viewportLeft: number;
+        viewportRight: number;
+        viewportTop: number;
+        viewportBottom: number;
+    } | null>(null);
     const calendarRef = useRef<HTMLDivElement | null>(null);
     const [dropTarget, setDropTarget] = useState<WeeklyDropTarget | null>(null);
     const [draggingTask, setDraggingTask] = useState<UnifiedTask | null>(null);
+    const [edgeDirection, setEdgeDirection] = useState<WeeklyEdgeDirection | null>(null);
+    const [edgeLocked, setEdgeLocked] = useState(false);
     const [busyTask, setBusyTask] = useState<string | null>(null);
     const [announcement, setAnnouncement] = useState('');
     const [dayWidth, setDayWidth] = useState(160);
@@ -98,11 +118,19 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     const allDayLaneHeight = Math.max(ALL_DAY_LANE_HEIGHT, Math.max(Math.min(Math.max(...allDayCounts), ALL_DAY_VISIBLE_ROWS), expandedCount) * ALL_DAY_LANE_HEIGHT);
     const timelineTop = 40 + allDayLaneHeight;
 
+    const clearEdgeIntent = useCallback(() => {
+        if (edgeTimerRef.current === null && edgeDirectionRef.current === null) return;
+        if (edgeTimerRef.current !== null) window.clearTimeout(edgeTimerRef.current);
+        edgeTimerRef.current = null;
+        edgeDirectionRef.current = null;
+        setEdgeDirection(null);
+        setEdgeLocked(false);
+    }, []);
+
     const resetDragState = useCallback((message?: string) => {
         const drag = dragRef.current;
         if (drag && drag.pointerId !== -1) {
-            const source = document.querySelector<HTMLElement>(`[data-task-key="${taskKey(drag.task)}"]`);
-            if (source?.hasPointerCapture(drag.pointerId)) source.releasePointerCapture(drag.pointerId);
+            if (drag.source.hasPointerCapture(drag.pointerId)) drag.source.releasePointerCapture(drag.pointerId);
         }
         dragRef.current = null;
         pointerPositionRef.current = null;
@@ -110,10 +138,11 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         lastTargetKeyRef.current = null;
         if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
+        clearEdgeIntent();
         setDropTarget(null);
         setDraggingTask(null);
         if (message) setAnnouncement(message);
-    }, []);
+    }, [clearEdgeIntent]);
 
     useEffect(() => {
         const calendar = calendarRef.current;
@@ -129,9 +158,10 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         return () => observer.disconnect();
     }, [resetDragState]);
 
-    const captureDropLaneGeometry = () => {
+    const captureDropLaneGeometry = useCallback(() => {
         const calendar = calendarRef.current;
         if (!calendar) return null;
+        const viewport = calendar.getBoundingClientRect();
         const lanes = Array.from(calendar.querySelectorAll<HTMLElement>('[data-week-drop-lane]')).flatMap((element): DropLaneGeometry[] => {
             const lane = element.dataset.weekDropLane as WeeklyDropTarget['lane'];
             const date = element.dataset.weekDate;
@@ -139,10 +169,18 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             const rect = element.getBoundingClientRect();
             return [{ date, lane, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }];
         });
-        return { lanes, scrollLeft: calendar.scrollLeft, scrollTop: calendar.scrollTop };
-    };
+        return {
+            lanes,
+            scrollLeft: calendar.scrollLeft,
+            scrollTop: calendar.scrollTop,
+            viewportLeft: viewport.left,
+            viewportRight: viewport.right,
+            viewportTop: viewport.top,
+            viewportBottom: viewport.bottom,
+        };
+    }, []);
 
-    const targetAtPoint = (task: UnifiedTask, x: number, y: number): WeeklyDropTarget | null => {
+    const targetAtPoint = useCallback((task: UnifiedTask, x: number, y: number): WeeklyDropTarget | null => {
         const geometry = dropLaneGeometryRef.current;
         const calendar = calendarRef.current;
         if (!geometry || !calendar) return null;
@@ -164,27 +202,68 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             lane,
             blockTopMinutes: startHour * 60 + ((y - (matched.top - deltaY)) / rowHeight) * 60,
         };
-    };
+    }, [rowHeight, startHour]);
 
-    const describeTarget = (task: UnifiedTask, target: WeeklyDropTarget) => {
+    const describeTarget = useCallback((task: UnifiedTask, target: WeeklyDropTarget) => {
         const patch = getWeeklyReschedulePatch(task, target);
         const date = new Date(`${target.date}T12:00:00`).toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'numeric' });
         return target.lane === 'all-day' ? `${date}, celý den` : `${date}, ${patch.startTime}`;
-    };
+    }, []);
 
-    const targetKey = (target: WeeklyDropTarget | null) => target
+    const targetKey = useCallback((target: WeeklyDropTarget | null) => target
         ? `${target.lane}|${target.date}|${target.lane === 'timed' ? snapWeeklyMinute(target.blockTopMinutes ?? startHour * 60) : 'all'}`
-        : 'invalid';
+        : 'invalid', [startHour]);
 
-    const publishTarget = (task: UnifiedTask, target: WeeklyDropTarget | null) => {
+    const publishTarget = useCallback((task: UnifiedTask, target: WeeklyDropTarget | null) => {
         const nextKey = targetKey(target);
         if (lastTargetKeyRef.current === nextKey) return;
         lastTargetKeyRef.current = nextKey;
         setDropTarget(target);
         setAnnouncement(target ? `Přesun na ${describeTarget(task, target)}` : 'Mimo platnou oblast');
-    };
+    }, [describeTarget, targetKey]);
 
-    const schedulePointerFrame = (x: number, y: number) => {
+    const edgeAtPoint = useCallback((x: number, y: number): WeeklyEdgeDirection | null => {
+        const geometry = dropLaneGeometryRef.current;
+        if (!geometry) return null;
+        return getWeeklyEdgeDirectionAtPoint(x, y, {
+            left: geometry.viewportLeft,
+            right: geometry.viewportRight,
+            top: geometry.viewportTop,
+            bottom: geometry.viewportBottom,
+        });
+    }, []);
+
+    const activateEdge = useCallback((direction: WeeklyEdgeDirection) => {
+        if (edgeDirectionRef.current === direction) return;
+        if (edgeTimerRef.current !== null) window.clearTimeout(edgeTimerRef.current);
+
+        edgeDirectionRef.current = direction;
+        lastTargetKeyRef.current = 'invalid';
+        setDropTarget(null);
+        setEdgeDirection(direction);
+        setEdgeLocked(false);
+        setAnnouncement(direction < 0 ? 'Podržte pro přechod na předchozí týden' : 'Podržte pro přechod na další týden');
+
+        edgeTimerRef.current = window.setTimeout(() => {
+            const drag = dragRef.current;
+            if (!drag?.dragging || edgeDirectionRef.current !== direction) return;
+            const point = pointerPositionRef.current;
+            if (!point || !shouldNavigateWeeklyEdge(direction, edgeAtPoint(point.x, point.y))) {
+                edgeTimerRef.current = null;
+                clearEdgeIntent();
+                return;
+            }
+            edgeTimerRef.current = null;
+            setEdgeLocked(true);
+            dropLaneGeometryRef.current = null;
+            onChangeWeek(direction);
+            setAnnouncement(direction < 0
+                ? 'Předchozí týden je otevřený. Přesuňte kartu na den a čas.'
+                : 'Další týden je otevřený. Přesuňte kartu na den a čas.');
+        }, EDGE_DWELL_MS);
+    }, [clearEdgeIntent, edgeAtPoint, onChangeWeek]);
+
+    const schedulePointerFrame = useCallback((x: number, y: number) => {
         pointerPositionRef.current = { x, y };
         if (animationFrameRef.current !== null) return;
         animationFrameRef.current = requestAnimationFrame(() => {
@@ -193,31 +272,33 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             const drag = dragRef.current;
             if (!point || !drag?.dragging) return;
             if (ghostRef.current) ghostRef.current.style.transform = `translate3d(${point.x + 14}px, ${point.y + 14}px, 0)`;
+            const nextEdge = edgeAtPoint(point.x, point.y);
+            if (nextEdge !== null) {
+                activateEdge(nextEdge);
+                return;
+            }
+            if (edgeDirectionRef.current !== null) dropLaneGeometryRef.current = captureDropLaneGeometry();
+            clearEdgeIntent();
             publishTarget(drag.task, targetAtPoint(drag.task, point.x, point.y));
         });
-    };
+    }, [activateEdge, captureDropLaneGeometry, clearEdgeIntent, edgeAtPoint, publishTarget, targetAtPoint]);
 
-    const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>, task: UnifiedTask) => {
+    const handlePointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>, task: UnifiedTask) => {
         if (busyTask || event.button !== 0) return;
+        clearEdgeIntent();
         event.currentTarget.setPointerCapture(event.pointerId);
         dropLaneGeometryRef.current = captureDropLaneGeometry();
-        dragRef.current = { task, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false };
-    };
+        dragRef.current = {
+            task,
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            dragging: false,
+            source: event.currentTarget,
+        };
+    }, [busyTask, captureDropLaneGeometry, clearEdgeIntent]);
 
-    const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-        const drag = dragRef.current;
-        if (!drag || drag.pointerId !== event.pointerId) return;
-        const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
-        if (!drag.dragging && distance < DRAG_THRESHOLD) return;
-        if (!drag.dragging) {
-            drag.dragging = true;
-            setDraggingTask(drag.task);
-        }
-        event.preventDefault();
-        schedulePointerFrame(event.clientX, event.clientY);
-    };
-
-    const commitDrop = async (task: UnifiedTask, target: WeeklyDropTarget | null) => {
+    const commitDrop = useCallback(async (task: UnifiedTask, target: WeeklyDropTarget | null) => {
         if (!target) {
             resetDragState('Přesun zrušen');
             return;
@@ -240,18 +321,26 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             setBusyTask(null);
             requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-task-key="${key}"]`)?.focus());
         }
-    };
+    }, [describeTarget, onRescheduleTask, resetDragState]);
 
-    const finishDrag = async (event: React.PointerEvent<HTMLButtonElement>) => {
+    const finishDrag = useCallback(async (event: PointerEvent) => {
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
-        dragRef.current = null;
-        if (!drag.dragging) return;
+        if (!drag.dragging) {
+            dragRef.current = null;
+            return;
+        }
         suppressClickRef.current = taskKey(drag.task);
-        const target = targetAtPoint(drag.task, event.clientX, event.clientY);
+        const releaseEdge = edgeAtPoint(event.clientX, event.clientY);
+        let target: WeeklyDropTarget | null = null;
+        if (releaseEdge === null) {
+            clearEdgeIntent();
+            dropLaneGeometryRef.current = captureDropLaneGeometry();
+            target = targetAtPoint(drag.task, event.clientX, event.clientY);
+        }
         requestAnimationFrame(() => { suppressClickRef.current = null; });
         await commitDrop(drag.task, target);
-    };
+    }, [captureDropLaneGeometry, clearEdgeIntent, commitDrop, edgeAtPoint, targetAtPoint]);
 
     const cancelDrag = useCallback(() => {
         if (dragRef.current?.dragging) suppressClickRef.current = taskKey(dragRef.current.task);
@@ -259,16 +348,49 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     }, [resetDragState]);
 
     useEffect(() => {
+        const handlePointerMove = (event: PointerEvent) => {
+            const drag = dragRef.current;
+            if (!drag || drag.pointerId !== event.pointerId) return;
+            const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+            if (!drag.dragging && distance < DRAG_THRESHOLD) return;
+            if (!drag.dragging) {
+                drag.dragging = true;
+                setDraggingTask(drag.task);
+            }
+            event.preventDefault();
+            schedulePointerFrame(event.clientX, event.clientY);
+        };
+        const handlePointerUp = (event: PointerEvent) => { void finishDrag(event); };
+        const handlePointerCancel = (event: PointerEvent) => {
+            if (dragRef.current?.pointerId === event.pointerId) cancelDrag();
+        };
         const handleBlur = () => { if (dragRef.current) cancelDrag(); };
         const handleVisibility = () => { if (document.hidden && dragRef.current) cancelDrag(); };
+        window.addEventListener('pointermove', handlePointerMove, { passive: false });
+        window.addEventListener('pointerup', handlePointerUp);
+        window.addEventListener('pointercancel', handlePointerCancel);
         window.addEventListener('blur', handleBlur);
         document.addEventListener('visibilitychange', handleVisibility);
         return () => {
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', handlePointerUp);
+            window.removeEventListener('pointercancel', handlePointerCancel);
             window.removeEventListener('blur', handleBlur);
             document.removeEventListener('visibilitychange', handleVisibility);
             resetDragState();
         };
-    }, [cancelDrag, resetDragState, weekOffset]);
+    }, [cancelDrag, finishDrag, resetDragState, schedulePointerFrame]);
+
+    useLayoutEffect(() => {
+        if (!dragRef.current?.dragging) return;
+        dropLaneGeometryRef.current = captureDropLaneGeometry();
+        const frame = requestAnimationFrame(() => {
+            dropLaneGeometryRef.current = captureDropLaneGeometry();
+            const point = pointerPositionRef.current;
+            if (point) schedulePointerFrame(point.x, point.y);
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [allDayLaneHeight, captureDropLaneGeometry, dayWidth, schedulePointerFrame, tasks, weekOffset]);
 
     const keyboardTargetFor = (task: UnifiedTask): WeeklyDropTarget => {
         const interval = getWeeklyVisualInterval(task);
@@ -283,7 +405,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         if (!active) {
             event.preventDefault();
             const initialTarget = keyboardTargetFor(task);
-            dragRef.current = { task, pointerId: -1, startX: 0, startY: 0, dragging: true };
+            dragRef.current = { task, pointerId: -1, startX: 0, startY: 0, dragging: true, source: event.currentTarget };
             setDraggingTask(task);
             publishTarget(task, initialTarget);
             return;
@@ -319,10 +441,6 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
 
     const pointerProps = (task: UnifiedTask) => ({
         onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => handlePointerDown(event, task),
-        onPointerMove: handlePointerMove,
-        onPointerUp: finishDrag,
-        onPointerCancel: cancelDrag,
-        onLostPointerCapture: () => { if (dragRef.current?.dragging) cancelDrag(); },
         onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => { void handleKeyDown(event, task); },
         onClick: () => openTask(task),
         'data-task-key': taskKey(task),
@@ -332,6 +450,13 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
 
     const draggingKey = draggingTask ? taskKey(draggingTask) : null;
     const targetLabel = draggingTask && dropTarget ? describeTarget(draggingTask, dropTarget) : null;
+    const weekMotionDirection = weekOffset === previousWeekOffsetRef.current
+        ? (edgeDirection ?? 1)
+        : weekOffset > previousWeekOffsetRef.current ? 1 : -1;
+
+    useEffect(() => {
+        previousWeekOffsetRef.current = weekOffset;
+    }, [weekOffset]);
 
     const renderDropPreview = (lane: WeeklyDropTarget['lane']) => {
         if (!draggingTask || !dropTarget || dropTarget.lane !== lane) return null;
@@ -367,14 +492,50 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         );
     };
 
+    const renderWeekEdge = (direction: WeeklyEdgeDirection) => {
+        const active = edgeDirection === direction;
+        const Icon = direction < 0 ? ChevronLeft : ChevronRight;
+        return (
+            <motion.div
+                key={direction < 0 ? 'previous-week-edge' : 'next-week-edge'}
+                initial={{ opacity: 0, x: direction * 16, scale: 0.96 }}
+                animate={{ opacity: active ? 1 : 0.58, x: 0, scale: active ? 1.02 : 1 }}
+                exit={{ opacity: 0, x: direction * 12, scale: 0.96 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                className={`pointer-events-none absolute inset-y-3 z-[85] flex w-[4.5rem] flex-col items-center justify-center overflow-hidden rounded-2xl border backdrop-blur-md md:w-20 ${direction < 0 ? 'left-2' : 'right-2'} ${active ? 'border-indigo-300/80 bg-indigo-950/90 text-white shadow-[0_0_32px_rgba(99,102,241,0.45)]' : 'border-slate-600/45 bg-slate-950/55 text-slate-400 shadow-xl'}`}
+                aria-hidden="true"
+            >
+                {active && (
+                    <motion.div
+                        initial={{ scaleY: 0 }}
+                        animate={{ scaleY: 1 }}
+                        transition={{ duration: EDGE_DWELL_MS / 1000, ease: 'linear' }}
+                        className="absolute inset-0 origin-bottom bg-gradient-to-t from-indigo-500/55 via-violet-400/25 to-transparent"
+                    />
+                )}
+                <div className="relative flex flex-col items-center gap-2 px-1 text-center">
+                    <div className={`grid h-9 w-9 place-items-center rounded-full border ${active ? 'border-indigo-200/70 bg-indigo-400/25' : 'border-slate-600/60 bg-slate-900/70'}`}>
+                        <Icon className={`h-5 w-5 ${active ? 'animate-pulse' : ''}`} />
+                    </div>
+                    <span className="text-[9px] font-black uppercase leading-tight tracking-[0.14em]">
+                        {direction < 0 ? 'Předchozí týden' : 'Další týden'}
+                    </span>
+                    {active && <span className="text-[8px] font-bold uppercase tracking-wider text-indigo-200">{edgeLocked ? 'Otevřeno' : 'Podržet'}</span>}
+                </div>
+            </motion.div>
+        );
+    };
+
     return (
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="relative flex-1 flex flex-col min-h-0">
             <div aria-live="polite" className="sr-only">{announcement}</div>
             <AnimatePresence>
+                {draggingTask && renderWeekEdge(-1)}
+                {draggingTask && renderWeekEdge(1)}
                 {draggingTask && (
                     <div key="weekly-drag-ghost" ref={ghostRef} className="pointer-events-none fixed left-0 top-0 z-[95] max-w-64 rounded-xl border border-indigo-400/50 bg-slate-900/95 px-3 py-2 shadow-2xl" aria-hidden="true">
                         <div className="truncate text-xs font-black uppercase text-white">{draggingTask.title}</div>
-                        <div className="text-[10px] font-bold text-indigo-300">{targetLabel ?? 'Hledám platný cíl…'}</div>
+                        <div className="text-[10px] font-bold text-indigo-300">{edgeDirection ? (edgeLocked ? 'Týden otevřen — vyberte místo' : 'Podržte u hrany…') : targetLabel ?? 'Hledám platný cíl…'}</div>
                     </div>
                 )}
                 {draggingTask && (
@@ -383,19 +544,30 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 8, scale: 0.97 }}
                         transition={{ type: 'spring', stiffness: 460, damping: 32 }}
-                        className={`fixed bottom-24 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-2 shadow-2xl backdrop-blur-xl md:bottom-8 ${dropTarget ? 'border-emerald-400/60 bg-emerald-950/90 text-emerald-100 shadow-emerald-950/60' : 'border-red-400/60 bg-red-950/90 text-red-100 shadow-red-950/60'}`}
+                        className={`fixed bottom-24 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-2 shadow-2xl backdrop-blur-xl md:bottom-8 ${edgeDirection ? 'border-indigo-300/70 bg-indigo-950/95 text-indigo-100 shadow-indigo-950/70' : dropTarget ? 'border-emerald-400/60 bg-emerald-950/90 text-emerald-100 shadow-emerald-950/60' : 'border-red-400/60 bg-red-950/90 text-red-100 shadow-red-950/60'}`}
                         role="status"
                     >
-                        <MapPin className={`h-4 w-4 ${dropTarget ? 'text-emerald-300' : 'text-red-300'}`} />
+                        {edgeDirection === -1 ? <ChevronLeft className="h-4 w-4 text-indigo-200" /> : edgeDirection === 1 ? <ChevronRight className="h-4 w-4 text-indigo-200" /> : <MapPin className={`h-4 w-4 ${dropTarget ? 'text-emerald-300' : 'text-red-300'}`} />}
                         <div className="whitespace-nowrap">
-                            <div className="text-[9px] font-black uppercase tracking-[0.16em] opacity-70">{dropTarget ? 'Pustit a přesunout' : 'Mimo platnou oblast'}</div>
-                            <div className="text-xs font-black first-letter:uppercase">{targetLabel ?? 'Vraťte kartu nad kalendář'}</div>
+                            <div className="text-[9px] font-black uppercase tracking-[0.16em] opacity-70">{edgeDirection ? (edgeLocked ? 'Týden přepnut' : 'Podržet pro přechod') : dropTarget ? 'Pustit a přesunout' : 'Mimo platnou oblast'}</div>
+                            <div className="text-xs font-black first-letter:uppercase">{edgeDirection ? (edgeDirection < 0 ? 'Předchozí týden' : 'Další týden') : targetLabel ?? 'Vraťte kartu nad kalendář'}</div>
                         </div>
                     </motion.div>
                 )}
             </AnimatePresence>
             <div ref={calendarRef} className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar relative" tabIndex={0} aria-label="Týdenní kalendář, vodorovně posuvný">
-                <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[844px] md:min-w-[1200px] relative" style={{ height: `${calendarHours.length * rowHeight + timelineTop + 20}px` }}>
+                <motion.div
+                    key={weekOffset}
+                    initial={{ opacity: 0.45, x: weekMotionDirection * 56 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ type: 'spring', stiffness: 360, damping: 34, mass: 0.72 }}
+                    onAnimationComplete={() => {
+                        if (!dragRef.current?.dragging) return;
+                        dropLaneGeometryRef.current = captureDropLaneGeometry();
+                    }}
+                    className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[844px] md:min-w-[1200px] relative"
+                    style={{ height: `${calendarHours.length * rowHeight + timelineTop + 20}px` }}
+                >
                     <div className="relative border-r border-white/10 bg-slate-950/40 z-20 ml-6 md:ml-10">
                         {calendarHours.map(hour => (
                             <div key={hour} className="absolute left-0 w-full flex items-center justify-center -translate-y-1/2" style={{ top: `${(hour - startHour) * rowHeight + timelineTop}px`, height: '20px' }}>
@@ -529,7 +701,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                             </div>
                         );
                     })}
-                </div>
+                </motion.div>
             </div>
         </div>
     );
