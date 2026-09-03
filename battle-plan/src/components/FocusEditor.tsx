@@ -53,8 +53,8 @@ export function FocusEditor({
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [editorError, setEditorError] = useState<string | null>(null);
-    const initialSnapshot = React.useRef(taskSnapshot(editingTask));
-    const isDirty = initialSnapshot.current !== taskSnapshot(editingTask);
+    const [initialSnapshot, setInitialSnapshot] = useState(() => taskSnapshot(editingTask));
+    const isDirty = initialSnapshot !== taskSnapshot(editingTask);
 
     const requestClose = () => {
         const intent = getEditorCloseIntent({
@@ -108,7 +108,7 @@ export function FocusEditor({
         try {
             const updatedTask = await handleToggleTask(editingTask);
             if (updatedTask) {
-                initialSnapshot.current = taskSnapshot(updatedTask);
+                setInitialSnapshot(taskSnapshot(updatedTask));
                 setEditingTask(updatedTask);
             }
         } finally {
