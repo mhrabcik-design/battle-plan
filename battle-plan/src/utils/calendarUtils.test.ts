@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+    canResizeWeeklyTask,
     getWeeklyResizePatch,
     getWeeklyEdgeDirection,
     getWeeklyEdgeDirectionAtPoint,
@@ -103,7 +104,7 @@ test('meeting resize preserves its start and derives a snapped duration from the
         startTime: '10:00',
         duration: 60,
         isAllDay: false,
-    }), 11 * 60 + 23), {
+    }), 11 * 60 + 23)!, {
         date: '2026-08-12',
         deadline: undefined,
         startTime: '10:00',
@@ -120,7 +121,7 @@ test('task resize preserves its visual top and moves its semantic end', () => {
         isAllDay: false,
     });
 
-    const patch = getWeeklyResizePatch(scheduledTask, 12 * 60 + 2);
+    const patch = getWeeklyResizePatch(scheduledTask, 12 * 60 + 2)!;
 
     assert.deepEqual(patch, {
         date: undefined,
@@ -134,7 +135,7 @@ test('task resize preserves its visual top and moves its semantic end', () => {
 
 test('weekly resize enforces its minimum and calendar end boundary', () => {
     const meeting = task({ type: 'meeting', startTime: '10:00', duration: 60, isAllDay: false });
-    assert.equal(getWeeklyResizePatch(meeting, 10 * 60 + 4).duration, 30);
+    assert.equal(getWeeklyResizePatch(meeting, 10 * 60 + 4)!.duration, 30);
 
     const lateMeeting = task({ type: 'meeting', startTime: '19:00', duration: 60, isAllDay: false });
     assert.deepEqual(getWeeklyResizePatch(lateMeeting, 21 * 60), {
@@ -144,16 +145,40 @@ test('weekly resize enforces its minimum and calendar end boundary', () => {
         isAllDay: false,
         duration: 60,
     });
+
+    const tooLateMeeting = task({ type: 'meeting', startTime: '19:45', duration: 15, isAllDay: false });
+    assert.equal(canResizeWeeklyTask(tooLateMeeting), false);
+    assert.equal(getWeeklyResizePatch(tooLateMeeting, 20 * 60), null);
+});
+
+test('weekly resize follows the visible bottom edge for intervals clipped before 07:00', () => {
+    const earlyMeeting = task({ type: 'meeting', startTime: '06:30', duration: 60, isAllDay: false });
+    const earlyTask = task({ deadline: '2026-08-12', startTime: '07:30', duration: 120, isAllDay: false });
+
+    assert.deepEqual(getWeeklyResizePatch(earlyMeeting, 8 * 60), {
+        date: undefined,
+        deadline: undefined,
+        startTime: '06:30',
+        isAllDay: false,
+        duration: 90,
+    });
+    assert.deepEqual(getWeeklyResizePatch(earlyTask, 8 * 60), {
+        date: undefined,
+        deadline: '2026-08-12',
+        startTime: '08:00',
+        isAllDay: false,
+        duration: 150,
+    });
 });
 
 test('weekly resize treats missing and zero duration as sixty minutes', () => {
     const missingDurationTask = task({ startTime: '11:00', duration: undefined, isAllDay: false });
     const zeroDurationTask = task({ startTime: '11:00', duration: 0, isAllDay: false });
 
-    assert.equal(getWeeklyResizePatch(missingDurationTask, 12 * 60).duration, 120);
-    assert.equal(getWeeklyResizePatch(zeroDurationTask, 12 * 60).duration, 120);
-    assert.equal(isWeeklyScheduleNoop(missingDurationTask, getWeeklyResizePatch(missingDurationTask, 11 * 60)), true);
-    assert.equal(isWeeklyScheduleNoop(zeroDurationTask, getWeeklyResizePatch(zeroDurationTask, 11 * 60)), true);
+    assert.equal(getWeeklyResizePatch(missingDurationTask, 12 * 60)!.duration, 120);
+    assert.equal(getWeeklyResizePatch(zeroDurationTask, 12 * 60)!.duration, 120);
+    assert.equal(isWeeklyScheduleNoop(missingDurationTask, getWeeklyResizePatch(missingDurationTask, 11 * 60)!), true);
+    assert.equal(isWeeklyScheduleNoop(zeroDurationTask, getWeeklyResizePatch(zeroDurationTask, 11 * 60)!), true);
 });
 
 test('weekly movement omits duration while no-op comparison detects an explicit duration change', () => {
@@ -185,5 +210,5 @@ test('weekly movement omits duration while no-op comparison detects an explicit 
         isAllDay: false,
         duration: 90,
     }), false);
-    assert.equal(isWeeklyScheduleNoop(meeting, getWeeklyResizePatch(meeting, 11 * 60)), true);
+    assert.equal(isWeeklyScheduleNoop(meeting, getWeeklyResizePatch(meeting, 11 * 60)!), true);
 });

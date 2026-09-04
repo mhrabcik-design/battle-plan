@@ -177,7 +177,12 @@ const parseClockMinutes = (value?: string): number => {
     return hours * 60 + minutes;
 };
 
-const getWeeklyDuration = (task: UnifiedTask): number => Math.max(0, task.duration || 60);
+export const getWeeklyVisualBlock = (task: UnifiedTask) => {
+    const duration = Math.max(0, task.duration || 60);
+    const semanticMinute = parseClockMinutes(task.startTime);
+    const startMinute = task.type === 'task' ? semanticMinute - duration : semanticMinute;
+    return { duration, startMinute, endMinute: startMinute + duration };
+};
 
 export const snapWeeklyMinute = (minutes: number, duration = 0): number => {
     const snapped = Math.round(minutes / WEEKLY_CALENDAR_SNAP_MINUTES) * WEEKLY_CALENDAR_SNAP_MINUTES;
@@ -197,7 +202,7 @@ export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTa
         };
     }
 
-    const duration = getWeeklyDuration(task);
+    const { duration } = getWeeklyVisualBlock(task);
     const blockTop = snapWeeklyMinute(target.blockTopMinutes ?? WEEKLY_CALENDAR_START_MINUTES, duration);
     const semanticTime = task.type === 'task' ? blockTop + duration : blockTop;
 
@@ -209,21 +214,30 @@ export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTa
     };
 };
 
-export const getWeeklyResizePatch = (task: UnifiedTask, blockEndMinutes: number): WeeklySchedulePatch => {
-    const originalDuration = getWeeklyDuration(task);
-    const semanticMinute = parseClockMinutes(task.startTime);
-    const blockTop = task.type === 'task' ? semanticMinute - originalDuration : semanticMinute;
+export const canResizeWeeklyTask = (task: UnifiedTask): boolean => {
+    const { startMinute } = getWeeklyVisualBlock(task);
+    return WEEKLY_CALENDAR_END_MINUTES - startMinute >= WEEKLY_CALENDAR_MIN_DURATION;
+};
+
+export const getWeeklyResizePatch = (task: UnifiedTask, blockEndMinutes: number): WeeklySchedulePatch | null => {
+    const block = getWeeklyVisualBlock(task);
+    const availableDuration = WEEKLY_CALENDAR_END_MINUTES - block.startMinute;
+    if (availableDuration < WEEKLY_CALENDAR_MIN_DURATION) return null;
+
     const snappedEnd = Math.round(blockEndMinutes / WEEKLY_CALENDAR_SNAP_MINUTES) * WEEKLY_CALENDAR_SNAP_MINUTES;
-    const blockEnd = Math.min(
-        Math.max(snappedEnd, blockTop + WEEKLY_CALENDAR_MIN_DURATION),
-        WEEKLY_CALENDAR_END_MINUTES,
+    const visualEnd = Math.max(
+        WEEKLY_CALENDAR_START_MINUTES,
+        Math.min(WEEKLY_CALENDAR_END_MINUTES, block.endMinute),
     );
-    const duration = Math.max(WEEKLY_CALENDAR_MIN_DURATION, blockEnd - blockTop);
+    const duration = Math.min(
+        Math.max(block.duration + snappedEnd - visualEnd, WEEKLY_CALENDAR_MIN_DURATION),
+        availableDuration,
+    );
 
     return {
         date: task.date,
         deadline: task.deadline,
-        startTime: task.type === 'task' ? formatClockMinutes(blockTop + duration) : task.startTime,
+        startTime: task.type === 'task' ? formatClockMinutes(block.startMinute + duration) : task.startTime,
         isAllDay: false,
         duration,
     };
@@ -233,7 +247,7 @@ export const isWeeklyScheduleNoop = (task: UnifiedTask, patch: WeeklySchedulePat
     (task.type === 'task' ? task.deadline === patch.deadline : task.date === patch.date)
     && task.startTime === patch.startTime
     && Boolean(task.isAllDay ?? !task.startTime) === Boolean(patch.isAllDay)
-    && (patch.duration === undefined || getWeeklyDuration(task) === patch.duration)
+    && (patch.duration === undefined || getWeeklyVisualBlock(task).duration === patch.duration)
 );
 
 export const getUrgencyColor = (urgency?: number) => {

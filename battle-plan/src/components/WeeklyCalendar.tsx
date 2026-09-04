@@ -4,6 +4,7 @@ import { CheckCircle2, ChevronLeft, ChevronRight, Clock, GripVertical, Hourglass
 import type { UnifiedTask } from '../types';
 import {
     formatTimeLeft,
+    canResizeWeeklyTask,
     getDeadlineColor,
     getWeekDays,
     getWeeklyEdgeDirectionAtPoint,
@@ -213,6 +214,15 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         };
     }, [rowHeight, startHour]);
 
+    const resizePatchAtY = useCallback((drag: Extract<PointerGestureState, { mode: 'resize' }>, y: number, geometry = dropLaneGeometryRef.current) => {
+        const calendar = calendarRef.current;
+        const lane = geometry?.lanes.find(item => item.lane === 'timed' && item.date === drag.date);
+        if (!geometry || !calendar || !lane) return null;
+        const adjustedTop = lane.top - (calendar.scrollTop - geometry.scrollTop);
+        const blockEndMinutes = startHour * 60 + ((y - adjustedTop) / rowHeight) * 60;
+        return getWeeklyResizePatch(drag.task, blockEndMinutes);
+    }, [rowHeight, startHour]);
+
     const describeTarget = useCallback((task: UnifiedTask, target: WeeklyDropTarget) => {
         const patch = getWeeklyReschedulePatch(task, target);
         const date = new Date(`${target.date}T12:00:00`).toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'numeric' });
@@ -281,13 +291,8 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             const drag = dragRef.current;
             if (!point || !drag?.dragging) return;
             if (drag.mode === 'resize') {
-                const geometry = dropLaneGeometryRef.current;
-                const calendar = calendarRef.current;
-                const lane = geometry?.lanes.find(item => item.lane === 'timed' && item.date === drag.date);
-                if (!geometry || !calendar || !lane) return;
-                const adjustedTop = lane.top - (calendar.scrollTop - geometry.scrollTop);
-                const blockEndMinutes = startHour * 60 + ((point.y - adjustedTop) / rowHeight) * 60;
-                const patch = getWeeklyResizePatch(drag.task, blockEndMinutes);
+                const patch = resizePatchAtY(drag, point.y);
+                if (!patch) return;
                 const nextKey = `resize|${patch.duration}`;
                 if (lastTargetKeyRef.current === nextKey) return;
                 lastTargetKeyRef.current = nextKey;
@@ -305,7 +310,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             clearEdgeIntent();
             publishTarget(drag.task, targetAtPoint(drag.task, point.x, point.y));
         });
-    }, [activateEdge, captureDropLaneGeometry, clearEdgeIntent, edgeAtPoint, publishTarget, rowHeight, startHour, targetAtPoint]);
+    }, [activateEdge, captureDropLaneGeometry, clearEdgeIntent, edgeAtPoint, publishTarget, resizePatchAtY, targetAtPoint]);
 
     const handlePointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>, task: UnifiedTask) => {
         if (busyTask || event.button !== 0) return;
@@ -380,14 +385,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         }
         if (drag.mode === 'resize') {
             const geometry = captureDropLaneGeometry();
-            const calendar = calendarRef.current;
-            const lane = geometry?.lanes.find(item => item.lane === 'timed' && item.date === drag.date);
-            let patch: WeeklySchedulePatch | null = null;
-            if (geometry && calendar && lane) {
-                const adjustedTop = lane.top - (calendar.scrollTop - geometry.scrollTop);
-                const blockEndMinutes = startHour * 60 + ((event.clientY - adjustedTop) / rowHeight) * 60;
-                patch = getWeeklyResizePatch(drag.task, blockEndMinutes);
-            }
+            const patch = resizePatchAtY(drag, event.clientY, geometry);
             if (!patch || isWeeklyScheduleNoop(drag.task, patch)) {
                 resetDragState(patch ? 'Délka zůstala beze změny' : 'Změna délky zrušena');
                 return;
@@ -418,7 +416,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         }
         requestAnimationFrame(() => { suppressClickRef.current = null; });
         await commitDrop(drag.task, target);
-    }, [captureDropLaneGeometry, clearEdgeIntent, commitDrop, edgeAtPoint, onRescheduleTask, resetDragState, rowHeight, startHour, targetAtPoint]);
+    }, [captureDropLaneGeometry, clearEdgeIntent, commitDrop, edgeAtPoint, onRescheduleTask, resetDragState, resizePatchAtY, targetAtPoint]);
 
     const cancelDrag = useCallback(() => {
         if (dragRef.current?.dragging && dragRef.current.mode === 'move') suppressClickRef.current = taskKey(dragRef.current.task);
@@ -709,10 +707,13 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                         const isDragging = draggingKey === taskKey(task);
                                         const key = taskKey(task);
                                         const preview = resizePreview?.taskKey === key ? resizePreview.patch : null;
-                                        const height = Math.max(40, (preview?.duration ?? task.duration ?? 60) / 60 * rowHeight);
                                         const layout = timedLayout.get(taskKey(task));
                                         if (!layout?.visible) return null;
-                                        const top = ((layout.startMinute - startHour * 60) / 60) * rowHeight;
+                                        const visualInterval = preview
+                                            ? getWeeklyVisualInterval({ ...task, ...preview })
+                                            : layout;
+                                        const height = Math.max(40, ((visualInterval.endMinute - visualInterval.startMinute) / 60) * rowHeight);
+                                        const top = ((visualInterval.startMinute - startHour * 60) / 60) * rowHeight;
                                         const displayTime = preview?.startTime ?? task.startTime;
                                         const displayDuration = preview?.duration ?? task.duration;
                                         const density = getCalendarDensity(height);
@@ -739,7 +740,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                                         </div>
                                                     ) : displayTime ? <span className="mt-auto truncate text-[9px] font-bold text-slate-300">{displayTime}</span> : null}
                                                 </button>
-                                                {!completed && !task.isGoogleTask && (
+                                                {!completed && !task.isGoogleTask && canResizeWeeklyTask(task) && (
                                                     <button
                                                         type="button"
                                                         tabIndex={-1}
