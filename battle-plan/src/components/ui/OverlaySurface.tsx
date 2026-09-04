@@ -1,6 +1,7 @@
-import { motion } from 'framer-motion';
+import { motion, useIsPresent, useReducedMotion } from 'framer-motion';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { getOverlayMotion } from '../../utils/overlayMotion';
 
 type OverlayEntry = { id: string; host: HTMLElement };
 
@@ -50,6 +51,8 @@ export function OverlaySurface({
   closeOnBackdrop = true,
 }: OverlaySurfaceProps) {
   const id = useId();
+  const reducedMotion = useReducedMotion();
+  const isPresent = useIsPresent();
   const titleId = `${id}-title`;
   const panelRef = useRef<HTMLDivElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -124,33 +127,34 @@ export function OverlaySurface({
     };
   }, [host, id]);
 
-  const panelMotion = variant === 'sheet'
-    ? { initial: { opacity: 0, x: 24 }, animate: { opacity: 1, x: 0 }, exit: { opacity: 0, x: 18 } }
-    : { initial: { opacity: 0, y: 16, scale: 0.985 }, animate: { opacity: 1, y: 0, scale: 1 }, exit: { opacity: 0, y: 10, scale: 0.99 } };
+  const { panel, backdrop } = getOverlayMotion(variant, Boolean(reducedMotion));
 
   return createPortal(
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.16 }}
-      className={`fixed inset-0 z-[200] flex bg-slate-950/80 backdrop-blur-md ${variant === 'sheet' ? 'items-stretch justify-end md:left-64' : 'items-center justify-center p-4'}`}
+    <div
+      className={`fixed inset-0 z-[200] flex ${variant === 'sheet' ? 'items-stretch justify-end md:left-64' : 'items-center justify-center p-4'}`}
       onMouseDown={(event) => { if (closeOnBackdrop && event.target === event.currentTarget) onRequestClose(); }}
     >
       <motion.div
-        {...panelMotion}
-        transition={{ type: 'spring', stiffness: 360, damping: 34, mass: 0.7 }}
+        {...backdrop}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 bg-slate-950/80 backdrop-blur-md"
+      />
+      <motion.div
+        {...panel}
+        inert={!isPresent}
+        aria-hidden={!isPresent || undefined}
+        style={{ pointerEvents: isPresent ? undefined : 'none' }}
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={className}
+        className={`relative ${className}`}
       >
         <h2 id={titleId} className="sr-only">{title}</h2>
         {children}
       </motion.div>
-    </motion.div>,
+    </div>,
     host,
   );
 }
