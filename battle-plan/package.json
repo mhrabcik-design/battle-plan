@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "npm run test:worklogs",
+    "check:theme": "node scripts/check-theme-contract.mjs",
     "test:worklogs": "node --import fake-indexeddb/auto --experimental-strip-types --test \"src/**/*.test.ts\"",
     "agent-protocol:generate": "node scripts/generate-agent-protocol-validators.mjs",
     "agent-protocol:check": "node scripts/generate-agent-protocol-validators.mjs --check",

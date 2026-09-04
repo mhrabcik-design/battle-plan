@@ -52,7 +52,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Bump version (auto-patch)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        if: github.ref == 'refs/heads/main'
         working-directory: battle-plan
         run: |
           LAST_COMMIT_MSG=$(git log -1 --pretty=%B)
@@ -66,6 +66,13 @@ jobs:
             git commit -m "chore(release): bump version to $NEW_VERSION"
             git push origin HEAD:main
           fi
+
+      - name: Label test deployment
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
+        working-directory: battle-plan
+        run: |
+          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0]")
+          npm version "${BASE_VERSION}-preview.${GITHUB_SHA:0:7}" --no-git-tag-version --commit-hooks=false
 
       - name: Lint
         working-directory: battle-plan

@@ -29,11 +29,11 @@ export function Sidebar({
 }: SidebarProps) {
     const { Icon: SyncIcon, tone: syncTone, spin: syncSpin } = syncIconFor(syncState);
     return (
-        <aside className="hidden md:flex flex-col w-64 border-r border-white/5 bg-[#05070a]/90 backdrop-blur-2xl shadow-2xl shrink-0 relative z-[60]">
+        <aside className="theme-surface hidden md:flex flex-col w-64 border-r border-white/5 backdrop-blur-2xl shadow-2xl shrink-0 relative z-[60]">
             <div className="p-6 flex flex-col items-start gap-1 border-b border-white/5 bg-transparent">
                 <div className="flex items-center gap-2">
                     <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-600/20">
-                        <CheckCircle2 className="w-5 h-5 text-white" />
+                        <CheckCircle2 className="w-5 h-5 text-on-accent" />
                     </div>
                     <span className="text-base font-black uppercase tracking-tight text-white leading-none">Bitevní Plán</span>
                 </div>
@@ -51,7 +51,8 @@ export function Sidebar({
                             <button
                                 key={item.id}
                                 onClick={() => setViewMode(item.id as ViewMode)}
-                                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-150 group ${isActive ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}
+                                aria-current={isActive ? 'page' : undefined}
+                                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-[background-color,color,box-shadow] duration-150 group ${isActive ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}
                             >
                                 <Icon className={`w-4 h-4 ${isActive ? 'scale-100' : 'group-hover:scale-110'} transition-transform`} />
                                 <span className="text-xs font-bold tracking-tight">{item.label}</span>
@@ -83,7 +84,7 @@ export function Sidebar({
 
                         <button
                             onClick={() => setShowSettings(true)}
-                            className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-slate-400 hover:text-white rounded-xl transition-all font-bold uppercase text-sm tracking-widest"
+                            className="mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-slate-400 hover:text-white rounded-xl transition-[background-color,color] font-bold uppercase text-sm tracking-widest"
                         >
                             <Settings className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
                             Konfigurace
@@ -95,7 +96,7 @@ export function Sidebar({
 
                         <button
                             onClick={() => setViewMode('debug')}
-                            className={`mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold uppercase text-sm tracking-widest ${viewMode === 'debug' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                            className={`mx-2 w-[calc(100%-1rem)] flex items-center gap-3 px-4 py-3 rounded-xl transition-[background-color,color] font-bold uppercase text-sm tracking-widest ${viewMode === 'debug' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                         >
                             <FileText className="w-4 h-4" />
                             Diagnostika

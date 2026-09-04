@@ -47,6 +47,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
     const [processing, setProcessing] = useState(false);
     const [extracted, setExtracted] = useState<ExtractedWorkLogBatch | null>(null);
     const [showRecordingGuide, setShowRecordingGuide] = useState(false);
+    const [announcement, setAnnouncement] = useState('');
     const processingRef = useRef(false);
     const [probeError, setProbeError] = useState<string | null>(() =>
         hasMediaRecorderSupport() ? null : 'Tento prohlížeč nepodporuje MediaRecorder',
@@ -76,27 +77,34 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
         setShowRecordingGuide(false);
         processingRef.current = true;
         setProcessing(true);
+        setAnnouncement('Zpracovávám diktování.');
 
         (async () => {
             try {
                 const apiKey = (await db.settings.get('gemini_api_key'))?.value ?? '';
                 if (!apiKey) {
-                    onError?.('Gemini API klíč chybí. Nastav ho v Konfiguraci.');
+                    const message = 'Gemini API klíč chybí. Nastav ho v Konfiguraci.';
+                    onError?.(message);
+                    setAnnouncement(message);
                     return;
                 }
 
                 const result = await processWorkLogAudio(audioBlob);
                 if (!result.ok) {
-                    onError?.(`AI extrakce selhala: ${result.error}`);
+                    const message = `AI extrakce selhala: ${result.error}`;
+                    onError?.(message);
+                    setAnnouncement(message);
                     return;
                 }
 
                 setExtracted(result.data);
                 const totalHours = result.data.entries.reduce((sum, entry) => sum + entry.hours, 0);
                 onInfo?.(`Diktování rozpoznáno — ${result.data.entries.length} návrhů, ${totalHours.toFixed(2)} h.`);
+                setAnnouncement(`Diktování rozpoznáno. ${result.data.entries.length} návrhů je připraveno ke kontrole.`);
             } catch (err) {
                 const message = err instanceof Error ? err.message : 'Neznámá chyba';
                 onError?.(`AI extrakce selhala: ${message}`);
+                setAnnouncement(`AI extrakce selhala: ${message}`);
             } finally {
                 clearAudio();
                 processingRef.current = false;
@@ -116,6 +124,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
                 onInfo?.(`Uloženo ${result.workLogs.length} záznamů práce (${totalHours.toFixed(2)} h).`);
             }
             onSaved?.(result.workLog);
+            setAnnouncement('Pracovní činnost byla uložena.');
             setExtracted(null);
         },
         [onSaved, onInfo],
@@ -153,6 +162,13 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
         : isRecording
         ? 'Zastavit nahrávání a parsovat diktát'
         : 'Nadiktovat pracovní činnost — Anu vytvoří worklog podle projektu, lidí, hodin a popisu.';
+    const accessibleLabel = probeError
+        ? 'Mikrofon není dostupný'
+        : processing
+        ? 'Zpracovávám diktování'
+        : isRecording
+        ? 'Zastavit nahrávání'
+        : 'Spustit diktování';
 
     return (
         <>
@@ -160,9 +176,10 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
                 type="button"
                 onClick={handleToggle}
                 disabled={disabled}
-                aria-label={isRecording ? 'Zastavit nahrávání' : 'Spustit diktování'}
+                aria-label={accessibleLabel}
+                aria-busy={processing}
                 title={title}
-                className={`relative flex items-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${
+                className={`relative flex items-center gap-2 px-4 py-2.5 text-xs font-black uppercase tracking-widest rounded-xl transition-[background-color,color,box-shadow,transform] ${
                     isRecording
                         ? 'bg-red-600 hover:bg-red-500 text-white ring-2 ring-red-300/50'
                         : processing
@@ -185,6 +202,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
                     {processing ? 'Parsuji…' : isRecording ? 'Zastavit' : 'Diktovat'}
                 </span>
             </button>
+            <span role="status" aria-live="polite" className="sr-only">{announcement}</span>
 
             {showRecordingGuide && (
                 <motion.div

@@ -42,6 +42,35 @@
     --surface-border-hover: rgba(129, 140, 248, 0.42);
     --surface-bg: rgba(15, 23, 42, 0.68);
     --surface-bg-hover: rgba(30, 41, 59, 0.76);
+    --canvas: #05070a;
+    --surface-1: #0d1117;
+    --surface-2: #172033;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --control-border: rgba(148, 163, 184, 0.28);
+    --focus-ring: #a5b4fc;
+    --page-glow-a: rgba(99, 102, 241, 0.08);
+    --page-glow-b: rgba(168, 85, 247, 0.08);
+    --page-glow-c: rgba(59, 130, 246, 0.1);
+  }
+
+  html[data-theme='light'] {
+    --canvas: #f4f7fb;
+    --surface-1: #ffffff;
+    --surface-2: #e7edf5;
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --text-muted: #475569;
+    --control-border: rgba(51, 65, 85, 0.25);
+    --focus-ring: #4338ca;
+    --surface-border: rgba(51, 65, 85, 0.18);
+    --surface-border-hover: rgba(67, 56, 202, 0.46);
+    --surface-bg: rgba(255, 255, 255, 0.92);
+    --surface-bg-hover: rgba(248, 250, 252, 0.98);
+    --page-glow-a: rgba(79, 70, 229, 0.08);
+    --page-glow-b: rgba(147, 51, 234, 0.05);
+    --page-glow-c: rgba(37, 99, 235, 0.07);
   }
 
   @media (min-width: 1024px) {
@@ -59,16 +88,18 @@
   }
 
   body {
-    @apply bg-[#030712] text-slate-50 font-body min-h-screen overflow-x-hidden selection:bg-indigo-500/30 selection:text-indigo-200;
+    @apply font-body min-h-screen overflow-x-hidden selection:bg-indigo-500/30 selection:text-indigo-200;
+    background-color: var(--canvas);
+    color: var(--text-primary);
     background-image:
-      radial-gradient(circle at 15% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
-      radial-gradient(circle at 85% 30%, rgba(168, 85, 247, 0.08) 0%, transparent 50%),
-      radial-gradient(circle at 50% 100%, rgba(59, 130, 246, 0.1) 0%, transparent 60%);
+      radial-gradient(circle at 15% 50%, var(--page-glow-a) 0%, transparent 50%),
+      radial-gradient(circle at 85% 30%, var(--page-glow-b) 0%, transparent 50%),
+      radial-gradient(circle at 50% 100%, var(--page-glow-c) 0%, transparent 60%);
     background-attachment: fixed;
   }
 
   :focus-visible {
-    outline: 2px solid rgb(129 140 248);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
   }
 }
@@ -171,6 +202,25 @@
     @apply rounded-3xl border-t-white/10 border-l-white/10;
   }
 
+  .mobile-nav-rail {
+    background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-muted) transparent;
+    scroll-padding-inline: 0.5rem;
+  }
+
+  .theme-surface { background-color: color-mix(in srgb, var(--surface-1) 94%, transparent); }
+  .text-on-accent { color: #fff !important; }
+
+  .mobile-nav-rail::-webkit-scrollbar { height: 4px; }
+  .mobile-nav-rail::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 999px; }
+
+  html[data-theme='light'] .glass-card {
+    background: rgba(255, 255, 255, 0.97);
+    border-color: rgba(51, 65, 85, 0.2);
+    box-shadow: 0 20px 60px -24px rgba(15, 23, 42, 0.28);
+  }
+
   .premium-gradient-text {
     @apply bg-clip-text text-transparent bg-gradient-to-br from-indigo-300 via-white to-purple-300 font-display drop-shadow-sm;
   }
@@ -236,5 +286,57 @@
       scroll-behavior: auto !important;
       transition-duration: 0.01ms !important;
     }
+  }
+}
+
+/* Compatibility bridge for existing palette utilities. New UI should prefer the
+   semantic component classes above; this keeps every current route coherent while
+   the historical Tailwind-heavy surfaces are migrated incrementally. */
+@layer utilities {
+  html[data-theme='light'] .bg-slate-950,
+  html[data-theme='light'] .bg-slate-950\/40,
+  html[data-theme='light'] .bg-slate-950\/80 { background-color: var(--canvas) !important; }
+  html[data-theme='light'] .bg-slate-900,
+  html[data-theme='light'] .bg-slate-900\/20,
+  html[data-theme='light'] .bg-slate-900\/30,
+  html[data-theme='light'] .bg-slate-900\/40,
+  html[data-theme='light'] .bg-slate-900\/50,
+  html[data-theme='light'] .bg-slate-900\/60,
+  html[data-theme='light'] .bg-slate-900\/70 { background-color: rgba(255, 255, 255, 0.9) !important; }
+  html[data-theme='light'] .bg-slate-800,
+  html[data-theme='light'] .bg-slate-800\/30,
+  html[data-theme='light'] .bg-slate-800\/50,
+  html[data-theme='light'] .bg-slate-800\/60 { background-color: rgba(226, 232, 240, 0.9) !important; }
+  html[data-theme='light'] .bg-white\/5,
+  html[data-theme='light'] .bg-white\/10 { background-color: rgba(15, 23, 42, 0.055) !important; }
+  html[data-theme='light'] .border-white\/5,
+  html[data-theme='light'] .border-white\/10,
+  html[data-theme='light'] .border-white\/20 { border-color: var(--control-border) !important; }
+  html[data-theme='light'] .border-slate-900,
+  html[data-theme='light'] .border-slate-800,
+  html[data-theme='light'] .border-slate-900\/50,
+  html[data-theme='light'] .border-slate-800\/50,
+  html[data-theme='light'] .border-slate-800\/60 { border-color: var(--control-border) !important; }
+  html[data-theme='light'] .text-white,
+  html[data-theme='light'] .text-slate-50,
+  html[data-theme='light'] .text-slate-100,
+  html[data-theme='light'] .text-slate-200 { color: var(--text-primary) !important; }
+  html[data-theme='light'] .text-slate-300,
+  html[data-theme='light'] .text-slate-400 { color: var(--text-secondary) !important; }
+  html[data-theme='light'] .text-slate-500,
+  html[data-theme='light'] .text-slate-600,
+  html[data-theme='light'] .text-slate-700,
+  html[data-theme='light'] .text-slate-800 { color: var(--text-muted) !important; }
+  html[data-theme='light'] [class*='bg-indigo'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-blue'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-violet'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-purple'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-cyan'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-teal'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-rose'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-red'][class*='text-white'],
+  html[data-theme='light'] [class*='bg-emerald'][class*='text-white'] { color: #fff !important; }
+  html[data-theme='light'] .premium-gradient-text {
+    background-image: linear-gradient(145deg, #3730a3, #0f172a, #7e22ce);
   }
 }
