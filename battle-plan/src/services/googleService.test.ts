@@ -1273,6 +1273,40 @@ test('addToCalendar uses the following civil date as the exclusive end of an all
     assert.deepEqual(request?.resource?.end, { date: '2027-01-01' });
 });
 
+test('addToCalendar updates a timed event end from the current duration', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let request: {
+        eventId?: string;
+        resource?: {
+            start?: { dateTime?: string };
+            end?: { dateTime?: string };
+        };
+    } | undefined;
+    installGapiMock({
+        calendarEventsUpdate: async (args) => {
+            request = args as typeof request;
+            return { result: { id: 'evt-timed' } };
+        },
+    });
+    const svc = freshService();
+    const start = new Date('2026-09-04T10:00:00');
+
+    const id = await svc.addToCalendar({
+        title: 'Prodloužená schůzka',
+        description: '',
+        date: '2026-09-04',
+        startTime: '10:00',
+        duration: 90,
+        googleEventId: 'evt-timed',
+    });
+
+    assert.equal(id, 'evt-timed');
+    assert.equal(request?.eventId, 'evt-timed');
+    assert.equal(request?.resource?.start?.dateTime, start.toISOString());
+    assert.equal(request?.resource?.end?.dateTime, new Date(start.getTime() + 90 * 60_000).toISOString());
+});
+
 test('v2 Drive transport exposes its exact narrow scope and account cache discriminator', () => {
     clearStore();
     localStorage.setItem('google_user_email', 'user@example.com');
