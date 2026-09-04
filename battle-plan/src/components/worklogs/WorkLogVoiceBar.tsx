@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Mic, Loader2, AlertCircle, CalendarDays, Clock3, Users, Briefcase, ClipboardList } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useAudioRecorder } from '../../hooks/useAudioRecorder';
 import {
     processWorkLogAudio,
@@ -256,6 +256,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
                 </div>
             )}
 
+            <AnimatePresence>
             {extracted && (
                 <WorkLogVoiceConfirm
                     extracted={extracted}
@@ -263,6 +264,7 @@ export function WorkLogVoiceBar({ onSaved, onError, onInfo, onControllerChange }
                     onCancelled={handleCancelled}
                 />
             )}
+            </AnimatePresence>
         </>
     );
 }

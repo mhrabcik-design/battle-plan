@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { ChevronLeft, ChevronRight, Filter, X } from 'lucide-react';
 import { type WorkLog } from '../../db';
 import { currentMonthKey, monthKeyToDate, monthKeyToOffset, monthLabel } from '../../utils/workLogMonth';
@@ -251,6 +252,7 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
             )}
 
             {/* Modal — detail dne */}
+            <AnimatePresence>
             {selectedDate && (
                 <OverlaySurface
                     title={`Detail dne ${selectedDate}`}
@@ -290,6 +292,7 @@ export function WorkLogCalendar({ logs, projectIndex }: WorkLogCalendarProps) {
                             </div>
                 </OverlaySurface>
             )}
+            </AnimatePresence>
         </div>
     );
 }
