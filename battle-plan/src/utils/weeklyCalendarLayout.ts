@@ -1,5 +1,9 @@
 import type { UnifiedTask } from '../types';
-import { WEEKLY_CALENDAR_END_MINUTES, WEEKLY_CALENDAR_START_MINUTES } from './calendarUtils.ts';
+import {
+  getWeeklyVisualBlock,
+  WEEKLY_CALENDAR_END_MINUTES,
+  WEEKLY_CALENDAR_START_MINUTES,
+} from './calendarUtils.ts';
 
 export type CalendarInterval = {
   id: string;
@@ -15,21 +19,12 @@ export type CalendarLayoutItem = CalendarInterval & {
   hiddenIds: string[];
 };
 
-const parseTime = (value?: string) => {
-  if (!value) return WEEKLY_CALENDAR_START_MINUTES;
-  const [hour, minute] = value.split(':').map(Number);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return WEEKLY_CALENDAR_START_MINUTES;
-  return hour * 60 + minute;
-};
-
 export function getWeeklyVisualInterval(task: UnifiedTask): CalendarInterval {
-  const duration = Math.max(0, task.duration || 60);
-  const semanticMinute = parseTime(task.startTime);
-  const startMinute = task.type === 'task' ? semanticMinute - duration : semanticMinute;
+  const { startMinute, endMinute } = getWeeklyVisualBlock(task);
   return {
     id: task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`,
     startMinute: Math.max(WEEKLY_CALENDAR_START_MINUTES, Math.min(WEEKLY_CALENDAR_END_MINUTES, startMinute)),
-    endMinute: Math.max(WEEKLY_CALENDAR_START_MINUTES, Math.min(WEEKLY_CALENDAR_END_MINUTES, startMinute + duration)),
+    endMinute: Math.max(WEEKLY_CALENDAR_START_MINUTES, Math.min(WEEKLY_CALENDAR_END_MINUTES, endMinute)),
   };
 }
 
