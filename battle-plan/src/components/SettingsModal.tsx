@@ -4,6 +4,7 @@ import { googleService } from '../services/googleService';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import { OverlaySurface } from './ui/OverlaySurface';
+import type { ThemePreference } from '../utils/themePreference';
 
 interface SettingsModalProps {
     apiKey: string;
@@ -13,6 +14,8 @@ interface SettingsModalProps {
     availableModels: string[];
     uiScale: number;
     setUiScale: (val: number) => void;
+    themePreference: ThemePreference;
+    setThemePreference: (val: ThemePreference) => void;
     googleAuth: GoogleAuthStatus;
     lastSync: string | null;
     saveSettings: () => Promise<void>;
@@ -27,6 +30,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     availableModels,
     uiScale,
     setUiScale,
+    themePreference,
+    setThemePreference,
     googleAuth,
     lastSync,
     saveSettings,
@@ -39,7 +44,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             className="glass-card max-h-[min(90dvh,48rem)] w-full max-w-sm space-y-6 overflow-y-auto p-6 custom-scrollbar sm:p-8"
         >
                 <div className="flex justify-between items-center">
-                    <h2 className="text-2xl font-display font-bold text-white">Nastavení AI</h2>
+                    <h2 aria-hidden="true" className="text-2xl font-display font-bold text-white">Nastavení AI</h2>
                     <button aria-label="Zavřít nastavení" onClick={() => setShowSettings(false)} className="surface-action h-11 w-11 text-slate-400 hover:text-white">
                         <X />
                     </button>
@@ -71,6 +76,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className="pt-4 border-t border-white/5 space-y-3">
                         <h3 className="text-xs font-bold text-slate-300 uppercase tracking-widest">Vzhled a Čitelnost</h3>
                         <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-4">
+                            <fieldset className="space-y-2">
+                                <legend className="text-xs font-bold text-slate-400 uppercase">Barevný motiv</legend>
+                                <div className="grid grid-cols-3 gap-2" aria-label="Barevný motiv">
+                                    {([
+                                        ['system', 'Systém'],
+                                        ['light', 'Světlý'],
+                                        ['dark', 'Tmavý'],
+                                    ] as const).map(([value, label]) => (
+                                        <button
+                                            key={value}
+                                            type="button"
+                                            aria-pressed={themePreference === value}
+                                            onClick={() => setThemePreference(value)}
+                                            className={`min-h-11 rounded-xl border px-2 text-xs font-black uppercase transition-[background-color,border-color,color] ${themePreference === value ? 'border-indigo-400 bg-indigo-600 text-white' : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:border-indigo-400'}`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-xs text-slate-500">Volba se uloží okamžitě jen v tomto zařízení.</p>
+                            </fieldset>
                             <div className="flex justify-between items-center text-xs font-bold text-slate-400 uppercase">
                                 <span>Velikost písma</span>
                                 <span className="text-white px-2 py-0.5 bg-indigo-500/20 rounded-md border border-indigo-500/30">{uiScale}px</span>

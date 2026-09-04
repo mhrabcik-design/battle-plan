@@ -69,7 +69,7 @@ export function TaskCard({
                         {task.isGoogleTask ? 'Google Task' : task.urgency === 3 ? 'Urgentní' : task.urgency === 1 ? 'Bez urgentnosti' : 'Normální'}
                     </div>
                     {task.isGoogleTask && (
-                        <div className="w-4 h-4 bg-blue-600 rounded flex items-center justify-center text-xs font-black text-white shadow-sm">G</div>
+                        <div className="w-4 h-4 bg-blue-600 rounded flex items-center justify-center text-xs font-black text-on-accent shadow-sm">G</div>
                     )}
                     {overCapacity && (
                         <div className="flex min-w-0 items-center gap-1.5 rounded-full border border-red-500/40 bg-red-500/15 px-2 py-1 text-red-300">

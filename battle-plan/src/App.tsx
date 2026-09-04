@@ -47,6 +47,7 @@ import { getTaskGridPresentation, sortTasksActiveFirst } from './utils/taskListP
 import { buildInfo } from './utils/buildInfo';
 import { workLogsBackupHealth } from './utils/driveSyncDiagnostics';
 import { getErrorMessage } from './utils/errors';
+import { useThemePreference } from './hooks/useThemePreference';
 
 const SuggestionsPage = lazy(() => import('./pages/SuggestionsPage').then((module) => ({ default: module.SuggestionsPage })));
 const WorkLogsPage = lazy(() => import('./pages/WorkLogsPage').then((module) => ({ default: module.WorkLogsPage })));
@@ -77,11 +78,13 @@ const pageFallback = (
 );
 
 function App() {
+  const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
   const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
   const [viewMode, setViewMode] = useState<ViewMode>('battle');
   const [editingTask, setEditingTask] = useState<UnifiedTask | null>(null);
   const [activeVoiceUpdateId, setActiveVoiceUpdateId] = useState<number | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
+  const [isTaskCommandProcessing, setIsTaskCommandProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState(DEFAULT_GEMINI_MODEL);
@@ -105,6 +108,14 @@ function App() {
   const { syncHealth, updateSyncHealth } = useSyncDiagnostics();
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
+
+  const selectView = useCallback((nextView: ViewMode) => {
+    if (nextView === 'worklogs' && isRecording) {
+      setNotice('Nejprve dokončete nebo zastavte probíhající diktování.');
+      return;
+    }
+    setViewMode(nextView);
+  }, [isRecording]);
 
   const addLog = useCallback((message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
@@ -181,6 +192,8 @@ function App() {
 
   useEffect(() => {
     document.querySelector('main')?.scrollTo(0, 0);
+    document.querySelector<HTMLElement>('.mobile-nav-rail [aria-current="page"]')
+      ?.scrollIntoView({ block: 'nearest', inline: 'center' });
   }, [viewMode]);
 
   useEffect(() => {
@@ -199,7 +212,7 @@ const hasUsableAuth = checkUsableAuth(googleAuth);
 const syncVisualState = deriveSyncVisualState({
     authState: googleAuth.state,
     syncHealth,
-    isProcessing,
+    isProcessing: isTaskCommandProcessing,
 });
 
   useEffect(() => {
@@ -537,7 +550,7 @@ const syncVisualState = deriveSyncVisualState({
     editingTask,
     setEditingTask,
     setGoogleTasksRaw,
-    setIsProcessing,
+    setIsProcessing: setIsTaskCommandProcessing,
   });
 
   useGlobalVoiceProcessing({
@@ -546,7 +559,7 @@ const syncVisualState = deriveSyncVisualState({
     selectedModel,
     activeVoiceUpdateIdRef,
     isProcessingRef,
-    setIsProcessing,
+    setIsProcessing: setIsVoiceProcessing,
     setActiveVoiceUpdateId,
     setWorkLogExtracted,
     clearAudio,
@@ -568,21 +581,30 @@ const syncVisualState = deriveSyncVisualState({
   const isWorkLogVoiceMode = viewMode === 'worklogs';
   const activeWorkLogVoiceController = isWorkLogVoiceMode ? workLogVoiceController : null;
   const floatingMicIsRecording = activeWorkLogVoiceController?.isRecording ?? isRecording;
-  const floatingMicIsProcessing = activeWorkLogVoiceController?.processing ?? isProcessing;
+  const floatingMicIsProcessing = activeWorkLogVoiceController?.processing ?? isVoiceProcessing;
   const floatingMicDisabled = isWorkLogVoiceMode
     ? !activeWorkLogVoiceController || activeWorkLogVoiceController.disabled
-    : isProcessing;
+    : isVoiceProcessing;
+  const floatingMicState = floatingMicDisabled && !floatingMicIsProcessing
+    ? 'unavailable'
+    : floatingMicIsProcessing ? 'processing' : floatingMicIsRecording ? 'recording' : 'idle';
+  const floatingMicLabel = {
+    unavailable: 'Mikrofon není dostupný',
+    processing: 'Zpracovávám diktování',
+    recording: 'Zastavit diktování',
+    idle: isWorkLogVoiceMode ? 'Nadiktovat pracovní činnost' : 'Spustit diktování',
+  }[floatingMicState];
 
   return (
     <MotionConfig reducedMotion="user">
     <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
       <Sidebar
         viewMode={viewMode}
-        setViewMode={setViewMode}
+        setViewMode={selectView}
         isAiActive={isAiActive}
         navItems={NAV_ITEMS}
         setShowSettings={setShowSettings}
-        isProcessing={isProcessing}
+        isProcessing={isTaskCommandProcessing}
         suggestionsBadge={suggestionsBadge}
         appVersion={buildInfo.version}
         syncState={syncVisualState}
@@ -613,9 +635,9 @@ const syncVisualState = deriveSyncVisualState({
                     {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
                   </h2>
                   <div className="flex gap-1.5 border-l border-slate-800 ml-2 pl-4">
-                    <button onClick={() => changeWeek(-1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronLeft className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => setWeekOffset(0)} className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-xs font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-all border border-slate-700/50">Dnes</button>
-                    <button onClick={() => changeWeek(1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-all border border-slate-700/50"><ChevronRight className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => changeWeek(-1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-[background-color,border-color,color] border border-slate-700/50"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => setWeekOffset(0)} className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-xs font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-[background-color,border-color,color] border border-slate-700/50">Dnes</button>
+                    <button onClick={() => changeWeek(1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-[background-color,border-color,color] border border-slate-700/50"><ChevronRight className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
               )}
@@ -627,7 +649,7 @@ const syncVisualState = deriveSyncVisualState({
                       <button
                         key={list.id}
                         onClick={() => setActiveTaskList(list.id)}
-                        className={`px-3 py-1.5 rounded-md text-sm font-black uppercase transition-all ${activeTaskList === list.id ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+                        className={`px-3 py-1.5 rounded-md text-sm font-black uppercase transition-[background-color,color,box-shadow] ${activeTaskList === list.id ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
                       >
                         {list.title}
                       </button>
@@ -678,6 +700,7 @@ const syncVisualState = deriveSyncVisualState({
                 </button>
                 <button
                   onClick={() => setShowSettings(true)}
+                  aria-label="Otevřít nastavení"
                   className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 flex items-center gap-1.5"
                 >
                   <Settings className="w-4 h-4" />
@@ -695,15 +718,17 @@ const syncVisualState = deriveSyncVisualState({
               </div>
             </div>
 
-            <nav className="flex items-center justify-between bg-[#0d1117]/80 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 shadow-xl overflow-x-auto no-scrollbar">
+            <nav aria-label="Hlavní navigace" className="mobile-nav-rail flex items-center backdrop-blur-md p-1.5 rounded-2xl border border-white/5 shadow-xl overflow-x-auto">
               {NAV_ITEMS.map((item) => {
                 const Icon = item.icon;
                 const isActive = viewMode === item.id;
                 return (
                   <button
                     key={item.id}
-                    onClick={() => setViewMode(item.id as ViewMode)}
-                    className={`flex flex-col items-center gap-1.5 px-5 py-3 rounded-xl transition-all ${isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-slate-500'}`}
+                    onClick={() => selectView(item.id as ViewMode)}
+                    onFocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'center' })}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`flex min-w-[5.25rem] flex-col items-center gap-1.5 px-4 py-3 rounded-xl transition-[background-color,color,box-shadow] ${isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-slate-500'}`}
                   >
                     <Icon className="w-5 h-5" />
                     <span className="text-xs font-black uppercase tracking-widest">{item.label}</span>
@@ -789,7 +814,7 @@ const syncVisualState = deriveSyncVisualState({
                     setShowCompletedTasks(current => !current);
                   }
                 }}
-                className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-black uppercase tracking-wider transition-all ${showCompletedInCurrentView
+                className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-black uppercase tracking-wider transition-[background-color,border-color,color] ${showCompletedInCurrentView
                   ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
                   : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700 hover:text-slate-200'
                   }`}
@@ -901,6 +926,8 @@ const syncVisualState = deriveSyncVisualState({
                 availableModels={AVAILABLE_MODELS}
                 uiScale={uiScale}
                 setUiScale={setUiScale}
+                themePreference={themePreference}
+                setThemePreference={setThemePreference}
                 googleAuth={googleAuth}
                 lastSync={lastSync}
                 saveSettings={saveSettings}
@@ -909,8 +936,8 @@ const syncVisualState = deriveSyncVisualState({
             )}
           </AnimatePresence>
           <AnimatePresence>
-            {!editingTask && (
-              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:right-10 md:translate-x-0 z-[110] transition-all duration-500">
+            {!editingTask && !isWorkLogVoiceMode && (
+              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:right-10 md:translate-x-0 z-[110] transition-[left,right,transform] duration-500">
                 <div className="relative">
                   <AnimatePresence>
                     {floatingMicIsRecording && <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1.6, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} className={`absolute inset-0 ${activeVoiceUpdateId || isWorkLogVoiceMode ? 'bg-red-500/40' : 'bg-indigo-500/30'} rounded-full blur-3xl animate-pulse`} />}
@@ -939,20 +966,23 @@ const syncVisualState = deriveSyncVisualState({
                       });
                     }}
                     disabled={floatingMicDisabled}
-                    title={isWorkLogVoiceMode ? 'Nadiktovat pracovní činnost — Anu vytvoří worklog podle projektu, lidí, hodin a popisu.' : 'Spustit diktování — Anu vytvoří task / worklog / nápad podle toho, co řekneš.'}
-                    className={`relative z-10 w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-2xl ${floatingMicIsRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : floatingMicIsProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
+                    aria-label={floatingMicLabel}
+                    aria-busy={floatingMicIsProcessing}
+                    title={floatingMicState === 'idle' ? 'Spustit diktování — Anu vytvoří task / worklog / nápad podle toho, co řekneš.' : floatingMicLabel}
+                    className={`relative z-10 w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-[background-color,box-shadow,transform] shadow-2xl ${floatingMicIsRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : floatingMicIsProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
                   >
                     {floatingMicIsProcessing ? <div className="w-5 h-5 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (floatingMicIsRecording ? <MicOff className="w-5 h-5 md:w-8 md:h-8 text-white" /> : <Mic className="w-5 h-5 md:w-8 md:h-8 text-white" />)}
                   </button>
+                  <span role="status" aria-live="polite" className="sr-only">{floatingMicLabel}</span>
                 </div>
               </div>
             )}
           </AnimatePresence>
           <SlashCommandPalette
-            onOpenVoice={() => setViewMode('battle')}
-            onOpenWorklogs={() => setViewMode('worklogs')}
-            onOpenSuggestions={() => setViewMode('suggestions')}
-            onOpenDiagnostics={() => setViewMode('debug')}
+            onOpenVoice={() => selectView('battle')}
+            onOpenWorklogs={() => selectView('worklogs')}
+            onOpenSuggestions={() => selectView('suggestions')}
+            onOpenDiagnostics={() => selectView('debug')}
           />
         </div>
       </main>

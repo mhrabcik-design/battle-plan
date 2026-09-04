@@ -607,8 +607,8 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                         return (
                                             <button key={`${taskKey(task)}-allday`} {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`w-full px-2 py-1 rounded-md border transition-[opacity,transform,border-color,box-shadow] duration-150 flex items-center gap-1.5 overflow-hidden touch-pan-y cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-25 scale-[0.97] border-dashed shadow-none' : 'shadow-sm'} ${completed ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' : task.type === 'meeting' ? 'bg-indigo-600/80 border-indigo-500/50 hover:border-indigo-300' : 'bg-amber-600/80 border-amber-500/50 hover:border-amber-300'} disabled:opacity-60`}>
                                                 {!completed && <GripVertical className="h-3 w-3 shrink-0 text-white/45" />}
-                                                {completed ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <Sun className="w-3 h-3 text-white shrink-0" />}
-                                                <span className={`text-sm font-bold uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-white'}`}>{task.title}</span>
+                                                {completed ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <Sun className="w-3 h-3 text-on-accent shrink-0" />}
+                                                <span className={`text-sm font-bold uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-on-accent'}`}>{task.title}</span>
                                                 {completed && <span className="text-[9px] font-black uppercase ml-auto">Splněno</span>}
                                                 {task.isGoogleTask && <span className="text-sm bg-blue-500/30 text-blue-200 px-1 rounded-sm border border-blue-400/30 shrink-0">G</span>}
                                             </button>
