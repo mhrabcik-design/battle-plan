@@ -22,6 +22,24 @@ test('normalizes meeting start and task end into visual intervals', () => {
   });
 });
 
+test('keeps the final rendered hour valid through the shared 20:00 boundary', () => {
+  assert.deepEqual(getWeeklyVisualInterval(task({ id: 3, type: 'meeting', startTime: '19:00', duration: 60 })), {
+    id: 'l-3', startMinute: 19 * 60, endMinute: 20 * 60,
+  });
+  assert.deepEqual(getWeeklyVisualInterval(task({ id: 4, type: 'task', startTime: '20:00', duration: 60 })), {
+    id: 'l-4', startMinute: 19 * 60, endMinute: 20 * 60,
+  });
+});
+
+test('uses the sixty-minute fallback for missing and zero durations', () => {
+  assert.deepEqual(getWeeklyVisualInterval(task({ id: 5, type: 'meeting', startTime: '10:00' })), {
+    id: 'l-5', startMinute: 10 * 60, endMinute: 11 * 60,
+  });
+  assert.deepEqual(getWeeklyVisualInterval(task({ id: 6, type: 'task', startTime: '11:00', duration: 0 })), {
+    id: 'l-6', startMinute: 10 * 60, endMinute: 11 * 60,
+  });
+});
+
 test('places overlapping intervals in columns and touching intervals reuse a column', () => {
   const result = layoutCalendarIntervals([
     { id: 'a', startMinute: 540, endMinute: 600 },

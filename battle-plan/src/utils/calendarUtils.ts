@@ -120,7 +120,9 @@ export type WeeklyDropTarget = {
     blockTopMinutes?: number;
 };
 
-export type WeeklySchedulePatch = Pick<UnifiedTask, 'date' | 'deadline' | 'startTime' | 'isAllDay'>;
+export type WeeklySchedulePatch = Pick<UnifiedTask, 'date' | 'deadline' | 'startTime' | 'isAllDay'> & {
+    duration?: number;
+};
 export type WeeklyEdgeDirection = -1 | 1;
 export type WeeklyEdgeViewport = {
     left: number;
@@ -129,9 +131,10 @@ export type WeeklyEdgeViewport = {
     bottom: number;
 };
 
-const WEEK_START_MINUTES = 7 * 60;
-const WEEK_END_MINUTES = 19 * 60;
-const WEEK_SNAP_MINUTES = 15;
+export const WEEKLY_CALENDAR_START_MINUTES = 7 * 60;
+export const WEEKLY_CALENDAR_END_MINUTES = 20 * 60;
+export const WEEKLY_CALENDAR_SNAP_MINUTES = 15;
+export const WEEKLY_CALENDAR_MIN_DURATION = 30;
 
 export const getWeeklyEdgeDirection = (
     pointerX: number,
@@ -167,9 +170,21 @@ const formatClockMinutes = (minutes: number): string => {
     return `${String(hours).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
 };
 
+const parseClockMinutes = (value?: string): number => {
+    if (!value) return WEEKLY_CALENDAR_START_MINUTES;
+    const [hours, minutes] = value.split(':').map(Number);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return WEEKLY_CALENDAR_START_MINUTES;
+    return hours * 60 + minutes;
+};
+
+const getWeeklyDuration = (task: UnifiedTask): number => Math.max(0, task.duration || 60);
+
 export const snapWeeklyMinute = (minutes: number, duration = 0): number => {
-    const snapped = Math.round(minutes / WEEK_SNAP_MINUTES) * WEEK_SNAP_MINUTES;
-    return Math.min(Math.max(snapped, WEEK_START_MINUTES), WEEK_END_MINUTES - Math.max(0, duration));
+    const snapped = Math.round(minutes / WEEKLY_CALENDAR_SNAP_MINUTES) * WEEKLY_CALENDAR_SNAP_MINUTES;
+    return Math.min(
+        Math.max(snapped, WEEKLY_CALENDAR_START_MINUTES),
+        WEEKLY_CALENDAR_END_MINUTES - Math.max(0, duration),
+    );
 };
 
 export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTarget): WeeklySchedulePatch => {
@@ -182,8 +197,8 @@ export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTa
         };
     }
 
-    const duration = Math.max(0, task.duration || 60);
-    const blockTop = snapWeeklyMinute(target.blockTopMinutes ?? WEEK_START_MINUTES, duration);
+    const duration = getWeeklyDuration(task);
+    const blockTop = snapWeeklyMinute(target.blockTopMinutes ?? WEEKLY_CALENDAR_START_MINUTES, duration);
     const semanticTime = task.type === 'task' ? blockTop + duration : blockTop;
 
     return {
@@ -194,10 +209,31 @@ export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTa
     };
 };
 
+export const getWeeklyResizePatch = (task: UnifiedTask, blockEndMinutes: number): WeeklySchedulePatch => {
+    const originalDuration = getWeeklyDuration(task);
+    const semanticMinute = parseClockMinutes(task.startTime);
+    const blockTop = task.type === 'task' ? semanticMinute - originalDuration : semanticMinute;
+    const snappedEnd = Math.round(blockEndMinutes / WEEKLY_CALENDAR_SNAP_MINUTES) * WEEKLY_CALENDAR_SNAP_MINUTES;
+    const blockEnd = Math.min(
+        Math.max(snappedEnd, blockTop + WEEKLY_CALENDAR_MIN_DURATION),
+        WEEKLY_CALENDAR_END_MINUTES,
+    );
+    const duration = Math.max(WEEKLY_CALENDAR_MIN_DURATION, blockEnd - blockTop);
+
+    return {
+        date: task.date,
+        deadline: task.deadline,
+        startTime: task.type === 'task' ? formatClockMinutes(blockTop + duration) : task.startTime,
+        isAllDay: false,
+        duration,
+    };
+};
+
 export const isWeeklyScheduleNoop = (task: UnifiedTask, patch: WeeklySchedulePatch): boolean => (
     (task.type === 'task' ? task.deadline === patch.deadline : task.date === patch.date)
     && task.startTime === patch.startTime
     && Boolean(task.isAllDay ?? !task.startTime) === Boolean(patch.isAllDay)
+    && (patch.duration === undefined || getWeeklyDuration(task) === patch.duration)
 );
 
 export const getUrgencyColor = (urgency?: number) => {
