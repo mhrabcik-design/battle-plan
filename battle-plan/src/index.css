@@ -130,12 +130,21 @@
   }
 
   .office-button-primary {
-    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-bold text-sm active:scale-95 flex items-center justify-center gap-2 hover:-translate-y-0.5;
-    transition: background-color var(--motion-standard) var(--motion-ease), box-shadow var(--motion-standard) var(--motion-ease), transform var(--motion-quick) var(--motion-ease);
+    @apply bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2;
+    transition: background-color var(--motion-standard) var(--motion-ease), box-shadow var(--motion-standard) var(--motion-ease), translate var(--motion-quick) var(--motion-ease), scale var(--motion-quick) var(--motion-ease);
     box-shadow: 0 4px 14px 0 rgba(79, 70, 229, 0.39);
   }
-  .office-button-primary:hover {
-    box-shadow: 0 6px 20px rgba(79, 70, 229, 0.23);
+  @media (hover: hover) {
+    .office-button-primary:not(:disabled):not([aria-disabled="true"]):hover {
+      @apply bg-indigo-500;
+      translate: 0 -1px;
+      box-shadow: 0 6px 20px rgba(79, 70, 229, 0.23);
+    }
+  }
+
+  .office-button-primary:not(:disabled):not([aria-disabled="true"]):active {
+    translate: none;
+    scale: 0.98;
   }
 
   .office-btn-ghost {
@@ -152,7 +161,7 @@
     transition: color var(--motion-quick) var(--motion-ease), background-color var(--motion-quick) var(--motion-ease), border-color var(--motion-quick) var(--motion-ease), transform var(--motion-quick) var(--motion-ease);
   }
 
-  .surface-action:active {
+  .surface-action:not(:disabled):not([aria-disabled="true"]):active {
     transform: scale(0.98);
   }
 
@@ -274,6 +283,15 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    /* Keep positioning and drag transforms intact outside shared controls. */
+    .office-button-primary,
+    .office-btn-ghost,
+    .surface-action {
+      transform: none !important;
+      translate: none !important;
+      scale: none !important;
+    }
+
     html {
       scroll-behavior: auto;
     }

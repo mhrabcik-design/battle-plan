@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Brain, Briefcase, FileText, Mic, X } from 'lucide-react';
 import { OverlaySurface } from './ui/OverlaySurface';
 
@@ -28,8 +29,6 @@ export function SlashCommandPalette({ onOpenVoice, onOpenWorklogs, onOpenSuggest
         return () => document.removeEventListener('keydown', onKeyDown);
     }, []);
 
-    if (!open) return null;
-
     const items = [
         { label: 'Manažer', description: 'Otevřít hlas pro nový task, schůzku nebo nápad.', icon: Briefcase, action: onOpenVoice },
         { label: 'Zapisovatel', description: 'Přejít na práci a diktovat worklog.', icon: Mic, action: onOpenWorklogs },
@@ -38,6 +37,8 @@ export function SlashCommandPalette({ onOpenVoice, onOpenWorklogs, onOpenSuggest
     ];
 
     return (
+        <AnimatePresence>
+        {open && (
         <OverlaySurface title="Anu příkazy" onRequestClose={() => setOpen(false)} className="w-full max-w-xl overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/50">
                 <div className="flex items-center justify-between gap-3 p-4 border-b border-white/5">
                     <div>
@@ -65,5 +66,7 @@ export function SlashCommandPalette({ onOpenVoice, onOpenWorklogs, onOpenSuggest
                     ))}
                 </div>
         </OverlaySurface>
+        )}
+        </AnimatePresence>
     );
 }
