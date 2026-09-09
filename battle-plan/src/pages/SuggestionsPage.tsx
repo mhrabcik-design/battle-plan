@@ -191,6 +191,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         urgency: suggestion.context.priority === 'high' ? 3 : suggestion.context.priority === 'low' ? 1 : 2,
         date: deadline,
         deadline: deadline,
+        startTime: deadline ? '15:00' : undefined,
         createdAt: now,
         updatedAt: now,
       });
