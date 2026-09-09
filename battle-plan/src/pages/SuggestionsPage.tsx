@@ -118,14 +118,13 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
       }
       const replies = Object.values(snapshot.repliesBySuggestion).flat();
       await suggestionRegistry.ingestLegacy(sugs, replies);
+      setResolutionsBySuggestion(await resolveAll(sugs));
+      setSuggestions(sugs);
+      setRepliesBySuggestion(snapshot.repliesBySuggestion);
       const registryPublish = await suggestionRegistrySync.publishPending();
       if (registryPublish.kind === 'error') {
         console.warn('Suggestion decision registry publish failed', registryPublish.message);
       }
-
-      setSuggestions(sugs);
-      setRepliesBySuggestion(snapshot.repliesBySuggestion);
-      setResolutionsBySuggestion(await resolveAll(sugs));
     } catch (e) {
       console.error('Load suggestions failed', e);
       onAddLog('Suggestions: Nepodařilo se načíst návrhy', 'error');
@@ -472,6 +471,21 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         onAddLog('Suggestions: Úprava selhala', 'error');
         return;
       }
+      // Reflect the saved edit before waiting for its audit reply.
+      setSuggestions((prev) =>
+        prev.map((s) =>
+          s.id === suggestion.id
+            ? {
+                ...s,
+                context: {
+                  ...s.context,
+                  ...(updates.priority !== undefined ? { priority: updates.priority } : {}),
+                  ...(updates.deadline !== undefined ? { deadline: updates.deadline } : {}),
+                },
+              }
+            : s
+        )
+      );
       // Log edit reply for audit
       const parts: string[] = [];
       if (updates.priority !== undefined) parts.push(`priorita → ${updates.priority}`);
@@ -488,21 +502,6 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         content: `✏️ ${parts.join(', ')}`,
         action: null,
       });
-      // Local optimistic update
-      setSuggestions((prev) =>
-        prev.map((s) =>
-          s.id === suggestion.id
-            ? {
-                ...s,
-                context: {
-                  ...s.context,
-                  ...(updates.priority !== undefined ? { priority: updates.priority } : {}),
-                  ...(updates.deadline !== undefined ? { deadline: updates.deadline } : {}),
-                },
-              }
-            : s
-        )
-      );
       if (editReply.success && editReply.id) {
         setRepliesBySuggestion((prev) => ({
           ...prev,

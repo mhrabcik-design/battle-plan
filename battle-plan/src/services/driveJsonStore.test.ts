@@ -46,6 +46,47 @@ const {
 } = await import('./driveJsonStore.ts');
 const { AuthUnavailableError, googleService } = await import('./googleService.ts');
 
+test('cached registry reads download only new or changed file versions', async () => {
+    let files = Array.from({ length: 20 }, (_, i) => ({ id: `snapshot-${i}`, version: '1' }));
+    let downloads = 0;
+    installDriveGlobals({
+        drive: { files: { list: async () => ({ result: { files } }) } },
+        request: async () => { downloads++; return { result: { value: downloads } }; },
+    }, { bp_folder_id: 'folder-cache-test' });
+    setGoogleServiceState({ accessToken: 'test', expiresAt: Date.now() + 3_600_000, userEmail: 'test@example.com' });
+    const store = new DriveJsonStore();
+    await store.init();
+    const options = { cacheUnchanged: true };
+    const first = await store.readJsonFilesWithStatus<{ value: number }>('registry.json', options);
+    assert.equal(downloads, 20);
+    assert.equal(first.kind, 'loaded');
+    if (first.kind === 'loaded') first.files[0].data.value = -1;
+    const cached = await store.readJsonFilesWithStatus<{ value: number }>('registry.json', options);
+    assert.equal(downloads, 20, 'unchanged refresh must not download the 20 snapshots again');
+    if (cached.kind === 'loaded') assert.notEqual(cached.files[0].data.value, -1, 'callers cannot mutate cached data');
+    files[0].version = '2';
+    files.push({ id: 'new-snapshot', version: '1' });
+    await store.readJsonFilesWithStatus('registry.json', options);
+    assert.equal(downloads, 22);
+    await store.readJsonFilesWithStatus('registry.json');
+    assert.equal(downloads, 43, 'mutable writers must bypass the cache');
+    files[0].version = '';
+    await store.readJsonFilesWithStatus('registry.json', options);
+    await store.readJsonFilesWithStatus('registry.json', options);
+    assert.equal(downloads, 45, 'missing versions always require a fresh read');
+    files = [];
+    assert.equal((await store.readJsonFilesWithStatus('registry.json', options)).kind, 'missing-file');
+});
+
+test('Drive duplicate selection preserves case-sensitive lexical ordering', async () => {
+    installDriveGlobals({ drive: { files: { list: async () => ({ result: { files: [{ id: 'a' }, { id: 'Z' }] } }) } } },
+        { bp_folder_id: 'folder-order-test' });
+    const store = new DriveJsonStore();
+    await store.init();
+    assert.deepEqual(await store.findFileIds('registry.json'), ['Z', 'a']);
+    assert.equal(await store.findFileId('registry.json'), 'Z');
+});
+
 type GoogleServiceInternalState = {
     accessToken: string | null;
     expiresAt: number;
@@ -256,8 +297,8 @@ test('DriveJsonStore lists every duplicate JSON page deterministically and trash
 
     assert.deepEqual(await store.findFileIds('journal.json'), ['file-a', 'file-m', 'file-z']);
     assert.deepEqual(listArguments, [
-        { q: "name='journal.json' and 'folder-123' in parents and trashed=false", spaces: 'drive', fields: 'files(id, name), nextPageToken', pageSize: 1000 },
-        { q: "name='journal.json' and 'folder-123' in parents and trashed=false", spaces: 'drive', fields: 'files(id, name), nextPageToken', pageSize: 1000, pageToken: 'page-2' },
+        { q: "name='journal.json' and 'folder-123' in parents and trashed=false", spaces: 'drive', fields: 'files(id, name, version), nextPageToken', pageSize: 1000 },
+        { q: "name='journal.json' and 'folder-123' in parents and trashed=false", spaces: 'drive', fields: 'files(id, name, version), nextPageToken', pageSize: 1000, pageToken: 'page-2' },
     ]);
     await store.trashFile('file/z');
     assert.equal(requests[0].path, '/drive/v3/files/file%2Fz?supportsAllDrives=true');

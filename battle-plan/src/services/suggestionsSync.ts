@@ -82,6 +82,8 @@ export type SuggestionsStore = Pick<
 >;
 
 export class SuggestionsSync {
+  private suggestionsInFlight: Promise<SuggestionsFetchResult> | null = null;
+  private repliesInFlight: Promise<RepliesFetchResult> | null = null;
   private suggestionsFileId: string | null = null;
   private repliesFileId: string | null = null;
   private knownReplyIds: Set<string> = new Set();
@@ -103,6 +105,13 @@ export class SuggestionsSync {
   }
 
   async fetchSuggestionsDetailed(): Promise<SuggestionsFetchResult> {
+    if (!this.suggestionsInFlight) {
+      this.suggestionsInFlight = this.readSuggestions().finally(() => { this.suggestionsInFlight = null; });
+    }
+    return this.suggestionsInFlight;
+  }
+
+  private async readSuggestions(): Promise<SuggestionsFetchResult> {
     if (!this.isInitialized) {
       return { kind: 'store-unavailable', status: this.drive.lastStatus, suggestions: [] };
     }
@@ -126,6 +135,16 @@ export class SuggestionsSync {
   }
 
   async fetchRepliesDetailed(suggestionId?: string): Promise<RepliesFetchResult> {
+    if (!this.repliesInFlight) {
+      this.repliesInFlight = this.readReplies().finally(() => { this.repliesInFlight = null; });
+    }
+    const result = await this.repliesInFlight;
+    return suggestionId
+      ? { ...result, replies: result.replies.filter((reply) => reply.suggestion_id === suggestionId) }
+      : result;
+  }
+
+  private async readReplies(): Promise<RepliesFetchResult> {
     if (!this.isInitialized) {
       return { kind: 'store-unavailable', status: this.drive.lastStatus, replies: [] };
     }
@@ -137,10 +156,7 @@ export class SuggestionsSync {
       if (result.kind === 'error') return { ...result, replies: [] };
 
       this.repliesFileId = result.fileId;
-      let replies = result.data.replies ?? [];
-      if (suggestionId) {
-        replies = replies.filter((r) => r.suggestion_id === suggestionId);
-      }
+      const replies = result.data.replies ?? [];
       return { kind: 'loaded', replies };
     } catch (e) {
       console.error('SuggestionsSync: fetchReplies failed', e);

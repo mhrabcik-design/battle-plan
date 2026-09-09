@@ -478,7 +478,10 @@ export class SuggestionRegistry {
             async () => {
                 for (const incoming of snapshot.subjects) {
                     const local = await this.database.suggestionSubjects.get(incoming.id);
-                    await this.database.suggestionSubjects.put(mergeSubject(local, incoming));
+                    const merged = mergeSubject(local, incoming);
+                    if (JSON.stringify(local) !== JSON.stringify(merged)) {
+                        await this.database.suggestionSubjects.put(merged);
+                    }
                 }
                 for (const incoming of snapshot.occurrences) {
                     const subject = await this.database.suggestionSubjects.get(incoming.subjectId);
@@ -488,7 +491,10 @@ export class SuggestionRegistry {
                         );
                     }
                     const local = await this.database.suggestionOccurrences.get(incoming.id);
-                    await this.database.suggestionOccurrences.put(mergeOccurrence(local, incoming));
+                    const merged = mergeOccurrence(local, incoming);
+                    if (JSON.stringify(local) !== JSON.stringify(merged)) {
+                        await this.database.suggestionOccurrences.put(merged);
+                    }
                 }
                 for (const incoming of snapshot.decisions) {
                     const occurrence = await this.database.suggestionOccurrences.get(incoming.occurrenceKey);
@@ -503,11 +509,14 @@ export class SuggestionRegistry {
                             `decision ${incoming.id} has conflicting immutable data`,
                         );
                     }
-                    await this.database.suggestionDecisions.put({
+                    const merged = {
                         ...incoming,
                         ...(local?.taskId != null ? { taskId: local.taskId } : {}),
                         publishedAt: local?.publishedAt ?? incoming.publishedAt ?? now,
-                    });
+                    };
+                    if (JSON.stringify(local) !== JSON.stringify(merged)) {
+                        await this.database.suggestionDecisions.put(merged);
+                    }
                 }
             },
         );

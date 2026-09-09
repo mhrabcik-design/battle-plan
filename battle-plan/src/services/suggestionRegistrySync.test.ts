@@ -15,6 +15,16 @@ import type { AgentSuggestion } from './suggestionsSync.ts';
 
 const databases: BattlePlanDB[] = [];
 
+test('overlapping page and badge registry refreshes share one remote read', async () => {
+    const registry = createRegistry();
+    const store = new FakeRegistryStore();
+    const sync = new SuggestionRegistrySync(registry, store);
+    await Promise.all([sync.fetchAndMerge(), sync.fetchAndMerge()]);
+    assert.equal(store.readCount, 1);
+    await sync.fetchAndMerge();
+    assert.equal(store.readCount, 2, 'a later refresh must still check Drive');
+});
+
 function createRegistry(): SuggestionRegistry {
     const database = new BattlePlanDB(`SuggestionRegistrySync-${Date.now()}-${Math.random()}`);
     databases.push(database);

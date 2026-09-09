@@ -326,3 +326,19 @@ test('reply publishing bounds repeated stale-revision retries', async () => {
   assert.equal(store.readCount, 3);
   assert.equal(store.writeCount, 3);
 });
+
+test('overlapping suggestion and reply reads are shared but later refreshes stay fresh', async () => {
+  const { SuggestionsSync } = await import('./suggestionsSync.ts');
+  const store = new MissingRepliesStore();
+  let reads = 0;
+  store.readJsonFileWithStatus = async () => { reads++; return { kind: 'missing-file' }; };
+  const sync = new SuggestionsSync(store);
+  await sync.init();
+  await Promise.all([
+    sync.fetchSuggestionsDetailed(), sync.fetchSuggestionsDetailed(),
+    sync.fetchRepliesDetailed(), sync.fetchRepliesDetailed('one'),
+  ]);
+  assert.equal(reads, 2);
+  await sync.fetchSuggestionsDetailed();
+  assert.equal(reads, 3);
+});
