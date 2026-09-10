@@ -17,6 +17,7 @@ const MULTIPART_BOUNDARY = '-------314159265358979323846';
 interface DriveFileMeta {
     id: string;
     name?: string;
+    version?: string;
 }
 
 interface DriveUploadResponse {
@@ -394,6 +395,7 @@ export class GapiDriveProtocolApi implements DriveProtocolApi {
 }
 
 export class DriveJsonStore {
+    private readonly readCache = new Map<string, Map<string, { version: string; value: DriveJsonRead<unknown> }>>();
     private folderId: string | null = null;
     private isInitialized = false;
     private lastStatusValue: DriveStoreStatus = { code: 'folder-missing', message: 'Drive store není inicializovaný' };
@@ -473,7 +475,7 @@ export class DriveJsonStore {
         }
     }
 
-    async findFileIds(name: string): Promise<string[]> {
+    private async findFiles(name: string): Promise<DriveFileMeta[]> {
         if (!this.isInitialized || !this.folderId) return [];
         const client = this.getClient();
         if (!client?.drive) return [];
@@ -484,7 +486,7 @@ export class DriveJsonStore {
             const listR = await client.drive.files.list({
                 q: `name='${escapeDriveQueryValue(name)}' and '${escapeDriveQueryValue(this.folderId)}' in parents and trashed=false`,
                 spaces: 'drive',
-                fields: 'files(id, name), nextPageToken',
+                fields: 'files(id, name, version), nextPageToken',
                 pageSize: 1000,
                 ...(pageToken ? { pageToken } : {}),
             });
@@ -495,10 +497,11 @@ export class DriveJsonStore {
             }
             if (pageToken) seenPageTokens.add(pageToken);
         } while (pageToken);
-        return files
-            .map((file) => file.id)
-            .filter(Boolean)
-            .sort();
+        return files.filter((file) => file.id).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    }
+
+    async findFileIds(name: string): Promise<string[]> {
+        return (await this.findFiles(name)).map((file) => file.id);
     }
 
     async findFileId(name: string): Promise<string | null> {
@@ -521,13 +524,31 @@ export class DriveJsonStore {
         return this.readJsonFileByIdWithStatus<T>(fileId);
     }
 
-    async readJsonFilesWithStatus<T>(name: string): Promise<DriveJsonReadManyResult<T>> {
+    async readJsonFilesWithStatus<T>(name: string, options: { cacheUnchanged?: boolean } = {}): Promise<DriveJsonReadManyResult<T>> {
         if (!this.isInitialized || !this.folderId) {
             return { kind: 'store-unavailable', status: this.lastStatusValue };
         }
-        const fileIds = await this.findFileIds(name);
-        if (fileIds.length === 0) return { kind: 'missing-file' };
-        const results = await Promise.all(fileIds.map((fileId) => this.readJsonFileByIdWithStatus<T>(fileId)));
+        // Opt-in for registry snapshots only. Mutable writers still read fresh content and ETags.
+        if (options.cacheUnchanged) await this.getAccessToken();
+        const files = await this.findFiles(name);
+        const cache = this.readCache.get(name) ?? new Map<string, { version: string; value: DriveJsonRead<unknown> }>();
+        if (options.cacheUnchanged) {
+            const ids = new Set(files.map((file) => file.id));
+            for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id);
+            this.readCache.set(name, cache);
+        }
+        if (files.length === 0) return { kind: 'missing-file' };
+        const results = await Promise.all(files.map(async (file): Promise<DriveJsonReadResult<T>> => {
+            const cached = options.cacheUnchanged ? cache.get(file.id) : undefined;
+            if (file.version && cached?.version === file.version) {
+                return { kind: 'loaded', ...structuredClone(cached.value) as DriveJsonRead<T> };
+            }
+            const result = await this.readJsonFileByIdWithStatus<T>(file.id);
+            if (options.cacheUnchanged && result.kind === 'loaded' && file.version) {
+                cache.set(file.id, { version: file.version, value: structuredClone(result) });
+            } else if (options.cacheUnchanged) cache.delete(file.id);
+            return result;
+        }));
         const failed = results.find((result) => result.kind !== 'loaded');
         if (failed) return failed;
         return {

@@ -332,3 +332,17 @@ test('a terminal decision stays processed even if a stale device writes a later 
     assert.equal(resolution.state, 'processed');
     assert.equal(resolution.decision?.kind, 'rejected');
 });
+
+test('replaying an unchanged snapshot does not rewrite stored registry rows', async () => {
+    const database = createDatabase();
+    const registry = new SuggestionRegistry(database);
+    await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
+    const snapshot = await registry.exportSnapshot();
+    await registry.mergeSnapshot(snapshot);
+    let writes = 0;
+    database.suggestionSubjects.hook('updating', () => { writes++; });
+    database.suggestionOccurrences.hook('updating', () => { writes++; });
+    database.suggestionDecisions.hook('updating', () => { writes++; });
+    await registry.mergeSnapshot(snapshot);
+    assert.equal(writes, 0, 'already merged history should not trigger database writes');
+});

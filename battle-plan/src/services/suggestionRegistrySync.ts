@@ -44,7 +44,7 @@ class LazyDriveRegistryStore implements SuggestionRegistryStore {
     }
 
     async readJsonFilesWithStatus<T>(name: string) {
-        return (await this.store()).readJsonFilesWithStatus<T>(name);
+        return (await this.store()).readJsonFilesWithStatus<T>(name, { cacheUnchanged: true });
     }
 
     async writeJsonFile(
@@ -171,6 +171,7 @@ function parseRegistryFile(value: unknown): SuggestionRegistryFile {
 }
 
 export class SuggestionRegistrySync {
+    private fetchInFlight: Promise<SuggestionRegistrySyncResult> | null = null;
     private readonly registry: SuggestionRegistry;
     private readonly store: SuggestionRegistryStore;
 
@@ -244,6 +245,12 @@ export class SuggestionRegistrySync {
     }
 
     async fetchAndMerge(): Promise<SuggestionRegistrySyncResult> {
+        if (this.fetchInFlight) return this.fetchInFlight;
+        this.fetchInFlight = this.fetchRemote().finally(() => { this.fetchInFlight = null; });
+        return this.fetchInFlight;
+    }
+
+    private async fetchRemote(): Promise<SuggestionRegistrySyncResult> {
         const unavailable = await this.initStore();
         if (unavailable) return unavailable;
         return this.convergeRemote([]);
