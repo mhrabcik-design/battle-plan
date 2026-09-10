@@ -21,3 +21,11 @@ Lokální stav zůstává autoritativní, když volitelný Google update selže,
 ## Ověření
 
 Nejvyšší hodnotu mají testy čistého převodu času, retention predikátu, stránkování Tasks a civilní datumové aritmetiky. Reálný prohlížeč navíc ověřuje click-versus-drag, zrušení dropu, historické zobrazení a dokončení z detailu.
+
+## Vrácení posledního gesta (2026-09-10)
+
+Tlačítko Zpět drží v paměti jeden úspěšný přesun nebo změnu délky; navigace mezi týdny jej nemaže, obnovení stránky ano. Snapshot pochází z aktuálního úložiště při zápisu, nikoli ze staršího objektu z renderu.
+
+Undo obnovuje pouze `date`, `deadline`, `startTime`, `isAllDay` a `duration`, včetně původních `undefined`. Obnovení celého záznamu by ztratilo pozdější změny názvu nebo stavu. Lokální kontrola identity a shody termínu se zápisem běží v jedné Dexie transakci; smazaný záznam ani novější změnu termínu nepřepisuje. Regresní test je v `weeklySchedule.test.ts`.
+
+Google Tasks se před zápisem znovu načítají a undo kontroluje aktuální due date. Kontrola a vzdálený zápis nejsou atomické; souběžný vzdálený zápis mezi těmito požadavky zůstává omezením. Schůzky používají stávající Calendar synchronizaci a lokální úspěch zůstává platný i při její oznámené chybě.

@@ -1,10 +1,11 @@
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { db, type Task } from '../db';
 import { AuthUnavailableError, googleService } from '../services/googleService';
 import { applySemanticResult } from '../services/semanticEngine';
 import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { WeeklySchedulePatch } from '../utils/calendarUtils';
+import { getSchedule, saveWeeklySchedule } from '../services/weeklySchedule';
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
@@ -28,6 +29,9 @@ export function useTaskCommands({
   setGoogleTasksRaw,
   setIsProcessing,
 }: UseTaskCommandsArgs) {
+  const [lastScheduleChange, setLastScheduleChange] = useState<{ before: UnifiedTask; after: UnifiedTask } | null>(null);
+  const [isScheduleBusy, setIsScheduleBusy] = useState(false);
+  const scheduleBusyRef = useRef(false);
   // U3: surface auth-unavailable failures to the user. The hook-level
   // googleAuth may be stale (React setState is async; markAuthUnavailable
   // dispatches synchronously via google-auth-change but the consumer state
@@ -106,26 +110,30 @@ export function useTaskCommands({
     return null;
   }, [googleAuth, refreshGoogleTasks]);
 
-  const handleRescheduleTask = useCallback(async (task: UnifiedTask, patch: WeeklySchedulePatch) => {
+  const persistRescheduleTask = useCallback(async (task: UnifiedTask, patch: WeeklySchedulePatch, expected?: UnifiedTask) => {
     if (task.isGoogleTask && task.googleId) {
       if (!hasUsableAuth(googleAuth)) {
         alert(AUTH_UNAVAILABLE_MSG);
-        return false;
+        return null;
       }
+      const remote = (await googleService.getTasks(task.googleListId)).find(item => item.id === task.googleId);
+      if (!remote || (expected && remote.due?.slice(0, 10) !== expected.deadline)) return null;
+      const before = { ...task, date: remote.due?.slice(0, 10), deadline: remote.due?.slice(0, 10) };
       const result = await googleService.updateGoogleTask(task.googleId, {
-        due: `${patch.deadline}T00:00:00.000Z`,
+        due: patch.deadline ? `${patch.deadline}T00:00:00.000Z` : null,
       }, task.googleListId);
       if (result === null) {
         if (isAuthUnavailableNow()) alert(AUTH_UNAVAILABLE_MSG);
-        return false;
+        return null;
       }
       await refreshGoogleTasks();
-      return true;
+      return { before, after: { ...before, ...patch } };
     }
 
-    if (!task.id) return false;
-    const updatedTask = { ...task, ...patch, updatedAt: Date.now() };
-    await db.tasks.update(task.id, { ...patch, updatedAt: updatedTask.updatedAt });
+    if (!task.id) return null;
+    const change = await saveWeeklySchedule(db, task.id, patch, expected);
+    if (!change) return null;
+    const updatedTask = change.after;
 
     if (task.type === 'meeting' && task.googleEventId && hasUsableAuth(googleAuth)) {
       const reportSyncFailure = (error?: unknown) => {
@@ -139,8 +147,40 @@ export function useTaskCommands({
         reportSyncFailure(error);
       }
     }
-    return true;
+    return change;
   }, [googleAuth, refreshGoogleTasks]);
+
+  const handleRescheduleTask = useCallback(async (task: UnifiedTask, patch: WeeklySchedulePatch) => {
+    if (scheduleBusyRef.current) return false;
+    scheduleBusyRef.current = true;
+    setIsScheduleBusy(true);
+    try {
+      const change = await persistRescheduleTask(task, patch);
+      if (!change) return false;
+      setLastScheduleChange(change);
+      return true;
+    } finally {
+      scheduleBusyRef.current = false;
+      setIsScheduleBusy(false);
+    }
+  }, [persistRescheduleTask]);
+
+  const handleUndoSchedule = useCallback(async () => {
+    if (!lastScheduleChange || scheduleBusyRef.current) return;
+    scheduleBusyRef.current = true;
+    setIsScheduleBusy(true);
+    try {
+      const restored = await persistRescheduleTask(lastScheduleChange.after, getSchedule(lastScheduleChange.before), lastScheduleChange.after);
+      if (restored) setLastScheduleChange(null);
+      else alert('Změnu nelze vrátit: položka již není dostupná, její termín se mezitím změnil nebo se nepodařilo připojit ke Googlu.');
+    } catch (error) {
+      console.error('Weekly undo failed', error);
+      alert('Vrácení změny se nepodařilo uložit. Zkuste to znovu.');
+    } finally {
+      scheduleBusyRef.current = false;
+      setIsScheduleBusy(false);
+    }
+  }, [lastScheduleChange, persistRescheduleTask]);
 
   const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
     if (!confirm('Opravdu smazat tento záznam?')) return false;
@@ -245,6 +285,8 @@ export function useTaskCommands({
     toggleSubtask,
     handleToggleTask,
     handleRescheduleTask,
+    handleUndoSchedule,
+    canUndoSchedule: lastScheduleChange !== null && !isScheduleBusy,
     handleDeleteTask,
     handleSaveEdit,
     handleSyncToGoogle,
