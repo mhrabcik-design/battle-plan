@@ -243,15 +243,22 @@ export function FocusEditor({
 
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
-                                            <label className="text-sm font-black text-slate-500 uppercase">
+                                            <label htmlFor="task-deadline" className="text-sm font-black text-slate-500 uppercase">
                                                 {editingTask.type === 'task' ? 'Termín dokončení' : 'Datum konání'}
                                             </label>
                                             <input
+                                                id="task-deadline"
+                                                aria-describedby={editingTask.type === 'task' ? 'task-deadline-hint' : undefined}
                                                 type="date"
                                                 value={(editingTask.type === 'task' ? (editingTask.deadline || editingTask.date) : (editingTask.date || editingTask.deadline)) || ''}
                                                 onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value, updatedAt: Date.now() })}
                                                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none"
                                             />
+                                            {editingTask.type === 'task' && (
+                                                <p id="task-deadline-hint" className="text-xs text-slate-400">
+                                                    Bez termínu se úkol uloží na pátek tohoto týdne.
+                                                </p>
+                                            )}
                                         </div>
                                         <div className="space-y-2">
                                             <label className="text-sm font-black text-slate-500 uppercase">Čas (24h)</label>

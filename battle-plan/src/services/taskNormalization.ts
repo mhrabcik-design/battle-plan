@@ -1,4 +1,23 @@
 import type { Task } from '../db';
+import { toLocalIsoDate } from '../utils/monthCalendar.ts';
+
+const validTaskDate = (value: unknown): value is string => (
+    typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && toLocalIsoDate(new Date(`${value}T12:00:00`)) === value
+);
+
+/** Keep saved tasks visible in the Monday–Sunday week, including weekend capture. */
+export function ensureTaskDeadline<T extends Partial<Task>>(
+    task: T, now = new Date(),
+): Omit<T, 'date' | 'deadline'> & Pick<Task, 'date' | 'deadline'> {
+    if (task.type !== 'task') return task;
+    const friday = new Date(now);
+    friday.setDate(friday.getDate() + 5 - (friday.getDay() || 7));
+    const deadline = validTaskDate(task.deadline) ? task.deadline
+        : validTaskDate(task.date) ? task.date : toLocalIsoDate(friday);
+    return { ...task, deadline, date: validTaskDate(task.date) ? task.date : deadline };
+}
 
 // Type and clamp helpers extracted from semanticEngine.ts so the same
 // safety-net code can be reused by the agent write path and the voice

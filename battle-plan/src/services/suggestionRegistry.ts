@@ -14,6 +14,7 @@ import {
 } from '../utils/suggestionIdentity.ts';
 import type { AgentSuggestion, AgentSuggestionReply } from './suggestionsSync.ts';
 import type { ResponsePayload } from './agentProtocol/contracts.ts';
+import { ensureTaskDeadline } from './taskNormalization.ts';
 
 const TERMINAL_KINDS = new Set<SuggestionDecisionKind>([
     'accepted',
@@ -695,7 +696,7 @@ export class SuggestionRegistry {
                 }
 
                 const taskId = await this.database.tasks.add({
-                    ...draft,
+                    ...ensureTaskDeadline(draft, new Date(now)),
                     suggestionSubjectId: subject.id,
                     suggestionOccurrenceKey: occurrence.id,
                 });

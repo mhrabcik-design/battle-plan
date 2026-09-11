@@ -2,7 +2,7 @@ import { db, type SubTask, type Task } from '../db.ts';
 import { googleService } from './googleService.ts';
 import type { GoogleAuthStatus } from '../types.ts';
 import { hasUsableAuth } from '../types.ts';
-import { EXACT_TYPE_MAP, normalizeType, clampUrgency, clampIsAllDay, clampProgress } from './taskNormalization.ts';
+import { EXACT_TYPE_MAP, normalizeType, clampUrgency, clampIsAllDay, clampProgress, ensureTaskDeadline } from './taskNormalization.ts';
 import type { AppContext } from './appContext.ts';
 import { renderAppContextSection } from './appContext.ts';
 export const getSystemPrompt = (dayName: string, today: string, now: string, contextInfo: string, appContext?: AppContext) => `
@@ -35,8 +35,9 @@ Pokud provádíš aktualizaci (más KONTEXT), postupuj takto:
 Nikdy nevracej prázdná pole, pokud byla v původním úkolu vyplněna a audio je nemění!
 
 ### 📅 LOGIKA TERMÍNŮ (VÝPOČET DATA):
-V polích \`date\` a \`deadline\` VŽDY vrať absolutní datum ve formátu YYYY-MM-DD.
+Vyplněné hodnoty \`date\` a \`deadline\` musí být absolutní data ve formátu YYYY-MM-DD.
 - **Tasks (Úkoly)**: \`deadline\` je klíčový termín dokončení. Pokud uživatel řekne "udělat do pátku", je to deadline. Pole \`date\` nastav na stejnou hodnotu, pokud není výslovně řečeno, kdy se má začít.
+- **Úkol bez termínu**: Pokud uživatel datum nezadal a není ani v kontextu, nech \`date\` a \`deadline\` prázdné. Aplikace při uložení doplní pátek aktuálního týdne (pondělí–neděle, i o víkendu). Existující termín při aktualizaci zachovej.
 - **Meetings (Schůzky)**: \`date\` je den konání schůzky. Pole \`deadline\` nastav na stejnou hodnotu jako \`date\`.
 - **Výpočet dne**:
   - **Pravidlo 1**: "Dnes" = ${today}.
@@ -152,7 +153,7 @@ export function normalizeEntity(
     out.progress = r.progress != null ? clampProgress(r.progress) : existing?.progress;
     out.status = action === 'complete' ? 'completed' : (existing?.status ?? 'pending');
 
-    return { value: out as Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }, last_error: errors.length ? errors.join('; ') : undefined };
+    return { value: ensureTaskDeadline(out as Partial<Task> & { urgency: 1 | 2 | 3; status: 'pending' | 'completed' | 'cancelled' }), last_error: errors.length ? errors.join('; ') : undefined };
 }
 
 export const applySemanticResult = async (result: unknown, updateId: number | null, googleAuth: GoogleAuthStatus) => {
