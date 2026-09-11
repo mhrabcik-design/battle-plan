@@ -6,6 +6,7 @@ import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { WeeklySchedulePatch } from '../utils/calendarUtils';
 import { getSchedule, saveWeeklySchedule } from '../services/weeklySchedule';
+import { ensureTaskDeadline } from '../services/taskNormalization';
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
@@ -210,11 +211,12 @@ export function useTaskCommands({
 
   const handleSaveEdit = useCallback(async (): Promise<EditorSaveOutcome> => {
     if (editingTask) {
+      const taskToSave = ensureTaskDeadline(editingTask);
       if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth(googleAuth)) {
         const result = await googleService.updateGoogleTask(editingTask.googleId, {
           title: editingTask.title,
           notes: editingTask.description,
-          due: editingTask.deadline ? `${editingTask.deadline}T00:00:00.000Z` : undefined,
+          due: taskToSave.deadline ? `${taskToSave.deadline}T00:00:00.000Z` : undefined,
         }, editingTask.googleListId);
         if (result === null && isAuthUnavailableNow()) {
           alert(AUTH_UNAVAILABLE_MSG);
@@ -222,7 +224,7 @@ export function useTaskCommands({
         if (result === null) return { status: 'failed', message: 'Google Task se nepodařilo uložit.' };
         refreshGoogleTasks();
       } else if (editingTask.id) {
-        const taskData = { ...editingTask };
+        const taskData = { ...taskToSave };
         delete (taskData as Partial<UnifiedTask>).isGoogleTask;
         delete (taskData as Partial<UnifiedTask>).googleId;
         delete (taskData as Partial<UnifiedTask>).googleListId;

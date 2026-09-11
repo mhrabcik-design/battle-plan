@@ -185,7 +185,8 @@ test('U6: agentBridge.init() hydrates processedIds from db.agentInbox.applied_at
     assert.equal(cache.has('h2'), false, 'un-applied row (applied_at === 0) should NOT be hydrated');
 });
 
-test('U3: create_task stamps source=agent and agent_write_id on the row', async () => {
+test('U3: create_task stamps source=agent and agent_write_id on the row', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 8, 9, 12) });
     seedSignedInStorage();
     setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
     // drive.init is a no-op (no real Drive).
@@ -209,6 +210,25 @@ test('U3: create_task stamps source=agent and agent_write_id on the row', async 
     assert.ok(stored);
     assert.equal(stored!.source, 'agent');
     assert.equal(stored!.agent_write_id, 'agent-1');
+    assert.equal(stored!.deadline, '2026-09-11');
+    assert.equal(stored!.date, '2026-09-11');
+});
+
+test('voice creation and updates keep undated tasks in the current week', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 8, 13, 12) });
+    await resetDb();
+    const { applySemanticResult } = await import('./semanticEngine.ts');
+    const auth = { state: 'SIGNED_OUT' as const, accessToken: null };
+    const created = await applySemanticResult({ type: 'task', title: 'Bez termínu' }, null, auth);
+    assert.ok(created && 'newId' in created);
+    const id = created.newId!;
+    assert.equal((await db.tasks.get(id))?.deadline, '2026-09-11');
+    await applySemanticResult({ title: 'Přejmenováno' }, id, auth);
+    assert.equal((await db.tasks.get(id))?.deadline, '2026-09-11');
+    await applySemanticResult({ deadline: '2026-09-18' }, id, auth);
+    assert.equal((await db.tasks.get(id))?.deadline, '2026-09-18');
+    await applySemanticResult({ date: '', deadline: '' }, id, auth);
+    assert.equal((await db.tasks.get(id))?.deadline, '2026-09-11');
 });
 
 test('U3: create_task with type=meeting calls addToCalendar and patches googleEventId', async () => {

@@ -96,13 +96,16 @@ test('conversion is atomic and idempotent for repeated approval', async () => {
     const registry = new SuggestionRegistry(database);
     const proposal = suggestion();
 
-    const first = await registry.convertToTask(proposal, taskDraft);
-    const second = await registry.convertToTask({ ...proposal, id: 'proposal-retry' }, taskDraft);
+    const first = await registry.convertToTask(proposal, taskDraft, new Date(2026, 8, 9, 12).getTime());
+    const second = await registry.convertToTask({ ...proposal, id: 'proposal-retry' }, taskDraft, new Date(2026, 8, 16, 12).getTime());
 
     assert.equal(first.outcome, 'created');
     assert.equal(second.outcome, 'existing');
     assert.equal(second.task.id, first.task.id);
     assert.equal(second.task.publicId, first.task.publicId);
+    assert.equal(first.task.deadline, '2026-09-11');
+    assert.equal(first.task.date, '2026-09-11');
+    assert.equal(second.task.deadline, '2026-09-11');
     assert.equal(await database.tasks.count(), 1);
     assert.equal(await database.suggestionDecisions.where('kind').equals('converted').count(), 1);
 });
