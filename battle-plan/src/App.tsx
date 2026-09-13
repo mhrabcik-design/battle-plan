@@ -646,13 +646,13 @@ const syncVisualState = deriveSyncVisualState({
                   <div className="flex gap-1.5 border-l border-slate-800 ml-2 pl-4">
                     <button onClick={() => changeWeek(-1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-[background-color,border-color,color] border border-slate-700/50"><ChevronLeft className="w-3.5 h-3.5" /></button>
                     <button onClick={() => setWeekOffset(0)} className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-xs font-black text-white uppercase tracking-widest hover:bg-slate-700 transition-[background-color,border-color,color] border border-slate-700/50">Dnes</button>
-                    {undoScheduleButton}
                     <button onClick={() => changeWeek(1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-[background-color,border-color,color] border border-slate-700/50"><ChevronRight className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
               )}
 
               <div className="flex items-center gap-4">
+                {viewMode === 'week' && undoScheduleButton}
                 {viewMode === 'tasks' && hasUsableAuth && (
                   <div className="flex items-center gap-2 bg-slate-900/50 border border-slate-800 rounded-lg p-1">
                     {googleTaskLists.slice(0, 3).map(list => (
@@ -755,11 +755,11 @@ const syncVisualState = deriveSyncVisualState({
                 <div className="flex gap-2">
                   <button onClick={() => changeWeek(-1)} className="p-2 rounded-lg bg-slate-900 border border-white/5 text-slate-400"><ChevronLeft className="w-4 h-4" /></button>
                   <button onClick={() => setWeekOffset(0)} className="px-4 py-2 rounded-lg bg-slate-900 border border-white/5 text-sm font-black text-white uppercase tracking-widest">Dnes</button>
-                  {undoScheduleButton}
                   <button onClick={() => changeWeek(1)} className="p-2 rounded-lg bg-slate-900 border border-white/5 text-slate-400"><ChevronRight className="w-4 h-4" /></button>
                 </div>
               </div>
             )}
+            {viewMode === 'week' && <div className="flex justify-end">{undoScheduleButton}</div>}
           </div>
 
           {hasUsableAuth && showOnboarding && <OnboardingCard onDismiss={handleDismissOnboarding} />}
