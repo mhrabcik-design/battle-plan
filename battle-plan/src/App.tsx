@@ -576,7 +576,7 @@ const syncVisualState = deriveSyncVisualState({
   const undoScheduleButton = (
     <button type="button" onClick={() => void handleUndoSchedule()} disabled={!canUndoSchedule}
       title="Vrátit poslední přesun nebo změnu délky" aria-label="Vrátit poslední přesun nebo změnu délky"
-      className="flex items-center gap-1.5 rounded-lg border border-slate-700/50 bg-slate-800/50 px-2 py-1.5 text-xs font-black text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40 transition-colors">
+      className="flex items-center gap-1.5 rounded-lg border border-slate-700/50 bg-slate-800/50 px-2 py-1.5 text-xs font-black text-white enabled:border-indigo-500 enabled:bg-indigo-600 enabled:hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40 transition-colors">
       <Undo2 className="h-4 w-4" aria-hidden="true" /> Zpět
     </button>
   );
