@@ -1,12 +1,12 @@
 import { useCallback, useRef, useState } from 'react';
-import { db, type Task } from '../db';
-import { AuthUnavailableError, googleService } from '../services/googleService';
-import { applySemanticResult } from '../services/semanticEngine';
-import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types';
-import { hasUsableAuth, isAuthUnavailable } from '../types';
-import type { WeeklySchedulePatch } from '../utils/calendarUtils';
-import { getSchedule, saveWeeklySchedule } from '../services/weeklySchedule';
-import { ensureTaskDeadline } from '../services/taskNormalization';
+import { db, type Task } from '../db.ts';
+import { AuthUnavailableError, googleService } from '../services/googleService.ts';
+import { applySemanticResult } from '../services/semanticEngine.ts';
+import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types.ts';
+import { hasUsableAuth, isAuthUnavailable } from '../types.ts';
+import type { WeeklySchedulePatch } from '../utils/calendarUtils.ts';
+import { getSchedule, saveWeeklySchedule } from '../services/weeklySchedule.ts';
+import { ensureTaskDeadline } from '../services/taskNormalization.ts';
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
@@ -33,6 +33,7 @@ export function useTaskCommands({
   const [lastScheduleChange, setLastScheduleChange] = useState<{ before: UnifiedTask; after: UnifiedTask } | null>(null);
   const [isScheduleBusy, setIsScheduleBusy] = useState(false);
   const scheduleBusyRef = useRef(false);
+  const saveInFlightRef = useRef<Promise<EditorSaveOutcome> | null>(null);
   // U3: surface auth-unavailable failures to the user. The hook-level
   // googleAuth may be stale (React setState is async; markAuthUnavailable
   // dispatches synchronously via google-auth-change but the consumer state
@@ -91,22 +92,24 @@ export function useTaskCommands({
       const status: UnifiedTask['status'] = newStatus === 'completed' ? 'completed' : 'pending';
       return { ...task, status, updatedAt: Date.now() };
     } else if (task.id) {
-      const newStatus = task.status === 'completed' ? 'pending' : 'completed';
-      const updatedAt = Date.now();
-      await db.tasks.update(task.id, {
-        status: newStatus,
-        updatedAt
+      const updatedTask = await db.transaction('rw', db.tasks, async () => {
+        const current = await db.tasks.get(task.id!);
+        if (!current || current.isDeleted || (task.publicId && task.publicId !== current.publicId)) return null;
+        const status: Task['status'] = current.status === 'completed' ? 'pending' : 'completed';
+        const updatedAt = Date.now();
+        await db.tasks.update(task.id!, { status, updatedAt });
+        return { ...current, status, updatedAt };
       });
+      if (!updatedTask) return null;
 
-      if (task.googleEventId && hasUsableAuth(googleAuth)) {
+      if (updatedTask.googleEventId && hasUsableAuth(googleAuth)) {
         try {
-          const updatedTask = { ...task, status: newStatus };
           await googleService.addToCalendar(updatedTask);
         } catch (e) {
           console.error("Failed to update calendar event on toggle", e);
         }
       }
-      return { ...task, status: newStatus as UnifiedTask['status'], updatedAt };
+      return updatedTask;
     }
     return null;
   }, [googleAuth, refreshGoogleTasks]);
@@ -209,12 +212,19 @@ export function useTaskCommands({
     return true;
   }, [googleAuth, refreshGoogleTasks]);
 
-  const handleSaveEdit = useCallback(async (): Promise<EditorSaveOutcome> => {
-    if (editingTask) {
-      const taskToSave = ensureTaskDeadline(editingTask);
-      if (editingTask.isGoogleTask && editingTask.googleId && hasUsableAuth(googleAuth)) {
+  const handleSaveEdit = useCallback((): Promise<EditorSaveOutcome> => {
+    if (saveInFlightRef.current) return saveInFlightRef.current;
+    const save = async (): Promise<EditorSaveOutcome> => {
+      if (!editingTask) return { status: 'failed', message: 'Editor už není otevřený.' };
+      const title = editingTask.title.trim();
+      if (!title) return { status: 'failed', message: 'Doplňte název záznamu.' };
+      const taskToSave = ensureTaskDeadline({ ...editingTask, title });
+      if (editingTask.isGoogleTask) {
+        if (!editingTask.googleId || !hasUsableAuth(googleAuth)) {
+          return { status: 'failed', message: AUTH_UNAVAILABLE_MSG };
+        }
         const result = await googleService.updateGoogleTask(editingTask.googleId, {
-          title: editingTask.title,
+          title,
           notes: editingTask.description,
           due: taskToSave.deadline ? `${taskToSave.deadline}T00:00:00.000Z` : undefined,
         }, editingTask.googleListId);
@@ -222,19 +232,29 @@ export function useTaskCommands({
           alert(AUTH_UNAVAILABLE_MSG);
         }
         if (result === null) return { status: 'failed', message: 'Google Task se nepodařilo uložit.' };
-        refreshGoogleTasks();
-      } else if (editingTask.id) {
+        void refreshGoogleTasks().catch(error => console.error('Google Tasks refresh failed after save', error));
+      } else {
         const taskData = { ...taskToSave };
         delete (taskData as Partial<UnifiedTask>).isGoogleTask;
         delete (taskData as Partial<UnifiedTask>).googleId;
         delete (taskData as Partial<UnifiedTask>).googleListId;
-        await db.tasks.update(editingTask.id, { ...taskData, updatedAt: Date.now() });
+        const savedTask = await db.transaction('rw', db.tasks, async () => {
+          if (taskData.id) {
+            const current = await db.tasks.get(taskData.id);
+            if (!current || current.isDeleted || (taskData.publicId && taskData.publicId !== current.publicId)) return null;
+            await db.tasks.update(taskData.id, { ...taskData, updatedAt: Date.now() });
+          } else {
+            taskData.id = await db.tasks.add({ ...taskData, source: 'user', updatedAt: Date.now() });
+          }
+          return db.tasks.get(taskData.id);
+        });
+        if (!savedTask) return { status: 'failed', message: 'Záznam už není dostupný. Změny nebyly uloženy.' };
         let syncWarning: string | null = null;
-        if (editingTask.type === 'meeting' && hasUsableAuth(googleAuth)) {
+        if (savedTask.type === 'meeting' && hasUsableAuth(googleAuth)) {
           try {
-            const eventId = await googleService.addToCalendar(editingTask);
-            if (eventId && eventId !== editingTask.googleEventId) {
-              await db.tasks.update(editingTask.id, { googleEventId: eventId, updatedAt: Date.now() });
+            const eventId = await googleService.addToCalendar(savedTask);
+            if (eventId && eventId !== savedTask.googleEventId) {
+              await db.tasks.update(savedTask.id!, { googleEventId: eventId, updatedAt: Date.now() });
             }
             if (!eventId && isAuthUnavailableNow()) {
               syncWarning = AUTH_UNAVAILABLE_MSG;
@@ -247,10 +267,12 @@ export function useTaskCommands({
           }
         }
         if (syncWarning) return { status: 'success-sync-warning', message: syncWarning };
-      } else return { status: 'failed', message: 'Záznam nemá platnou identitu pro uložení.' };
+      }
       return { status: 'success' };
-    }
-    return { status: 'failed', message: 'Editor už není otevřený.' };
+    };
+    const operation = save().finally(() => { saveInFlightRef.current = null; });
+    saveInFlightRef.current = operation;
+    return operation;
   }, [editingTask, googleAuth, refreshGoogleTasks]);
 
   const handleSyncToGoogle = useCallback(async (task: UnifiedTask) => {
