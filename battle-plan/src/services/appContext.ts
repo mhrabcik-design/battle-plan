@@ -58,26 +58,19 @@ function renderContextProject(project: AppContextProject): string {
     return `- ${project.name} (id=${project.id}, barva=${project.color}${aliasText})`;
 }
 
-function pickTodaysWorklogs(all: WorkLog[], today: string): { id: number; projectName: string; hours: number }[] {
-    return all
-        .filter((w) => w.date === today)
-        .sort((a, b) => a.id! - b.id!)
-        .slice(0, TODAYS_WORKLOGS_LIMIT)
-        .map((w) => ({ id: w.id!, projectName: w.projectName, hours: w.hours }));
-}
-
 export async function buildAppContext(): Promise<AppContext> {
     const today = toIsoDate(new Date());
     const [projects, worklogs, modelSetting, uiScaleSetting] = await Promise.all([
         db.projects.toArray().catch(() => [] as Project[]),
-        db.workLogs.toArray().catch(() => [] as WorkLog[]),
+        // Equal secondary-index keys are ordered by primary key in IndexedDB.
+        db.workLogs.where('date').equals(today).limit(TODAYS_WORKLOGS_LIMIT).toArray().catch(() => [] as WorkLog[]),
         db.settings.get('gemini_model').catch(() => undefined) as Promise<Setting | undefined>,
         db.settings.get('ui_scale').catch(() => undefined) as Promise<Setting | undefined>,
     ]);
     return {
         activeProjects: pickActiveProjects(projects),
         archivedProjects: pickArchivedProjects(projects),
-        todaysWorklogs: pickTodaysWorklogs(worklogs, today),
+        todaysWorklogs: worklogs.map((w) => ({ id: w.id!, projectName: w.projectName, hours: w.hours })),
         config: {
             model: modelSetting?.value ?? DEFAULT_MODEL,
             uiScale: uiScaleSetting ? Number(uiScaleSetting.value) || 16 : 16,

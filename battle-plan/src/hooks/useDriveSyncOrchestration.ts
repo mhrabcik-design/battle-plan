@@ -1,12 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { db } from '../db';
 import { googleService } from '../services/googleService';
 import { mergeCloudToLocal, mergeLocalToCloud, type MergeResult, workLogsSync } from '../services/workLogsSync';
 import { taskDriveBackup } from '../services/taskDriveBackup';
+import { mergeTasksFromDrive } from '../services/taskMerge.ts';
 import { getMissingWorkLogsFileStatus, hasLocalWorkLogsData } from '../utils/workLogsSyncStatus';
 import type { GoogleAuthStatus, GoogleTaskList } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
+import { hydrateTaskBackup } from './taskBackupCoordinator.ts';
 import {
   autoSyncFailureHealth,
   driveUnavailableHealth,
@@ -39,21 +41,30 @@ export function useDriveSyncOrchestration({
   updateSyncHealth,
 }: UseDriveSyncOrchestrationArgs) {
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
+  const accessToken = googleAuth.accessToken;
+  const [hydrated, setHydrated] = useState<{ accessToken: string | null } | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    let running = false;
     if (!hasUsableAuthValue) {
       queueMicrotask(() => {
+        if (cancelled) return;
+        setHydrated(null);
         updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
         updateSyncHealth('worklogs', { state: 'idle', detail: 'Čeká na Google přihlášení' });
       });
-      return;
+      return () => { cancelled = true; };
     }
 
     const checkSync = async () => {
+      if (cancelled || running) return;
+      running = true;
       try {
         const status = googleService.getAuthStatus();
         if (status.state === 'REFRESH_PENDING') {
           const success = await googleService.runRefresh();
+          if (cancelled) return;
           if (success) {
             setGoogleAuth(googleService.getAuthStatus());
           }
@@ -66,96 +77,82 @@ export function useDriveSyncOrchestration({
         // fetch does not block the rest of the sync.
         try {
           const lists = await googleService.getTaskLists();
+          if (cancelled) return;
           setGoogleTaskLists(lists);
         } catch (e) {
+          if (cancelled) return;
           console.error('Google Tasks list fetch failed', e);
           setGoogleTaskLists([]);
         }
-        const taskBackup = await taskDriveBackup.loadDetailed();
-        const authAfterLoad = googleService.getAuthStatus();
-        if (isAuthUnavailable(authAfterLoad.state)) {
-          return;
-        }
-        if (taskBackup.kind === 'store-unavailable' || taskBackup.kind === 'error' || taskBackup.kind === 'missing-file') {
+        const { result: taskBackup, ready } = await hydrateTaskBackup(
+          () => taskDriveBackup.loadDetailed(),
+          async (payload) => {
+            const payloadData = payload.data ?? {};
+            const cloudTimestamp = payload.timestamp || 0;
+
+            const { tasks: driveTasks, settings: driveSettings } = payloadData;
+
+            if (driveSettings) {
+              for (const s of driveSettings) {
+                await db.settings.put(s);
+                if (cancelled) return;
+                if (s.id === 'gemini_api_key') setApiKey(s.value);
+                if (s.id === 'gemini_model') setSelectedModel(s.value);
+                if (s.id === 'ui_scale') setUiScale(Number(s.value));
+              }
+            }
+
+            if (driveTasks && Array.isArray(driveTasks)) {
+              const changesMade = await mergeTasksFromDrive(driveTasks);
+              if (cancelled) return;
+
+              if (changesMade) {
+                addLog(`Synchronizace: Staženy novější změny z cloudu.`);
+              }
+            }
+
+            const now = new Date().toLocaleString('cs-CZ');
+            setLastSync(now);
+            localStorage.setItem('last_drive_sync', now);
+            localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
+            // Race guard: if markAuthUnavailable flipped the auth state to
+            // OFFLINE_AUTH / SIGNED_OUT while we were inside the await chain
+            // above (a typical case when the server returns 403 from a
+            // different in-flight call, or the token was revoked by a
+            // concurrent request), do NOT overwrite the 'idle' state the
+            // useEffect re-run already installed. The data we just merged
+            // into the local DB is still valid, but the UI must reflect the
+            // current auth reality, not a stale success snapshot.
+            const authBeforeTasksOk = googleService.getAuthStatus();
+            if (!isAuthUnavailable(authBeforeTasksOk.state)) {
+              updateSyncHealth('tasks', {
+                state: 'ok',
+                detail: 'Drive data načtena',
+                lastSuccess: now,
+                lastError: null,
+              });
+            }
+          },
+          () => !cancelled && !isAuthUnavailable(googleService.getAuthStatus().state),
+        );
+        if (cancelled || isAuthUnavailable(googleService.getAuthStatus().state)) return;
+        if (ready) setHydrated({ accessToken });
+        if (taskBackup.kind !== 'loaded') {
           updateSyncHealth('tasks', taskBackupHealth(taskBackup));
           const recoverable = taskBackup.kind === 'error'
             ? isDriveScopeError(taskBackup.message)
             : taskBackup.kind === 'store-unavailable' && taskBackup.status.code === 'auth-unavailable';
-          if (recoverable) {
-            addLog(GOOGLE_DRIVE_RECONSENT_MESSAGE, 'error');
-          }
-        } else {
-          const payload = taskBackup.payload;
-          const payloadData = payload.data ?? {};
-          const cloudTimestamp = payload.timestamp || 0;
-
-          const { tasks: driveTasks, settings: driveSettings } = payloadData;
-
-          if (driveSettings) {
-            for (const s of driveSettings) {
-              await db.settings.put(s);
-              if (s.id === 'gemini_api_key') setApiKey(s.value);
-              if (s.id === 'gemini_model') setSelectedModel(s.value);
-              if (s.id === 'ui_scale') setUiScale(Number(s.value));
-            }
-          }
-
-          if (driveTasks && Array.isArray(driveTasks)) {
-            let changesMade = false;
-            await db.transaction('rw', db.tasks, async () => {
-              for (const cloudTask of driveTasks) {
-                if (!cloudTask.id) continue;
-                const localTask = await db.tasks.get(cloudTask.id);
-
-                if (!localTask) {
-                  await db.tasks.add(cloudTask);
-                  changesMade = true;
-                } else {
-                  const cloudUpdated = cloudTask.updatedAt || cloudTask.createdAt || 0;
-                  const localUpdated = localTask.updatedAt || localTask.createdAt || 0;
-
-                  if (cloudUpdated > localUpdated) {
-                    await db.tasks.put(cloudTask);
-                    changesMade = true;
-                  }
-                }
-              }
-            });
-
-            if (changesMade) {
-              addLog(`Synchronizace: Staženy novější změny z cloudu.`);
-            }
-          }
-
-          const now = new Date().toLocaleString('cs-CZ');
-          setLastSync(now);
-          localStorage.setItem('last_drive_sync', now);
-          localStorage.setItem('last_drive_sync_ts', cloudTimestamp.toString());
-          // Race guard: if markAuthUnavailable flipped the auth state to
-          // OFFLINE_AUTH / SIGNED_OUT while we were inside the await chain
-          // above (a typical case when the server returns 403 from a
-          // different in-flight call, or the token was revoked by a
-          // concurrent request), do NOT overwrite the 'idle' state the
-          // useEffect re-run already installed. The data we just merged
-          // into the local DB is still valid, but the UI must reflect the
-          // current auth reality, not a stale success snapshot.
-          const authBeforeTasksOk = googleService.getAuthStatus();
-          if (!isAuthUnavailable(authBeforeTasksOk.state)) {
-            updateSyncHealth('tasks', {
-              state: 'ok',
-              detail: 'Drive data načtena',
-              lastSuccess: now,
-              lastError: null,
-            });
-          }
+          if (recoverable) addLog(GOOGLE_DRIVE_RECONSENT_MESSAGE, 'error');
         }
         const authAfterTasks = googleService.getAuthStatus();
         if (isAuthUnavailable(authAfterTasks.state)) {
           return;
         }
         await workLogsSync.init();
+        if (cancelled) return;
         if (workLogsSync.initialized) {
           const workLogsResult = await workLogsSync.loadAllDetailed();
+          if (cancelled) return;
           const wl = workLogsResult.data;
           if (workLogsResult.kind === 'store-unavailable') {
             updateSyncHealth('worklogs', driveUnavailableHealth(workLogsResult.status));
@@ -171,6 +168,7 @@ export function useDriveSyncOrchestration({
               wl.projects,
               wl.workLogDeletionTombstones,
             );
+            if (cancelled) return;
             if (mergeResult.workLogsAdded > 0 || mergeResult.workLogsUpdated > 0 ||
                 mergeResult.projectsAdded > 0 || mergeResult.projectsUpdated > 0) {
               addLog(
@@ -189,6 +187,7 @@ export function useDriveSyncOrchestration({
               workLogs: await db.workLogs.count(),
               projects: await db.projects.count(),
             };
+            if (cancelled) return;
             const missingStatus = getMissingWorkLogsFileStatus(localCounts);
             updateSyncHealth('worklogs', {
               state: missingStatus.state,
@@ -197,6 +196,7 @@ export function useDriveSyncOrchestration({
             });
             if (hasLocalWorkLogsData(localCounts)) {
               const created = await mergeLocalToCloud();
+              if (cancelled) return;
               updateSyncHealth('worklogs', created
                 ? {
                     state: 'ok',
@@ -218,9 +218,12 @@ export function useDriveSyncOrchestration({
           updateSyncHealth('worklogs', driveUnavailableHealth(workLogsSync.status));
         }
       } catch (e) {
+        if (cancelled) return;
         console.error("Auto-sync check failed", e);
         const failure = autoSyncFailureHealth(e);
         updateSyncHealth(failure.key, failure.patch);
+      } finally {
+        running = false;
       }
     };
 
@@ -236,9 +239,12 @@ export function useDriveSyncOrchestration({
     window.addEventListener('focus', checkSync);
 
     return () => {
+      cancelled = true;
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
     };
-  }, [hasUsableAuthValue, setGoogleAuth, setGoogleTaskLists, setApiKey, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
+  }, [hasUsableAuthValue, accessToken, setGoogleAuth, setGoogleTaskLists, setApiKey, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
+
+  return { taskBackupReady: hasUsableAuthValue && hydrated !== null && hydrated.accessToken === accessToken };
 }
 
