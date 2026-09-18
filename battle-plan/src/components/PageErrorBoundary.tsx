@@ -4,6 +4,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 interface PageErrorBoundaryProps {
   children: ReactNode;
   resetKey: string;
+  fallback?: ReactNode;
 }
 
 interface PageErrorBoundaryState {
@@ -29,6 +30,7 @@ export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErr
 
   render() {
     if (!this.state.hasError) return this.props.children;
+    if (this.props.fallback) return this.props.fallback;
 
     return (
       <div className="mx-auto flex max-w-xl flex-col items-center gap-4 rounded-3xl border border-amber-500/20 bg-slate-900/60 p-10 text-center shadow-2xl">

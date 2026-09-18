@@ -177,6 +177,67 @@
     height: 100%;
   }
 
+  .planning-overview { margin-bottom: 1.5rem; }
+  .planning-intro { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }
+  .planning-eyebrow { color: var(--text-muted); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.4rem; }
+  .planning-week-link { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; min-height: 44px; color: var(--text-secondary); font-size: 0.8rem; white-space: nowrap; }
+  .planning-week-link:hover { color: var(--focus-ring); }
+  .planning-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+  .planning-stat { position: relative; display: flex; flex-direction: column; align-items: start; gap: 0.5rem; border: 1px solid var(--surface-border); border-radius: 1rem; padding: 0.85rem 1.1rem; text-align: left; background: var(--surface-1); color: var(--text-primary); transition: background-color var(--motion-quick), border-color var(--motion-quick); }
+  .planning-stat:hover { border-color: var(--surface-border-hover); }
+  .planning-stat[aria-pressed='true'] { border-color: var(--focus-ring); background: color-mix(in srgb, var(--surface-1) 92%, #6366f1); box-shadow: inset 0 0 0 1px var(--focus-ring); }
+  .planning-stat-label { display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: 0.8rem; font-weight: 600; }
+  .planning-stat-value { font-variant-numeric: tabular-nums; font-size: 2rem; font-weight: 600; line-height: 1.05; letter-spacing: -0.04em; }
+  .planning-stat[data-tone='overdue'] .planning-stat-value { color: #fb7185; }
+  .planning-stat-detail { color: var(--text-muted); font-size: 0.7rem; }
+  .planning-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.8rem; }
+  .planning-search { display: flex; align-items: center; gap: 0.65rem; flex: 1 1 14rem; min-width: 0; min-height: 46px; border: 1px solid var(--control-border); border-radius: 0.8rem; padding: 0 0.85rem; background: var(--surface-1); color: var(--text-muted); }
+  .planning-search:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .planning-search input { width: 100%; min-width: 0; padding: 0.75rem 0; color: var(--text-primary); font-size: 0.875rem; background: transparent; outline: none; }
+  .planning-search input::placeholder { color: var(--text-muted); }
+  .planning-search input::-webkit-search-cancel-button { display: none; }
+  .planning-search button { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  .planning-toolbar kbd { border: 1px solid var(--control-border); padding: 0.1rem 0.3rem; border-radius: 0.25rem; font: 0.65rem var(--font-body); white-space: nowrap; opacity: 0.8; }
+  .planning-create { min-height: 46px; white-space: nowrap; box-shadow: none; }
+  .planning-create kbd { border-color: rgba(255,255,255,0.35); margin-left: 0.5rem; }
+  .planning-list-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 0.8rem; min-height: 44px; margin-bottom: 0.7rem; color: var(--text-muted); font-size: 0.75rem; }
+  .planning-reset { display: inline-flex; align-items: center; gap: 0.3rem; min-height: 44px; color: var(--text-secondary); }
+  .planning-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; min-height: 280px; border: 1px dashed var(--control-border); border-radius: 1rem; padding: 2rem 1rem; color: var(--text-muted); text-align: center; }
+  .planning-empty h2 { color: var(--text-primary); font-size: 1.2rem; font-weight: 600; }
+  .planning-empty p { font-size: 0.875rem; max-width: 28rem; }
+
+  .app-sidebar { width: 14rem; box-shadow: none; }
+  .sidebar-section-label { padding: 0 0.85rem; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.6rem; }
+  .sidebar-link { min-height: 44px; font-size: 0.875rem; font-weight: 500; }
+  .sidebar-shortcuts { border: 1px solid var(--surface-border); border-radius: 0.8rem; padding: 0.85rem; margin: 1rem 0.5rem; color: var(--text-muted); font-size: 0.7rem; line-height: 1.8; }
+  .sidebar-shortcuts p { display: flex; justify-content: space-between; gap: 0.5rem; }
+  .sidebar-shortcuts kbd { font-family: inherit; color: var(--text-secondary); white-space: nowrap; }
+  .task-card { box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+  .task-card:hover { box-shadow: 0 6px 24px -14px rgba(99,102,241,0.25); }
+  .task-card.task-card-danger { border-color: rgba(244,63,94,0.38); }
+  .task-warning { color: #fda4af; background: rgba(244,63,94,0.08); border: 1px solid rgba(244,63,94,0.25); }
+  .task-time-badge, .task-deadline { color: var(--text-primary); background: var(--surface-2); border-color: var(--surface-border); }
+  .task-deadline-danger { background: rgba(244,63,94,0.08); border-color: rgba(244,63,94,0.25); }
+  .task-title { font-size: 1rem; font-weight: 600; line-height: 1.45; letter-spacing: -0.015em; }
+  .task-title button { text-align: left; }
+  .task-title button:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  html[data-theme='light'] .planning-stat[data-tone='overdue'] .planning-stat-value { color: #be123c; }
+  html[data-theme='light'] .task-warning { color: #9f1239; background: #fff1f2; border-color: #fecdd3; }
+
+  @media (max-width: 767px) {
+    .planning-week-link { font-size: 0.7rem; }
+    .planning-stats { gap: 0.4rem; }
+    .planning-stat { padding: 0.7rem 0.5rem; gap: 0.5rem; border-radius: 0.75rem; }
+    .planning-stat-label { font-size: 0.65rem; white-space: nowrap; }
+    .planning-stat-label svg, .planning-stat-detail { display: none; }
+    .planning-stat-value { font-size: 1.5rem; }
+    .planning-search { flex: 1 1 0; padding-inline: 0.65rem; gap: 0.4rem; }
+    .planning-search input { font-size: 0.8rem; text-overflow: ellipsis; }
+    .planning-create { font-size: 0.75rem; padding-inline: 0.8rem; }
+    .planning-toolbar kbd { display: none; }
+  }
+
   .task-card::before {
     content: '';
     position: absolute;
@@ -189,7 +250,7 @@
 
   .task-action-rail {
     display: grid;
-    grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr) 44px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px 44px;
     gap: 0.5rem;
   }
 
@@ -237,6 +298,13 @@
 
 /* Custom scrollbar for Office feel */
 @layer utilities {
+  html[data-theme='light'] .task-card .text-red-400,
+  html[data-theme='light'] .task-card .text-red-500 { color: #be123c; }
+  html[data-theme='light'] .task-card .text-orange-400 { color: #9a3412; }
+  html[data-theme='light'] .task-card .text-blue-400 { color: #1d4ed8; }
+  html[data-theme='light'] .task-card .text-emerald-400 { color: #047857; }
+  html[data-theme='light'] .task-card .text-amber-400 { color: #92400e; }
+
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }

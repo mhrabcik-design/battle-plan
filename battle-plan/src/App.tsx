@@ -1,9 +1,10 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Mic, MicOff, AlertCircle, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText, Undo2 } from 'lucide-react';
+import { Mic, MicOff, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText, Undo2, Plus, Search, X, ArrowUpRight, CalendarDays } from 'lucide-react';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
 import { useDriveSyncOrchestration } from './hooks/useDriveSyncOrchestration';
+import { useTaskBackup } from './hooks/useTaskBackup';
 import { useSuggestionsBadge } from './hooks/useSuggestionsBadge';
 import { useAgentBridgePolling } from './hooks/useAgentBridgePolling';
 import { useTaskCommands } from './hooks/useTaskCommands';
@@ -16,7 +17,6 @@ import { db, type Task } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
-import { taskDriveBackup } from './services/taskDriveBackup';
 import { mergeLocalToCloudDetailed } from './services/workLogsSync';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList, GoogleTaskRaw } from './types';
 import { hasUsableAuth as checkUsableAuth } from './types';
@@ -24,16 +24,13 @@ import { Sidebar } from './components/Sidebar';
 import { syncIconFor } from './components/syncIcon';
 import { deriveSyncVisualState } from './utils/syncVisualState';
 import { TaskCard } from './components/TaskCard';
-import { FocusEditor } from './components/FocusEditor';
-import { SettingsModal } from './components/SettingsModal';
 import { OnboardingCard } from './components/OnboardingCard';
 import { SlashCommandPalette } from './components/SlashCommandPalette';
 import { PageErrorBoundary } from './components/PageErrorBoundary';
 import { dismissOnboarding, isOnboardingDismissed } from './services/onboarding';
-import { WeeklyCalendar } from './components/WeeklyCalendar';
 import type { WorkLogVoiceController } from './components/worklogs/WorkLogVoiceBar';
 import type { ExtractedWorkLogBatch } from './services/workLogExtractor';
-import { WorkLogVoiceConfirm } from './components/worklogs/WorkLogVoiceConfirm';
+import { DeferredDialog } from './components/ui/DeferredDialog';
 import {
   formatTimeLeft,
   getDeadlineColor,
@@ -48,10 +45,16 @@ import { buildInfo } from './utils/buildInfo';
 import { workLogsBackupHealth } from './utils/driveSyncDiagnostics';
 import { getErrorMessage } from './utils/errors';
 import { useThemePreference } from './hooks/useThemePreference';
+import { createTaskDraft, filterPlanningTasks, getPlanningSummary, type PlanningFilter } from './utils/planningOverview';
+import { toLocalIsoDate } from './utils/monthCalendar';
 
 const SuggestionsPage = lazy(() => import('./pages/SuggestionsPage').then((module) => ({ default: module.SuggestionsPage })));
 const WorkLogsPage = lazy(() => import('./pages/WorkLogsPage').then((module) => ({ default: module.WorkLogsPage })));
 const DiagnosticsPage = lazy(() => import('./pages/DiagnosticsPage').then((module) => ({ default: module.DiagnosticsPage })));
+const WeeklyCalendar = lazy(() => import('./components/WeeklyCalendar').then(module => ({ default: module.WeeklyCalendar })));
+const FocusEditor = lazy(() => import('./components/FocusEditor').then(module => ({ default: module.FocusEditor })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
+const WorkLogVoiceConfirm = lazy(() => import('./components/worklogs/WorkLogVoiceConfirm').then(module => ({ default: module.WorkLogVoiceConfirm })));
 
 const AVAILABLE_MODELS = AVAILABLE_GEMINI_MODELS;
 
@@ -70,6 +73,12 @@ const CALENDAR_HOURS = Array.from({ length: 13 }, (_, i) => i + 7);
 const TASK_GRID_VIEW_MODES: ViewMode[] = ['battle', 'tasks', 'meetings', 'thoughts'];
 const TASK_QUERY_VIEW_MODES: ViewMode[] = [...TASK_GRID_VIEW_MODES, 'week'];
 const EMPTY_TASKS: Task[] = [];
+const PLAN_FILTERS = [
+  { id: 'all', label: 'Otevřené', detail: 'Celý váš přehled', icon: List },
+  { id: 'today', label: 'Dnes', detail: 'Na dnešní den', icon: CalendarDays },
+  { id: 'overdue', label: 'Po termínu', detail: 'Zaslouží pozornost', icon: Clock },
+  { id: 'undated', label: 'Bez termínu', detail: 'Prostor k naplánování', icon: Inbox },
+] as const;
 
 const pageFallback = (
   <div className="p-12 text-center text-slate-600 text-xs font-black uppercase tracking-widest">
@@ -105,6 +114,9 @@ function App() {
   const [workLogVoiceController, setWorkLogVoiceController] = useState<WorkLogVoiceController | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [planningFilter, setPlanningFilter] = useState<PlanningFilter>('all');
+  const searchRef = useRef<HTMLInputElement>(null);
   const { syncHealth, updateSyncHealth } = useSyncDiagnostics();
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
@@ -115,6 +127,8 @@ function App() {
       return;
     }
     setViewMode(nextView);
+    setSearchQuery('');
+    setPlanningFilter('all');
   }, [isRecording]);
 
   const addLog = useCallback((message: string, type: 'info' | 'error' = 'info') => {
@@ -342,7 +356,7 @@ const syncVisualState = deriveSyncVisualState({
   }, [googleTasksRaw, hasUsableAuth, viewMode, activeTaskList]);
 
   const tasks: UnifiedTask[] = useMemo(() => {
-    const combined = [...localTasks, ...googleTasksMapped];
+    const combined = [...localTasks, ...googleTasksMapped].filter(task => viewMode !== 'battle' || task.status === 'pending');
 
     if (viewMode === 'battle' || viewMode === 'week') {
       return combined.sort((a, b) => {
@@ -359,7 +373,7 @@ const syncVisualState = deriveSyncVisualState({
     return sortTasksActiveFirst(combined);
   }, [localTasks, googleTasksMapped, viewMode]);
 
-  useDriveSyncOrchestration({
+  const { taskBackupReady } = useDriveSyncOrchestration({
     googleAuth,
     setGoogleAuth,
     setGoogleTaskLists,
@@ -371,6 +385,8 @@ const syncVisualState = deriveSyncVisualState({
     updateSyncHealth,
   });
 
+  useTaskBackup({ googleAuth, ready: taskBackupReady, setLastSync, addLog, updateSyncHealth });
+
   useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog });
   useAgentBridgePolling({ googleAuth, addLog });
 
@@ -379,8 +395,6 @@ const syncVisualState = deriveSyncVisualState({
       googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
     }
   }, [hasUsableAuth, viewMode, activeTaskList]);
-
-  const tasksHash = useMemo(() => tasks.length * 1000000 + tasks.reduce((sum, t) => sum + (t.updatedAt || 0), 0), [tasks]);
 
   const workLogsDataRevision = useLiveQuery(async () => {
     const [allWorkLogs, allProjects, allWorkLogTombstones] = await Promise.all([
@@ -395,42 +409,6 @@ const syncVisualState = deriveSyncVisualState({
       tombstones: allWorkLogTombstones.map((row) => [row.syncId, row.deletedAt]).sort(),
     });
   }, []) ?? '';
-
-  // Auto-backup on change
-  useEffect(() => {
-    if (!hasUsableAuth) return;
-
-    const timer = setTimeout(async () => {
-      try {
-        const allTasks = await db.tasks.toArray();
-        const allSettings = await db.settings.toArray();
-        const savedTimestamp = await taskDriveBackup.save({ tasks: allTasks, settings: allSettings });
-
-        if (savedTimestamp) {
-          const now = new Date().toLocaleString('cs-CZ');
-          setLastSync(now);
-          localStorage.setItem('last_drive_sync', now);
-          localStorage.setItem('last_drive_sync_ts', savedTimestamp.toString());
-          updateSyncHealth('tasks', {
-            state: 'ok',
-            detail: 'Automatická záloha na Disk úspěšná',
-            lastSuccess: now,
-            lastError: null,
-          });
-          addLog('Automatická záloha na Disk úspěšná');
-        }
-      } catch (e) {
-        console.error('Auto-backup failed', e);
-        updateSyncHealth('tasks', {
-          state: 'error',
-          detail: 'Automatická záloha na Disk selhala',
-          lastError: getErrorMessage(e),
-        });
-      }
-    }, 10000);
-
-    return () => clearTimeout(timer);
-  }, [tasksHash, hasUsableAuth, addLog, updateSyncHealth]);
 
   useEffect(() => {
     if (!hasUsableAuth || !workLogsDataRevision) return;
@@ -583,10 +561,44 @@ const syncVisualState = deriveSyncVisualState({
   const showTaskGrid = TASK_GRID_VIEW_MODES.includes(viewMode);
   const supportsCompletedFilter = viewMode === 'tasks' || viewMode === 'meetings';
   const showCompletedInCurrentView = viewMode === 'meetings' ? showCompletedMeetings : showCompletedTasks;
-  const { completedTaskCount: completedItemCount, visibleTasks: visibleGridTasks } = useMemo(
+  const { completedTaskCount: completedItemCount, visibleTasks: unfilteredGridTasks } = useMemo(
     () => getTaskGridPresentation(tasks, viewMode, showCompletedInCurrentView),
     [showCompletedInCurrentView, tasks, viewMode]
   );
+  const today = toLocalIsoDate(currentTime);
+  const planningSummary = useMemo(() => getPlanningSummary(tasks, today), [tasks, today]);
+  const visibleGridTasks = useMemo(
+    () => filterPlanningTasks(unfilteredGridTasks, searchQuery, viewMode === 'battle' ? planningFilter : 'all', today),
+    [unfilteredGridTasks, searchQuery, planningFilter, viewMode, today],
+  );
+  const hasListFilter = searchQuery.trim().length > 0 || (viewMode === 'battle' && planningFilter !== 'all');
+  const openNewTask = useCallback(() => {
+    if (isRecording || isVoiceProcessing) {
+      setNotice('Nejprve dokončete probíhající diktování.');
+      return;
+    }
+    setSearchQuery('');
+    setPlanningFilter('all');
+    setEditingTask(createTaskDraft(viewMode));
+  }, [isRecording, isVoiceProcessing, viewMode]);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (!showTaskGrid || event.isComposing || event.repeat || event.defaultPrevented || document.querySelector('[role="dialog"]')
+        || editingTask || showSettings || workLogExtracted
+        || (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select')))) return;
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchRef.current?.focus();
+      } else if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        openNewTask();
+      }
+    };
+    document.addEventListener('keydown', handleShortcut);
+    return () => document.removeEventListener('keydown', handleShortcut);
+  }, [showTaskGrid, editingTask, showSettings, workLogExtracted, openNewTask]);
   const isWorkLogVoiceMode = viewMode === 'worklogs';
   const activeWorkLogVoiceController = isWorkLogVoiceMode ? workLogVoiceController : null;
   const floatingMicIsRecording = activeWorkLogVoiceController?.isRecording ?? isRecording;
@@ -606,7 +618,7 @@ const syncVisualState = deriveSyncVisualState({
 
   return (
     <MotionConfig reducedMotion="user">
-    <div className="flex h-screen bg-slate-950 overflow-hidden font-body text-slate-200">
+    <div className="app-shell flex h-dvh bg-slate-950 overflow-hidden font-body text-slate-200">
       <Sidebar
         viewMode={viewMode}
         setViewMode={selectView}
@@ -620,21 +632,23 @@ const syncVisualState = deriveSyncVisualState({
       />
 
       {/* MAIN CONTENT AREA */}
-      <main className={`flex-1 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col no-scrollbar bg-slate-950`}>
+      <main id="main-content" className={`flex-1 min-w-0 relative ${viewMode === 'week' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden flex flex-col custom-scrollbar bg-slate-950`}>
         <div className={`w-full h-full flex flex-col ${viewMode === 'week' ? 'px-0 py-0 max-w-full' : 'px-4 md:px-8 lg:px-10 py-6 md:py-8 max-w-[1600px] mx-auto'} ${viewMode === 'week' ? 'pb-0' : 'pb-32 md:pb-12'}`}>
 
           <header className={`hidden md:flex flex-col gap-1 border-b border-slate-900 ${viewMode === 'week' ? 'mb-0 pb-0 pt-4 px-6 md:px-10' : 'mb-6 pb-4'}`}>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-black text-white uppercase tracking-tight">
-                  {NAV_ITEMS.find(i => i.id === viewMode)?.label || 'Plán'}
+                <h1 className="text-2xl font-semibold text-white tracking-tight">
+                  {NAV_ITEMS.find(i => i.id === viewMode)?.label || 'Diagnostika'}
                 </h1>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">
-                  {viewMode === 'battle' ? 'Strategický přehled dne' :
+                <p className="text-sm text-slate-400 mt-1">
+                  {viewMode === 'battle' ? 'Vaše práce. Jasný další krok.' :
                     viewMode === 'week' ? 'Plánování týdenních cílů' :
                       viewMode === 'suggestions' ? 'Návrhy od Anu ke schválení' :
                         viewMode === 'worklogs' ? 'Večerní diktování pracovních činností' :
-                          'Správa pracovního workflow'}
+                          viewMode === 'tasks' ? 'Od nápadu k hotovému výsledku' :
+                            viewMode === 'meetings' ? 'Místo pro společný čas' :
+                              viewMode === 'thoughts' ? 'Nápady, které stojí za zachování' : 'Stav aplikace a připojení'}
                 </p>
               </div>
 
@@ -677,9 +691,9 @@ const syncVisualState = deriveSyncVisualState({
                     )}
                   </div>
                 )}
-                <div className="bg-slate-900/50 border border-slate-800 rounded-lg px-4 py-2 flex items-center gap-3 w-56">
+                <div className="hidden xl:flex items-center gap-2 text-sm text-slate-400">
                   <Clock className="w-3.5 h-3.5 text-slate-600" />
-                  <span className="text-sm font-black text-slate-400 uppercase tracking-tight">{new Date().toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+                  <span>{currentTime.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
                 </div>
               </div>
             </div>
@@ -690,7 +704,7 @@ const syncVisualState = deriveSyncVisualState({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-                  <CheckCircle2 className="w-5 h-5 text-white" />
+                  <CheckCircle2 className="w-5 h-5 text-on-accent" />
                 </div>
                 <div>
                   <h1 className="text-xl font-black text-white uppercase tracking-tight leading-none">Bitevní Plán</h1>
@@ -736,12 +750,18 @@ const syncVisualState = deriveSyncVisualState({
                   <button
                     key={item.id}
                     onClick={() => selectView(item.id as ViewMode)}
-                    onFocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'center' })}
+                    onFocus={(event) => {
+                      // Center keyboard navigation without moving a tapped tab
+                      // between pointer-down and click on narrow screens.
+                      if (event.currentTarget.matches(':focus-visible')) {
+                        event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'center' });
+                      }
+                    }}
                     aria-current={isActive ? 'page' : undefined}
                     className={`flex min-w-[5.25rem] flex-col items-center gap-1.5 px-4 py-3 rounded-xl transition-[background-color,color,box-shadow] ${isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'text-slate-500'}`}
                   >
                     <Icon className="w-5 h-5" />
-                    <span className="text-xs font-black uppercase tracking-widest">{item.label}</span>
+                    <span className="text-xs font-semibold">{item.label}</span>
                   </button>
                 );
               })}
@@ -764,6 +784,45 @@ const syncVisualState = deriveSyncVisualState({
 
           {hasUsableAuth && showOnboarding && <OnboardingCard onDismiss={handleDismissOnboarding} />}
 
+          {viewMode === 'battle' && (
+            <section aria-label="Přehled otevřené práce" className="planning-overview">
+              <div className="planning-intro">
+                <h2 className="planning-eyebrow">Dnešní přehled</h2>
+                <button type="button" onClick={() => selectView('week')} className="planning-week-link">
+                  Otevřít týden <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+              <div className="planning-stats">
+                {PLAN_FILTERS.map(({ id, label, detail, icon: Icon }) => (
+                  <button key={id} type="button" className="planning-stat" data-tone={id}
+                    aria-pressed={planningFilter === id} onClick={() => setPlanningFilter(id)}>
+                    <span className="planning-stat-label"><Icon className="h-4 w-4" aria-hidden="true" /> {label}</span>
+                    <span className="planning-stat-value">{planningSummary[id]}</span>
+                    <span className="planning-stat-detail">{detail}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {showTaskGrid && (
+            <section aria-label="Ovládání seznamu" className="planning-toolbar">
+              <div className="planning-search">
+                <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <input ref={searchRef} type="search" aria-label="Hledat v tomto přehledu" placeholder="Hledat v tomto přehledu…"
+                  value={searchQuery} onChange={event => setSearchQuery(event.target.value)}
+                  onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); setSearchQuery(''); } }} />
+                {searchQuery ? <button type="button" onClick={() => { setSearchQuery(''); searchRef.current?.focus(); }} aria-label="Vymazat hledání"><X className="h-4 w-4" /></button>
+                  : <kbd aria-hidden="true">Ctrl K</kbd>}
+              </div>
+              <button type="button" className="office-button-primary planning-create" onClick={openNewTask} title="Nový záznam (N)">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                {viewMode === 'meetings' ? 'Nová schůzka' : viewMode === 'thoughts' ? 'Nová myšlenka' : 'Nový úkol'}
+                <kbd aria-hidden="true">N</kbd>
+              </button>
+            </section>
+          )}
+
           {viewMode === 'suggestions' && (
             <PageErrorBoundary resetKey={viewMode}>
               <Suspense fallback={pageFallback}>
@@ -784,6 +843,8 @@ const syncVisualState = deriveSyncVisualState({
           )}
 
           {viewMode === 'week' && (
+            <PageErrorBoundary resetKey={viewMode}>
+            <Suspense fallback={pageFallback}>
             <WeeklyCalendar
               weekOffset={weekOffset}
               tasks={tasks}
@@ -795,6 +856,8 @@ const syncVisualState = deriveSyncVisualState({
               onChangeWeek={changeWeek}
               onRescheduleTask={handleRescheduleTask}
             />
+            </Suspense>
+            </PageErrorBoundary>
           )}
 
           {viewMode === 'debug' && (
@@ -813,8 +876,11 @@ const syncVisualState = deriveSyncVisualState({
           )}
 
 
-          {supportsCompletedFilter && (
-            <div className="mb-4 flex justify-end">
+          {showTaskGrid && (
+            <div className="planning-list-meta">
+              <p role="status" aria-live="polite">{visibleGridTasks.length} {visibleGridTasks.length === 1 ? 'položka' : visibleGridTasks.length > 1 && visibleGridTasks.length < 5 ? 'položky' : 'položek'}{hasListFilter ? ' ve výběru' : ' v přehledu'}</p>
+              {hasListFilter && <button type="button" onClick={() => { setSearchQuery(''); setPlanningFilter('all'); }} className="planning-reset"><X className="h-3.5 w-3.5" /> Zrušit filtry</button>}
+              {supportsCompletedFilter && (
               <button
                 type="button"
                 aria-pressed={showCompletedInCurrentView}
@@ -825,7 +891,7 @@ const syncVisualState = deriveSyncVisualState({
                     setShowCompletedTasks(current => !current);
                   }
                 }}
-                className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-black uppercase tracking-wider transition-[background-color,border-color,color] ${showCompletedInCurrentView
+                className={`ml-auto flex min-h-11 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-[background-color,border-color,color] ${showCompletedInCurrentView
                   ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
                   : 'border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700 hover:text-slate-200'
                   }`}
@@ -836,20 +902,27 @@ const syncVisualState = deriveSyncVisualState({
                   : showCompletedInCurrentView ? 'Skrýt splněné' : 'Zobrazit splněné'}
                 <span className="rounded-md bg-black/20 px-1.5 py-0.5 text-[10px]">{completedItemCount}</span>
               </button>
+              )}
             </div>
           )}
 
           {showTaskGrid && (
-            <section className="task-grid">
+            <section className="task-grid" aria-label="Záznamy">
               <AnimatePresence mode="popLayout">
                 {visibleGridTasks.length === 0 ? (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-20 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
-                    <AlertCircle className="w-12 h-12 text-slate-800 mx-auto mb-4" />
-                    <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">
-                      {completedItemCount > 0
+                  <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="planning-empty">
+                    {hasListFilter ? <Search className="h-8 w-8" /> : <CheckCircle2 className="h-8 w-8" />}
+                    <h2>
+                      {hasListFilter ? 'Tady je zatím klid'
+                        : completedItemCount > 0
                         ? viewMode === 'meetings' ? 'Všechny schůzky jsou hotové' : 'Všechny úkoly jsou splněné'
-                        : 'Seznam je prázdný'}
+                        : 'Místo pro váš další krok'}
+                    </h2>
+                    <p>{hasListFilter ? 'Zkuste jiný dotaz nebo se vraťte k celému přehledu.' : 'Přidejte záznam ručně nebo ho nadiktujte mikrofonem.'}
                     </p>
+                    <button type="button" className="office-button-primary" onClick={hasListFilter ? () => { setSearchQuery(''); setPlanningFilter('all'); } : openNewTask}>
+                      {hasListFilter ? 'Zobrazit celý přehled' : 'Přidat první záznam'}
+                    </button>
                   </motion.div>
                 ) : (
                   visibleGridTasks.map((task) => (
@@ -880,6 +953,7 @@ const syncVisualState = deriveSyncVisualState({
 
           <AnimatePresence>
             {workLogExtracted && (
+              <DeferredDialog title="Potvrzení pracovní činnosti" onClose={() => { setWorkLogExtracted(null); clearAudio(); isProcessingRef.current = false; }}>
               <WorkLogVoiceConfirm
                 extracted={workLogExtracted}
                 onConfirmed={(result) => {
@@ -893,11 +967,13 @@ const syncVisualState = deriveSyncVisualState({
                   isProcessingRef.current = false;
                 }}
               />
+              </DeferredDialog>
             )}
           </AnimatePresence>
 
           <AnimatePresence>
             {editingTask && (
+              <DeferredDialog title="Editor záznamu" onClose={() => setEditingTask(null)}>
               <FocusEditor
                 editingTask={editingTask}
                 setEditingTask={setEditingTask}
@@ -917,6 +993,7 @@ const syncVisualState = deriveSyncVisualState({
                 formatTimeLeft={memoizedFormatTimeLeft}
                 onNotice={setNotice}
               />
+              </DeferredDialog>
             )}
           </AnimatePresence>
           <AnimatePresence>
@@ -929,6 +1006,7 @@ const syncVisualState = deriveSyncVisualState({
 
           <AnimatePresence>
             {showSettings && (
+              <DeferredDialog title="Nastavení" onClose={() => setShowSettings(false)}>
               <SettingsModal
                 apiKey={apiKey}
                 setApiKey={setApiKey}
@@ -944,6 +1022,7 @@ const syncVisualState = deriveSyncVisualState({
                 saveSettings={saveSettings}
                 setShowSettings={setShowSettings}
               />
+              </DeferredDialog>
             )}
           </AnimatePresence>
           <AnimatePresence>
@@ -982,7 +1061,7 @@ const syncVisualState = deriveSyncVisualState({
                     title={floatingMicState === 'idle' ? 'Spustit diktování — Anu vytvoří task / worklog / nápad podle toho, co řekneš.' : floatingMicLabel}
                     className={`relative z-10 w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-[background-color,box-shadow,transform] shadow-2xl ${floatingMicIsRecording ? 'bg-red-500 scale-110 shadow-red-500/50' : floatingMicIsProcessing ? 'bg-slate-800' : 'bg-indigo-600 shadow-indigo-600/50 hover:scale-105'}`}
                   >
-                    {floatingMicIsProcessing ? <div className="w-5 h-5 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (floatingMicIsRecording ? <MicOff className="w-5 h-5 md:w-8 md:h-8 text-white" /> : <Mic className="w-5 h-5 md:w-8 md:h-8 text-white" />)}
+                    {floatingMicIsProcessing ? <div className="w-5 h-5 md:w-8 md:h-8 border-4 border-slate-500 border-t-white rounded-full animate-spin" /> : (floatingMicIsRecording ? <MicOff className="w-5 h-5 md:w-8 md:h-8 text-on-accent" /> : <Mic className="w-5 h-5 md:w-8 md:h-8 text-on-accent" />)}
                   </button>
                   <span role="status" aria-live="polite" className="sr-only">{floatingMicLabel}</span>
                 </div>

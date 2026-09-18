@@ -15,6 +15,14 @@ V Nastavení vložte Gemini API klíč a podle potřeby připojte Google účet.
 - **Návrhy**: položky od Anu, které se před použitím schvalují.
 - **Diagnostika**: verze buildu, původ aplikace a stav integrací.
 
+## Rychlé hledání a ruční založení
+
+V Plánu přepnete přehled na **Dnes**, **Po termínu** nebo **Bez termínu**. Počty zahrnují otevřené položky; filtr Po termínu vybírá datum před dnešním dnem. Odpočet na kartě navíc zohledňuje čas termínu (bez zadaného času používá dosavadních 15:00).
+
+Hledání pracuje v právě otevřeném seznamu, v názvech, popisech i podúkolech. Nerozlišuje velikost písmen ani diakritiku. **Ctrl/Cmd+K** přesune fokus do hledání, **Escape** dotaz vymaže. Přechod do jiného seznamu filtry zruší.
+
+Tlačítko **Nový úkol**, **Nová schůzka** nebo **Nová myšlenka** a klávesa **N** otevřou editor podle aktuálního seznamu. Záznam vznikne až po vyplnění názvu a uložení. Zrušení prázdného návrhu nic neukládá. Psaní v poli ani otevřený dialog tyto zkratky nepřeruší; **/** dál otevírá paletu příkazů.
+
 ## Hlasové zadávání
 
 Hlavní mikrofon vytváří nebo upravuje úkol, schůzku či myšlenku. Mluvte přirozeně a uvádějte typ záznamu, datum, čas, očekávaný výsledek a případné účastníky. Časy používejte ve 24hodinovém formátu.
@@ -50,6 +58,8 @@ V záložce Práce lze přidat činnost ručně nebo hlasem. Hlasový vstup nejd
 - **Google Tasks** se zobrazují s lokálními úkoly v podporovaných pohledech včetně Týdne; přesun nebo úprava data aktualizuje jejich datum splatnosti.
 - **Google Calendar** přijímá schůzky, pokud má aplikace potřebné oprávnění.
 - Pokud přihlášení nebo scope chybí, aplikace má zachovat lokální data a ukázat stav v Diagnostice.
+
+Automatická záloha plánovacích dat sleduje změny bez ohledu na otevřenou záložku. Současné úpravy plánu na více zařízeních však mohou stále soupeřit o stejný vzdálený snapshot; tato verze ještě nezavádí úplné řešení souběžných cloudových zápisů.
 
 ## Řešení problémů
 
