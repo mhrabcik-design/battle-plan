@@ -36,6 +36,21 @@ Drive store. Celkový PWA precache se rozdělením obrazovek automaticky nezmen�
 Nový workflow `Validate pull request` spouští čisté `npm ci`, lint, theme check,
 testy a build na Node 24 už před sloučením. Nepublikuje aplikaci ani nezvyšuje verzi.
 
+První [CI běh PR #63](https://github.com/mhrabcik-design/battle-plan/actions/runs/35383331601/job/105724426208)
+zachytil rozdíl instalací: původní lokální lint používal `eslint-plugin-react-hooks`
+7.1.1, zatímco `package-lock.json` zamyká 7.0.1. Zamčená verze hlásila
+`react-hooks/globals` při zachycení výsledku hooku v testovací SSR komponentě.
+Toto jediné přiřazení nyní obsahuje vysvětlenou výjimku: synchronní serverový
+render předá skutečné handlery testu, ale nespouští efekty. Produkční pravidlo,
+skutečný hook, jeho refy i všechny testové assertions zůstaly zachovány.
+
+Opakování v izolovaném adresáři s čistým `npm ci` a Node **24.21.0** prošlo:
+lint, theme check, **429/429 testů** a TypeScript + Vite + PWA build.
+Tabulka výše zachovává původní lokální srovnání před/po; čistý build se zamčenými
+závislostmi měl vstupní JS **624,07 kB / gzip 199,46 kB**. Pro tuto instalaci
+nebyla měřena výchozí verze, proto z těchto velikostí neodvozujeme další zlepšení.
+Nový vzdálený CI běh po opravě se ověřuje samostatně.
+
 ## Prohlížeč
 
 Testová data byla umělá, lokální a bez Google přihlášení. Vývojový regresní běh
