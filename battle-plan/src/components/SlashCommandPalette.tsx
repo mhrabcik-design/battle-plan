@@ -21,7 +21,8 @@ export function SlashCommandPalette({ onOpenVoice, onOpenWorklogs, onOpenSuggest
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key !== '/' || isTypingTarget(event.target)) return;
+            if (event.key !== '/' || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey
+                || isTypingTarget(event.target) || document.querySelector('[role="dialog"]')) return;
             event.preventDefault();
             setOpen(true);
         };

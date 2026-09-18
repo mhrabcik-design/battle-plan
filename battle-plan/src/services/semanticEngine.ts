@@ -160,31 +160,12 @@ export const applySemanticResult = async (result: unknown, updateId: number | nu
     try {
         if (updateId) {
             const existing = await db.tasks.get(updateId);
-            if (!existing) return null;
+            if (!existing || existing.isDeleted) return null;
 
             const norm = normalizeEntity(result, 'update', existing);
-            const normValue = norm.value as Partial<Task>;
             const updated: Task = {
-                id: existing.id,
-                title: normValue.title ?? existing.title,
-                description: normValue.description ?? existing.description,
-                internalNotes: normValue.internalNotes ?? existing.internalNotes,
-                type: normValue.type ?? existing.type,
-                urgency: normValue.urgency ?? existing.urgency,
-                status: normValue.status ?? existing.status,
-                date: normValue.date ?? existing.date,
-                deadline: normValue.deadline ?? existing.deadline,
-                startTime: normValue.startTime ?? existing.startTime,
-                duration: normValue.duration ?? existing.duration,
-                totalDuration: normValue.totalDuration ?? existing.totalDuration,
-                isAllDay: normValue.isAllDay ?? existing.isAllDay,
-                subTasks: existing.subTasks ?? [],
-                progress: normValue.progress ?? existing.progress,
-                googleEventId: existing.googleEventId,
-                source: existing.source,
-                agent_write_id: existing.agent_write_id,
-                isDeleted: existing.isDeleted,
-                createdAt: existing.createdAt,
+                ...existing,
+                ...norm.value,
                 updatedAt: Date.now(),
             };
             await db.tasks.update(updateId, updated as Partial<Task>);

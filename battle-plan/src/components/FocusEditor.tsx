@@ -1,11 +1,11 @@
 import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass, Sun } from 'lucide-react';
 import type { UnifiedTask, GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { Task } from '../db';
 import { formatDuration, parseDuration } from '../utils/calendarUtils';
 import type { EditorSaveOutcome } from '../hooks/useTaskCommands';
-import { getEditorCloseIntent } from '../utils/editorInteraction';
+import { applySavedEditorStatus, getEditorCloseIntent, getEditorTaskSnapshot } from '../utils/editorInteraction';
 import { OverlaySurface } from './ui/OverlaySurface';
 
 interface FocusEditorProps {
@@ -27,8 +27,6 @@ interface FocusEditorProps {
     formatTimeLeft: (date?: string, time?: string) => string;
     onNotice: (message: string) => void;
 }
-
-const taskSnapshot = (task: UnifiedTask) => JSON.stringify({ ...task, updatedAt: 0 });
 
 export function FocusEditor({
     editingTask,
@@ -53,10 +51,23 @@ export function FocusEditor({
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [editorError, setEditorError] = useState<string | null>(null);
-    const [initialSnapshot, setInitialSnapshot] = useState(() => taskSnapshot(editingTask));
-    const isDirty = initialSnapshot !== taskSnapshot(editingTask);
+    const [initialTask, setInitialTask] = useState(editingTask);
+    const mutationRef = useRef(false);
+    const titleRef = useRef<HTMLInputElement>(null);
+    const isDirty = getEditorTaskSnapshot(initialTask) !== getEditorTaskSnapshot(editingTask);
+    const isBusy = isSaving || isDeleting || isTogglingTask;
+    const hasSavedIdentity = Boolean(editingTask.id || (editingTask.isGoogleTask && editingTask.googleId));
+    const editorTitle = hasSavedIdentity ? 'Detail záznamu' : {
+        task: 'Nový úkol', meeting: 'Nová schůzka', thought: 'Nová myšlenka', note: 'Nová poznámka',
+    }[editingTask.type];
+
+    useEffect(() => {
+        const frame = requestAnimationFrame(() => titleRef.current?.focus());
+        return () => cancelAnimationFrame(frame);
+    }, []);
 
     const requestClose = () => {
+        if (mutationRef.current) return;
         const intent = getEditorCloseIntent({
             recording: isRecording && activeVoiceUpdateId === editingTask.id,
             dirty: isDirty,
@@ -70,7 +81,8 @@ export function FocusEditor({
     };
 
     const deleteTask = async () => {
-        if (isDeleting || isSaving) return;
+        if (mutationRef.current || !hasSavedIdentity) return;
+        mutationRef.current = true;
         setIsDeleting(true);
         setEditorError(null);
         try {
@@ -79,12 +91,14 @@ export function FocusEditor({
         } catch (error) {
             setEditorError(error instanceof Error ? error.message : 'Záznam se nepodařilo smazat.');
         } finally {
+            mutationRef.current = false;
             setIsDeleting(false);
         }
     };
 
     const saveTask = async () => {
-        if (isSaving || isDeleting) return;
+        if (mutationRef.current) return;
+        mutationRef.current = true;
         setIsSaving(true);
         setEditorError(null);
         try {
@@ -98,27 +112,35 @@ export function FocusEditor({
         } catch (error) {
             setEditorError(error instanceof Error ? error.message : 'Změny se nepodařilo uložit.');
         } finally {
+            mutationRef.current = false;
             setIsSaving(false);
         }
     };
 
     const toggleWholeTask = async () => {
-        if (isTogglingTask) return;
+        if (mutationRef.current || !hasSavedIdentity) return;
+        mutationRef.current = true;
         setIsTogglingTask(true);
+        setEditorError(null);
         try {
             const updatedTask = await handleToggleTask(editingTask);
             if (updatedTask) {
-                setInitialSnapshot(taskSnapshot(updatedTask));
-                setEditingTask(updatedTask);
+                setInitialTask(previous => applySavedEditorStatus(previous, updatedTask));
+                setEditingTask(previous => previous ? applySavedEditorStatus(previous, updatedTask) : null);
+            } else {
+                setEditorError('Stav se nepodařilo změnit. Záznam už nemusí být dostupný.');
             }
+        } catch (error) {
+            setEditorError(error instanceof Error ? error.message : 'Stav se nepodařilo změnit.');
         } finally {
+            mutationRef.current = false;
             setIsTogglingTask(false);
         }
     };
 
     return (
         <OverlaySurface
-            title={`Focus editor: ${editingTask.title}`}
+            title={`${editorTitle}${editingTask.title ? `: ${editingTask.title}` : ''}`}
             onRequestClose={requestClose}
             variant="sheet"
             closeOnBackdrop={false}
@@ -133,13 +155,15 @@ export function FocusEditor({
                             {editingTask.type === 'meeting' ? <Users className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
                         </div>
                         <div>
-                            <h2 className="text-xl font-black text-white uppercase tracking-tight">Focus Mode</h2>
-                            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest leading-none mt-1">Hluboká editace a detail záznamu</p>
+                            <h2 className="text-xl font-bold text-white tracking-tight">{editorTitle}</h2>
+                            <p className="text-xs text-slate-400 leading-snug mt-1">{hasSavedIdentity ? 'Souvislosti, termín a další kroky.' : 'Začněte názvem. Ostatní můžete doplnit později.'}</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
-                        {!editingTask.isGoogleTask && (
+                        {!editingTask.isGoogleTask && hasSavedIdentity && (
                             <button
+                                type="button"
+                                disabled={isBusy}
                                 aria-label={activeVoiceUpdateId === editingTask.id ? 'Zastavit diktování' : 'Spustit diktování'}
                                 onClick={() => {
                                     if (activeVoiceUpdateId === editingTask.id) {
@@ -163,7 +187,7 @@ export function FocusEditor({
                             </button>
                         )}
                         <button
-                            disabled={isRecording && activeVoiceUpdateId === editingTask.id}
+                            disabled={isBusy || (isRecording && activeVoiceUpdateId === editingTask.id)}
                             onClick={requestClose}
                             aria-label="Zavřít editor"
                             className={`min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl transition-[background-color,color,transform] shadow-lg active:scale-95 ${isRecording && activeVoiceUpdateId === editingTask.id ? 'bg-slate-800/50 text-slate-700 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
@@ -174,7 +198,7 @@ export function FocusEditor({
                 </div>
 
                 {/* EDITOR CONTENT - SCROLLABLE AREA */}
-                <div className="flex-1 overflow-y-auto no-scrollbar">
+                <fieldset disabled={isBusy} className="m-0 min-w-0 flex-1 overflow-y-auto border-0 p-0 no-scrollbar">
                     {editorError && (
                         <div role="alert" className="mx-4 mt-4 rounded-xl border border-red-500/40 bg-red-950/70 px-4 py-3 text-sm font-bold text-red-200 md:mx-10">
                             {editorError}
@@ -185,22 +209,28 @@ export function FocusEditor({
                         {/* MAIN CONTENT (LEFT) */}
                         <div className="lg:col-span-8 p-6 md:p-10 space-y-8 border-r border-slate-800/50">
                             <div className="space-y-3">
-                                <label className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Název aktivity</label>
+                                <label htmlFor="task-title" className="text-xs font-bold text-slate-400 ml-1">Název aktivity</label>
                                 <input
+                                    id="task-title"
+                                    ref={titleRef}
+                                    autoFocus
                                     type="text"
+                                    required
+                                    aria-invalid={!!editorError && !editingTask.title.trim()}
                                     disabled={editingTask.isGoogleTask}
                                     value={editingTask.title}
                                     onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value, updatedAt: Date.now() })}
-                                    className="w-full bg-slate-800/30 border border-slate-800 rounded-2xl px-6 py-5 text-2xl font-black text-white focus:border-indigo-500 transition-[background-color,border-color,color] outline-none"
+                                    className="w-full bg-slate-800/30 border border-slate-800 rounded-2xl px-6 py-5 text-2xl font-bold text-white focus:border-indigo-500 transition-[background-color,border-color,color] outline-none"
                                     placeholder="Na čem pracujeme?"
                                 />
                             </div>
 
                             <div className="space-y-4">
-                                <label className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Podrobný popis (Popis a Kontext)</label>
+                                <label htmlFor="task-description" className="text-xs font-bold text-slate-400 ml-1">Popis a souvislosti</label>
                                 <textarea
+                                    id="task-description"
                                     rows={12}
-                                    value={editingTask.description}
+                                    value={editingTask.description || ''}
                                     onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value, updatedAt: Date.now() })}
                                     className="w-full bg-slate-800/20 border border-slate-800 rounded-2xl px-6 py-6 text-base font-medium text-slate-300 leading-relaxed focus:bg-slate-800/40 focus:border-indigo-500 transition-[background-color,border-color,color] outline-none resize-none"
                                     placeholder="Zde rozveďte své myšlenky..."
@@ -375,24 +405,24 @@ export function FocusEditor({
                             )}
                         </div>
                     </div>
-                </div>
+                </fieldset>
 
                 {/* EDITOR FOOTER */}
                 <div className="grid grid-cols-1 gap-3 border-t border-slate-800 bg-slate-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:flex md:items-center md:justify-between md:px-12">
-                    <button
-                        disabled={(isRecording && activeVoiceUpdateId === editingTask.id) || isDeleting || isSaving}
+                    {hasSavedIdentity ? <button
+                        disabled={(isRecording && activeVoiceUpdateId === editingTask.id) || isBusy}
                         onClick={() => { void deleteTask(); }}
                         className={`surface-action min-h-11 px-4 text-xs uppercase md:px-6 md:text-sm ${isRecording && activeVoiceUpdateId === editingTask.id ? 'cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-600' : 'border-red-500/20 bg-red-600/10 text-red-400 hover:bg-red-600 hover:text-white'}`}
                     >
                         {isDeleting ? 'Mažu…' : 'Odstranit záznam'}
-                    </button>
+                    </button> : <button type="button" disabled={isBusy} onClick={requestClose} className="surface-action min-h-11 border-slate-700 bg-slate-800 px-4 text-sm text-slate-300 hover:bg-slate-700">Zrušit</button>}
 
                     <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:justify-end">
-                        {editingTask.type === 'task' && (
+                        {hasSavedIdentity && editingTask.type === 'task' && (
                             <button
                                 type="button"
                                 onClick={toggleWholeTask}
-                                disabled={isTogglingTask}
+                                disabled={isBusy}
                                 aria-pressed={editingTask.status === 'completed'}
                                 aria-busy={isTogglingTask}
                                 className={`surface-action min-w-0 gap-2 px-4 text-xs uppercase md:px-6 md:text-sm ${editingTask.status === 'completed' ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-200 hover:border-emerald-500/60'} disabled:opacity-50 disabled:cursor-wait`}
@@ -401,8 +431,9 @@ export function FocusEditor({
                                 {isTogglingTask ? 'Ukládám…' : editingTask.status === 'completed' ? 'Znovu otevřít' : 'Označit splněno'}
                             </button>
                         )}
-                        {editingTask.type === 'meeting' && !editingTask.isGoogleTask && hasUsableAuth(googleAuth) && (
+                        {hasSavedIdentity && editingTask.type === 'meeting' && !editingTask.isGoogleTask && hasUsableAuth(googleAuth) && (
                             <button
+                                disabled={isBusy}
                                 onClick={() => handleSyncToGoogle(editingTask)}
                                 className={`surface-action min-w-0 gap-2 px-5 text-xs uppercase md:text-sm ${editingTask.googleEventId ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-emerald-400 border-emerald-500/30'}`}
                             >
@@ -413,12 +444,12 @@ export function FocusEditor({
 
                         <button
                             onClick={() => { void saveTask(); }}
-                            disabled={isSaving || isDeleting}
+                            disabled={isBusy}
                             aria-busy={isSaving}
                             className="surface-action min-w-0 gap-2 border-indigo-500/40 bg-indigo-600 px-6 text-xs uppercase text-white shadow-xl shadow-indigo-600/30 hover:bg-indigo-500 disabled:cursor-wait disabled:opacity-60 md:px-10"
                         >
                             <Save className="h-4 w-4" />
-                            {isSaving ? 'Ukládám…' : 'Uložit změny'}
+                            {isSaving ? 'Ukládám…' : hasSavedIdentity ? 'Uložit změny' : 'Vytvořit záznam'}
                         </button>
                     </div>
                 </div>
@@ -475,6 +506,7 @@ function DurationAllDayEditor({
             <button
                 type="button"
                 onClick={handleAllDayToggle}
+                aria-pressed={isAllDay}
                 disabled={isGoogleTask}
                 className={`w-full flex items-center justify-between gap-3 p-3 rounded-xl border transition-[background-color,border-color,color,opacity,transform] ${isAllDay ? 'bg-amber-500/10 border-amber-500/40 shadow-lg shadow-amber-500/5' : 'bg-slate-800/40 border-slate-700/60 hover:border-slate-600'} ${isGoogleTask ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer active:scale-[0.99]'}`}
             >

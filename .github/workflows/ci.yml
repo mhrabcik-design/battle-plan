@@ -1,0 +1,41 @@
+name: Validate pull request
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: battle-plan
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: battle-plan/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Theme contract
+        run: npm run check:theme
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+        env:
+          BP_BUILD_COMMIT: ${{ github.sha }}
