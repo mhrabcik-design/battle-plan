@@ -6,7 +6,7 @@ import Dexie from 'dexie';
 
 import { BattlePlanDB, type Task } from '../db.ts';
 import type { AgentSuggestion, AgentSuggestionReply } from './suggestionsSync.ts';
-import { effectiveSuggestionStatus, SuggestionRegistry } from './suggestionRegistry.ts';
+import { effectiveSuggestionStatus, SuggestionRegistry, SuggestionRegistryConflictError } from './suggestionRegistry.ts';
 
 const databases: BattlePlanDB[] = [];
 
@@ -41,6 +41,18 @@ function suggestion(overrides: Partial<AgentSuggestion> = {}): AgentSuggestion {
         status: 'open',
         reply_count: 0,
         last_reply_at: null,
+        ...overrides,
+    };
+}
+
+function reply(overrides: Partial<AgentSuggestionReply> = {}): AgentSuggestionReply {
+    return {
+        id: 'reply-comment',
+        suggestion_id: 'proposal-old',
+        created_at: 250,
+        type: 'text',
+        content: 'Doplň podklady.',
+        action: null,
         ...overrides,
     };
 }
@@ -348,4 +360,140 @@ test('replaying an unchanged snapshot does not rewrite stored registry rows', as
     database.suggestionDecisions.hook('updating', () => { writes++; });
     await registry.mergeSnapshot(snapshot);
     assert.equal(writes, 0, 'already merged history should not trigger database writes');
+});
+
+test('legacy replies use a confirmed alias owner and preserve their metadata on replay', async () => {
+    const database = createDatabase();
+    const registry = new SuggestionRegistry(database);
+    const original = suggestion({ subject_id: 'tax.series', occurrence_key: 'tax.july' });
+    const alias = suggestion({
+        id: 'proposal-alias',
+        subject_id: 'tax.alias',
+        occurrence_key: 'tax.july-alias',
+    });
+    await registry.ingestLegacy([original, alias], []);
+    await registry.confirmSameOccurrence(alias, 'tax.july', 200);
+    const replies = [
+        reply({ suggestion_id: alias.id }),
+        reply({
+            id: 'reply-deferred', suggestion_id: alias.id, created_at: 300,
+            type: 'action', action: 'defer', content: 'Později.',
+            action_data: { defer_until: '2026-08-20' },
+        }),
+        reply({
+            id: 'reply-invalid-defer', suggestion_id: alias.id,
+            type: 'action', action: 'defer', action_data: { defer_until: 'invalid' },
+        }),
+        reply({
+            id: 'reply-converted', suggestion_id: alias.id, created_at: 400,
+            type: 'action', action: 'accept', content: 'Převedeno.',
+            action_data: { convert_to_task: true },
+        }),
+    ];
+
+    await registry.ingestLegacy([alias], replies);
+
+    const legacyReplies = (await registry.exportSnapshot()).decisions
+        .filter((row) => row.id.startsWith('legacy-reply:'));
+    const identity = { subjectId: 'tax.series', occurrenceKey: 'tax.july', suggestionId: alias.id };
+    assert.deepEqual(legacyReplies, [
+        { id: 'legacy-reply:reply-comment', ...identity, kind: 'commented', comment: 'Doplň podklady.', createdAt: 250 },
+        { id: 'legacy-reply:reply-converted', ...identity, kind: 'converted', comment: 'Převedeno.', taskId: undefined, createdAt: 400 },
+        { id: 'legacy-reply:reply-deferred', ...identity, kind: 'deferred', comment: 'Později.', deferUntil: Date.parse('2026-08-20T00:00:00'), createdAt: 300 },
+    ]);
+    await database.suggestionDecisions.update('legacy-reply:reply-converted', {
+        taskId: 42, taskPublicId: 'task-public-42', publishedAt: 500,
+    });
+    const beforeReplay = await registry.exportSnapshot(600);
+    await registry.ingestLegacy([alias], replies);
+
+    assert.deepEqual(await registry.exportSnapshot(600), beforeReplay);
+    assert.equal((await registry.resolve(alias, 600)).state, 'processed');
+});
+
+test('legacy replies use the last duplicate proposal id and ignore unknown proposals', async () => {
+    const database = createDatabase();
+    const registry = new SuggestionRegistry(database);
+    const first = suggestion({
+        subject_id: 'tax.series', occurrence_key: 'tax.july',
+        status: 'rejected', status_updated_at: 150,
+    });
+    const last = suggestion({ subject_id: 'tax.series', occurrence_key: 'tax.august' });
+
+    await registry.ingestLegacy([first, last], [
+        reply(),
+        reply({ id: 'reply-unknown', suggestion_id: 'unknown', action: 'accept' }),
+    ]);
+
+    assert.deepEqual((await registry.exportSnapshot()).decisions, [
+        {
+            id: 'legacy-reply:reply-comment', subjectId: 'tax.series', occurrenceKey: 'tax.august',
+            suggestionId: last.id, kind: 'commented', comment: 'Doplň podklady.', createdAt: 250,
+        },
+        {
+            id: 'legacy-status:proposal-old:rejected:150', subjectId: 'tax.series', occurrenceKey: 'tax.july',
+            suggestionId: first.id, kind: 'rejected', createdAt: 150,
+        },
+    ]);
+    assert.equal((await registry.resolve(first)).state, 'processed');
+    assert.equal((await registry.resolve(last)).state, 'commented');
+});
+
+test('an ambiguous occurrence alias rolls back all rows from the legacy ingest', async () => {
+    const database = createDatabase();
+    const registry = new SuggestionRegistry(database);
+    const owners = ['first', 'second'].map((id) => suggestion({
+        id, subject_id: id, occurrence_key: id,
+    }));
+    const ambiguous = suggestion({ subject_id: 'alias', occurrence_key: 'alias' });
+    await registry.ingestLegacy([...owners, ambiguous], []);
+    for (const owner of owners) {
+        await database.suggestionOccurrences.update(owner.id, { aliases: ['alias'] });
+    }
+    const before = await registry.exportSnapshot(1_000);
+    const fresh = suggestion({ id: 'fresh', subject_id: 'fresh', occurrence_key: 'fresh', status: 'accepted' });
+
+    await assert.rejects(
+        () => registry.ingestLegacy([fresh, ambiguous], [reply()]),
+        (error: unknown) => error instanceof SuggestionRegistryConflictError
+            && error.message === 'occurrence alias alias has multiple owners',
+    );
+
+    assert.deepEqual(await registry.exportSnapshot(1_000), before);
+});
+
+test('legacy ingest rolls back identity rows when a reply cannot be persisted', async () => {
+    const database = createDatabase();
+    const registry = new SuggestionRegistry(database);
+    database.suggestionDecisions.hook('creating', () => {
+        throw new Error('legacy-reply-write-failed');
+    });
+
+    await assert.rejects(() => registry.ingestLegacy([suggestion()], [reply()]), /legacy-reply-write-failed/);
+
+    assert.equal(await database.suggestionSubjects.count(), 0);
+    assert.equal(await database.suggestionOccurrences.count(), 0);
+    assert.equal(await database.suggestionDecisions.count(), 0);
+});
+
+test('legacy ingest ensures each proposal identity once for a large reply history', async (t) => {
+    const database = createDatabase();
+    const registry = new SuggestionRegistry(database);
+    const ensureIdentity = t.mock.method(registry as unknown as {
+        ensureIdentityRows(suggestion: AgentSuggestion, now?: number): Promise<unknown>;
+    }, 'ensureIdentityRows');
+    const proposals = Array.from({ length: 100 }, (_, index) => suggestion({
+        id: `proposal-${index}`, subject_id: `subject-${index}`, occurrence_key: `occurrence-${index}`,
+    }));
+    const replies = Array.from({ length: 500 }, (_, index) => reply({
+        id: `reply-${index}`, suggestion_id: proposals[index % proposals.length].id,
+        created_at: 300 + index,
+    }));
+
+    await registry.ingestLegacy(proposals, replies);
+
+    assert.equal(await database.suggestionSubjects.count(), 100);
+    assert.equal(await database.suggestionOccurrences.count(), 100);
+    assert.equal(await database.suggestionDecisions.count(), 500);
+    assert.equal(ensureIdentity.mock.callCount(), 100);
 });

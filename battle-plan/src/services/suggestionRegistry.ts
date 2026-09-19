@@ -384,7 +384,6 @@ export class SuggestionRegistry {
         suggestions: readonly AgentSuggestion[],
         replies: readonly AgentSuggestionReply[],
     ): Promise<void> {
-        const byId = new Map(suggestions.map((suggestion) => [suggestion.id, suggestion]));
         await this.database.transaction(
             'rw',
             this.database.suggestionSubjects,
@@ -392,6 +391,7 @@ export class SuggestionRegistry {
             this.database.suggestionDecisions,
             this.database.agentProtocolOutbox,
             async () => {
+                const identitiesByProposalId = new Map<string, { subjectId: string; occurrenceKey: string }>();
                 const existingDecisions = new Map(
                     (await this.database.suggestionDecisions.toArray())
                         .map((decision) => [decision.id, decision]),
@@ -416,6 +416,9 @@ export class SuggestionRegistry {
                 };
                 for (const suggestion of suggestions) {
                     const { subject, occurrence } = await this.ensureIdentityRows(suggestion, suggestion.created_at);
+                    // Ingest never changes occurrence aliases, so these IDs stay valid
+                    // within this transaction. The last duplicate proposal ID wins.
+                    identitiesByProposalId.set(suggestion.id, { subjectId: subject.id, occurrenceKey: occurrence.id });
                     const kind = statusDecisionKind(suggestion.status);
                     if (!kind) continue;
                     // The legacy status carries no resume date. A dated reply
@@ -433,17 +436,16 @@ export class SuggestionRegistry {
                 }
 
                 for (const reply of replies) {
-                    const suggestion = byId.get(reply.suggestion_id);
-                    if (!suggestion) continue;
-                    const { subject, occurrence } = await this.ensureIdentityRows(suggestion, reply.created_at);
+                    const identity = identitiesByProposalId.get(reply.suggestion_id);
+                    if (!identity) continue;
                     const kind = replyDecisionKind(reply);
                     const deferUntil = kind === 'deferred' ? parseDeferUntil(reply) : undefined;
                     if (kind === 'deferred' && deferUntil == null) continue;
                     await putLegacyDecision({
                         id: `legacy-reply:${reply.id}`,
-                        subjectId: subject.id,
-                        occurrenceKey: occurrence.id,
-                        suggestionId: suggestion.id,
+                        subjectId: identity.subjectId,
+                        occurrenceKey: identity.occurrenceKey,
+                        suggestionId: reply.suggestion_id,
                         kind,
                         ...(reply.content ? { comment: reply.content } : {}),
                         ...(deferUntil != null ? { deferUntil } : {}),
