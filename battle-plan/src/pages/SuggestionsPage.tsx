@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { AnimatePresence } from 'framer-motion';
-import { Inbox, RefreshCw, Filter } from 'lucide-react';
+import { Inbox, RefreshCw, CheckCheck, AlertCircle, ArrowDown } from 'lucide-react';
 import {
   suggestionsSync,
   type AgentSuggestion,
@@ -25,6 +24,7 @@ import {
 } from '../utils/suggestionSyncDiagnostics';
 
 type FilterMode = 'all' | 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted';
+const PAGE_SIZE = 20;
 
 const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
   { value: 'all', label: 'Vše' },
@@ -46,8 +46,10 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const [suggestions, setSuggestions] = useState<AgentSuggestion[]>([]);
   const [repliesBySuggestion, setRepliesBySuggestion] = useState<Record<string, AgentSuggestionReply[]>>({});
   const [resolutionsBySuggestion, setResolutionsBySuggestion] = useState<Record<string, SuggestionResolution>>({});
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterMode>('open');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [expandedTextFor, setExpandedTextFor] = useState<string | null>(null);
   const loadInFlightRef = useRef(false);
@@ -77,9 +79,11 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     if (loadInFlightRef.current) return;
     loadInFlightRef.current = true;
     setIsLoading(true);
+    setLoadError(null);
     try {
       await suggestionsSync.init();
       if (!suggestionsSync.initialized) {
+        setLoadError('Složka s návrhy zatím není dostupná. Nech dokončit první synchronizaci s Google Drive a zkus to znovu.');
         onAddLog('SuggestionsSync: BP složka nenalezena. Otevři BP app a nech poprvé synchronizovat.', 'error');
         return;
       }
@@ -93,6 +97,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         const message = suggestionsResult.kind === 'error'
           ? suggestionsResult.message
           : suggestionsResult.status.message;
+        setLoadError(`Návrhy se nepodařilo načíst. ${message}`);
         onAddLog(`Suggestions: Návrhy se nepodařilo načíst (${message})`, 'error');
         return;
       }
@@ -100,6 +105,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
 
       const snapshot = resolveSuggestionsSnapshot(sugs, repliesResult);
       if (snapshot.kind === 'preserve') {
+        setLoadError('Odpovědi se nepodařilo načíst. Zobrazuji poslední úplný stav; zkus obnovení.');
         console.error(snapshot.message);
         onAddLog(snapshot.message, 'error');
         return;
@@ -113,6 +119,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         setRepliesBySuggestion({});
         setResolutionsBySuggestion({});
         setExpandedTextFor(null);
+        setLoadError('Nepodařilo se ověřit předchozí rozhodnutí. Návrhy zpřístupním po úspěšném obnovení, aby nevznikly duplicitní úkoly.');
         onAddLog(`Suggestions: Návrhy jsou pozastavené, dokud se nenačte registr rozhodnutí (${message})`, 'error');
         return;
       }
@@ -126,6 +133,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         console.warn('Suggestion decision registry publish failed', registryPublish.message);
       }
     } catch (e) {
+      setLoadError('Návrhy se nepodařilo načíst. Zkontroluj připojení a zkus obnovení.');
       console.error('Load suggestions failed', e);
       onAddLog('Suggestions: Nepodařilo se načíst návrhy', 'error');
     } finally {
@@ -151,11 +159,29 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     return c;
   }, [suggestions, resolutionsBySuggestion]);
 
-  const filtered = useMemo(() => {
-    const sorted = [...suggestions].sort((a, b) => b.created_at - a.created_at);
-    if (filter === 'all') return sorted;
-    return sorted.filter((s) => effectiveSuggestionStatus(s, resolutionsBySuggestion[s.id]) === filter);
-  }, [suggestions, resolutionsBySuggestion, filter]);
+  const sorted = useMemo(
+    () => [...suggestions].sort((a, b) => b.created_at - a.created_at),
+    [suggestions],
+  );
+  const filtered = useMemo(
+    () => filter === 'all' ? sorted : sorted.filter((s) => effectiveSuggestionStatus(s, resolutionsBySuggestion[s.id]) === filter),
+    [sorted, resolutionsBySuggestion, filter],
+  );
+  const [previousResults, setPreviousResults] = useState({ filter, items: filtered });
+  if (previousResults.items !== filtered || previousResults.filter !== filter) {
+    // Adjust before committing the render so refresh cannot unmount a card's draft.
+    if (previousResults.filter === filter) {
+      const shownIds = new Set(previousResults.items.slice(0, visibleCount).map((s) => s.id));
+      for (let index = filtered.length - 1; index >= visibleCount; index--) {
+        if (shownIds.has(filtered[index].id)) {
+          setVisibleCount(index + 1);
+          break;
+        }
+      }
+    }
+    setPreviousResults({ filter, items: filtered });
+  }
+  const visibleSuggestions = filtered.slice(0, visibleCount);
 
   const acceptAndCreateTask = async (suggestion: AgentSuggestion) => {
     setProcessingId(suggestion.id);
@@ -529,72 +555,105 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
 
   if (!hasUsableAuth(googleAuth)) {
     return (
-      <div className="p-12 text-center">
-        <Inbox className="w-12 h-12 text-slate-700 mx-auto mb-4" />
-        <p className="text-slate-400 font-bold uppercase text-xs tracking-widest mb-2">
+      <div className="rounded-2xl border border-[var(--surface-border)] bg-[var(--surface-1)] px-6 py-14 text-center">
+        <Inbox className="mx-auto mb-4 h-10 w-10 text-indigo-400" aria-hidden="true" />
+        <h2 className="mb-2 text-lg font-semibold text-[var(--text-primary)]">
           Pro zobrazení návrhů se přihlas ke Googlu
-        </p>
-        <p className="text-slate-600 text-xs">
-          Suggestions panel čte z Anu-BattlePlan složky na Drive. Návrhy můžeš přijmout, zamítnout, odložit nebo smazat.
+        </h2>
+        <p className="mx-auto max-w-md text-sm leading-relaxed text-[var(--text-secondary)]">
+          Připojení najdeš v Nastavení. Návrhy od Anu pak můžeš převést na úkoly, odložit nebo zamítnout.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <section aria-label="Návrhy od Anu" className="min-w-0 space-y-5">
       {/* HEADER */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h2 className="text-base font-black text-white uppercase tracking-tight flex items-center gap-2">
-            <Inbox className="w-4 h-4 text-indigo-400" /> Návrhy od Anu
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[var(--text-muted)]">
+            <Inbox className="h-4 w-4 text-indigo-400" aria-hidden="true" /> OD ANU
+          </div>
+          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-3xl">
+            Návrhy
           </h2>
-          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">
-            {counts.open} nových · {counts.accepted + counts.converted} přijatých · {counts.deferred} odložených · {counts.rejected} zamítnutých
-          </p>
-          <p className="text-[11px] text-slate-500 mt-2 max-w-2xl">
-            Anu sleduje Drive návrhy: přijmi je jako task, zamítni, odlož na později nebo smaž, když už nejsou relevantní.
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-[var(--text-secondary)]">
+            Vyber, co má smysl. Z návrhu vytvoř úkol, nebo ho odlož na vhodnější chvíli.
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
           <button
+            type="button"
             onClick={loadAll}
             disabled={isLoading}
-            className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-slate-800 hover:text-white transition-all disabled:opacity-40 flex items-center gap-1"
+            className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-[var(--control-border)] bg-[var(--surface-1)] px-3 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-2)] disabled:opacity-60"
           >
-            <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+            <RefreshCw aria-hidden="true" className={`h-4 w-4 ${isLoading ? 'motion-safe:animate-spin' : ''}`} />
             Obnovit
           </button>
-          <div className="flex items-center gap-1 bg-slate-900/50 border border-slate-800 rounded-lg p-1">
-            <Filter className="w-3 h-3 text-slate-500 ml-2" />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-[var(--surface-border)] py-3 text-sm text-[var(--text-secondary)]">
+        <span><strong className="font-semibold text-[var(--text-primary)]">{counts.open}</strong> k rozhodnutí</span>
+        <span className="inline-flex items-center gap-1.5"><CheckCheck aria-hidden="true" className="h-4 w-4 text-emerald-500" />{counts.accepted + counts.converted} přijatých</span>
+        <span>{counts.deferred} odložených</span>
+      </div>
+
+      <div role="group" aria-label="Filtrovat návrhy podle stavu" className="grid grid-cols-3 gap-1.5 sm:flex sm:flex-wrap">
             {FILTER_OPTIONS.map((opt) => (
               <button
+                type="button"
                 key={opt.value}
-                onClick={() => setFilter(opt.value)}
-                className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-widest transition-all ${
+                aria-pressed={filter === opt.value}
+                onClick={() => {
+                  if (filter === opt.value) return;
+                  setFilter(opt.value);
+                  setVisibleCount(PAGE_SIZE);
+                  setExpandedTextFor(null);
+                }}
+                className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-medium transition-colors sm:gap-2 sm:px-3 ${
                   filter === opt.value
                     ? 'bg-indigo-600 text-white'
-                    : 'text-slate-500 hover:text-slate-300'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'
                 }`}
               >
                 {opt.label}
+                <span className={`rounded-md px-1.5 py-0.5 text-xs tabular-nums ${filter === opt.value ? 'bg-white/15' : 'bg-[var(--surface-2)] text-[var(--text-muted)]'}`}>
+                  {opt.value === 'all' ? suggestions.length : counts[opt.value]}
+                </span>
               </button>
             ))}
-          </div>
-        </div>
       </div>
 
+      {loadError && (
+        <div role="alert" className="flex items-start gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-[var(--text-primary)]">
+          <AlertCircle aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold">Obnovení se nepodařilo</p>
+            <p className="mt-1 break-words leading-relaxed text-[var(--text-secondary)]">{loadError}</p>
+            <button type="button" onClick={loadAll} disabled={isLoading} className="mt-2 min-h-11 rounded-lg px-2 font-semibold underline underline-offset-4 disabled:opacity-50">Zkusit znovu</button>
+          </div>
+        </div>
+      )}
+
       {/* LIST */}
-      {filtered.length === 0 ? (
-        <div className="p-12 text-center bg-slate-900/20 rounded-3xl border border-dashed border-slate-800">
-          <Inbox className="w-10 h-10 text-slate-700 mx-auto mb-3" />
-          <p className="text-slate-500 font-bold uppercase text-xs tracking-widest">
-            {filter === 'open' ? 'Žádné nové návrhy' : 'Nic v této kategorii'}
-          </p>
+      {isLoading && suggestions.length === 0 ? (
+        <div role="status" className="rounded-2xl border border-[var(--surface-border)] bg-[var(--surface-1)] p-10 text-center text-sm text-[var(--text-secondary)]">
+          <RefreshCw aria-hidden="true" className="mx-auto mb-3 h-6 w-6 text-indigo-400 motion-safe:animate-spin" />
+          Načítám návrhy a ověřuji předchozí rozhodnutí…
+        </div>
+      ) : filtered.length === 0 ? (
+        !loadError && <div className="rounded-2xl border border-dashed border-[var(--control-border)] px-6 py-12 text-center">
+          <CheckCheck aria-hidden="true" className="mx-auto mb-3 h-9 w-9 text-[var(--text-muted)]" />
+          <h3 className="text-base font-semibold text-[var(--text-primary)]">{filter === 'open' ? 'Vše vyřízeno' : 'Žádné návrhy v tomto filtru'}</h3>
+          <p className="mt-2 text-sm text-[var(--text-secondary)]">{filter === 'open' ? 'Až Anu připraví nové návrhy, najdeš je tady.' : 'Zkus jiný stav nebo zobraz všechny návrhy.'}</p>
         </div>
       ) : (
-        <AnimatePresence mode="popLayout">
-          {filtered.map((s) => (
+        <div className="space-y-3">
+          <p role="status" className="text-xs text-[var(--text-muted)]">
+            Zobrazeno {visibleSuggestions.length} z {filtered.length} · od nejnovějších{isLoading ? ' · Obnovuji…' : ''}
+          </p>
+          {visibleSuggestions.map((s) => (
             <SuggestionCard
               key={s.id}
               suggestion={s}
@@ -614,15 +673,15 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
               onConfirmDistinct={(occurrenceKey) => confirmDistinctSuggestion(s, occurrenceKey)}
             />
           ))}
-        </AnimatePresence>
-      )}
-
-      {isLoading && filtered.length === 0 && (
-        <div className="p-8 text-center text-slate-600 text-xs">
-          <RefreshCw className="w-5 h-5 mx-auto mb-2 animate-spin" />
-          Načítám návrhy z Drive…
+          {visibleSuggestions.length < filtered.length && (
+            <div className="flex justify-center pt-2">
+              <button type="button" onClick={() => setVisibleCount((count) => count + PAGE_SIZE)} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-[var(--control-border)] bg-[var(--surface-1)] px-5 py-2 text-sm font-semibold text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-2)]">
+                <ArrowDown aria-hidden="true" className="h-4 w-4" /> Zobrazit dalších {Math.min(PAGE_SIZE, filtered.length - visibleSuggestions.length)}
+              </button>
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </section>
   );
 }

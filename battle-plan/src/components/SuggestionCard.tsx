@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { useId, useState } from 'react';
 import {
   Clock,
   Paperclip,
@@ -27,7 +26,7 @@ interface SuggestionCardProps {
   suggestion: AgentSuggestion;
   resolution?: SuggestionResolution;
   replies: AgentSuggestionReply[];
-  onAccept: (convertToTask: boolean) => Promise<void>;
+  onAccept: () => Promise<void>;
   onReject: () => Promise<void>;
   onDefer: (deferUntil: string) => Promise<void>;
   onTextReply: (text: string) => Promise<void>;
@@ -42,25 +41,25 @@ interface SuggestionCardProps {
 }
 
 const PRIORITY_STYLES = {
-  high: { label: 'Vysoká', className: 'bg-red-500/10 text-red-400 border-red-500/20' },
-  medium: { label: 'Střední', className: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
-  low: { label: 'Nízká', className: 'bg-slate-700/30 text-slate-400 border-slate-600/30' },
+  high: { label: 'Vysoká priorita', dot: 'bg-red-400' },
+  medium: { label: 'Střední priorita', dot: 'bg-amber-400' },
+  low: { label: 'Nízká priorita', dot: 'bg-slate-400' },
 };
 
-const CATEGORY_STYLES = {
-  task: { label: 'Úkol', className: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20' },
-  followup: { label: 'Followup', className: 'bg-violet-500/10 text-violet-300 border-violet-500/20' },
-  preparation: { label: 'Příprava', className: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' },
-  reminder: { label: 'Připomínka', className: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20' },
-  decision: { label: 'Rozhodnutí', className: 'bg-pink-500/10 text-pink-300 border-pink-500/20' },
+const CATEGORY_LABELS = {
+  task: 'Úkol',
+  followup: 'Followup',
+  preparation: 'Příprava',
+  reminder: 'Připomínka',
+  decision: 'Rozhodnutí',
 };
 
-const STATUS_STYLES = {
-  open: { label: 'Otevřený', className: 'bg-slate-800 text-slate-400' },
-  accepted: { label: 'Přijatý', className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
-  rejected: { label: 'Zamítnutý', className: 'bg-red-500/10 text-red-400 border-red-500/20' },
-  deferred: { label: 'Odložen', className: 'bg-amber-600/15 text-amber-300 border-amber-600/25' },
-  converted: { label: 'Hotovo', className: 'bg-emerald-600/15 text-emerald-300 border-emerald-600/25' },
+const STATUS_LABELS = {
+  open: 'Otevřený',
+  accepted: 'Přijatý',
+  rejected: 'Zamítnutý',
+  deferred: 'Odložen',
+  converted: 'Úkol vytvořen',
 };
 
 function formatTimeAgo(ts: number): string {
@@ -109,6 +108,9 @@ export function SuggestionCard({
   expandedTextReply,
   onExpandTextReply,
 }: SuggestionCardProps) {
+  const cardId = useId();
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [conversationExpanded, setConversationExpanded] = useState(false);
   const [textValue, setTextValue] = useState('');
   const [showDeferPicker, setShowDeferPicker] = useState(false);
   const [deferDate, setDeferDate] = useState('');
@@ -196,54 +198,73 @@ export function SuggestionCard({
   };
 
   const priority = PRIORITY_STYLES[suggestion.context.priority] ?? PRIORITY_STYLES.medium;
-  const category = CATEGORY_STYLES[suggestion.category] ?? CATEGORY_STYLES.task;
-  const status = STATUS_STYLES[effectiveStatus] ?? STATUS_STYLES.open;
+  const category = CATEGORY_LABELS[suggestion.category] ?? CATEGORY_LABELS.task;
+  const status = STATUS_LABELS[effectiveStatus] ?? STATUS_LABELS.open;
   const deadlineText = formatDeadline(suggestion.context.deadline);
+  const description = suggestion.description ?? '';
+  const hasLongDescription = description.length > 220 || description.split('\n').length > 3;
 
   return (
-    <motion.article
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`overflow-clip rounded-2xl border bg-slate-900/40 p-5 transition-[background-color,border-color,opacity,transform] ${
-        isResolved
-          ? 'border-emerald-900/40 bg-emerald-950/20 opacity-70'
-          : 'border-slate-800 hover:border-slate-700'
-      }`}
+    <article
+      aria-labelledby={`${cardId}-title`}
+      aria-busy={isProcessing}
+      className="min-w-0 rounded-2xl border border-[var(--surface-border)] bg-[var(--surface-1)] p-4 [overflow-wrap:anywhere] sm:p-5"
     >
-      {/* HEADER: priority + category + status + time */}
-      <div className="flex items-start justify-between mb-3 flex-wrap gap-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest border ${priority.className}`}>
-            <Zap className="w-3 h-3 inline-block mr-1" />
-            {priority.label}
-          </span>
-          <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest border ${category.className}`}>
-            {category.label}
-          </span>
-          <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest border ${status.className}`}>
-            {status.label}
-          </span>
-        </div>
-        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider shrink-0">
-          {formatTimeAgo(suggestion.created_at)}
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-[var(--text-muted)]">
+        <span className="font-medium">{category}</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
+          {priority.label}
         </span>
+        {effectiveStatus !== 'open' && (
+          <span className="rounded-md bg-[var(--surface-2)] px-2 py-1 font-medium text-[var(--text-secondary)]">
+            {status}
+          </span>
+        )}
+        <time dateTime={new Date(suggestion.created_at).toJSON() ?? undefined} className="ml-auto shrink-0">
+          {formatTimeAgo(suggestion.created_at)}
+        </time>
       </div>
 
+      <h3 id={`${cardId}-title`} className="mb-2 text-lg font-semibold leading-snug text-[var(--text-primary)]">
+        {suggestion.title}
+      </h3>
+      {description && (
+        <div className="mb-4">
+          <p
+            id={`${cardId}-description`}
+            className={`whitespace-pre-line text-sm leading-relaxed text-[var(--text-secondary)] ${hasLongDescription && !descriptionExpanded ? 'line-clamp-3' : ''}`}
+          >
+            {description}
+          </p>
+          {hasLongDescription && (
+            <button
+              type="button"
+              aria-expanded={descriptionExpanded}
+              aria-controls={`${cardId}-description`}
+              onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+              className="mt-1 min-h-11 rounded-lg px-1 text-sm font-medium text-[var(--text-secondary)] underline decoration-[var(--control-border)] underline-offset-4 hover:decoration-current"
+            >
+              {descriptionExpanded ? 'Sbalit popis' : 'Zobrazit celý popis'}
+            </button>
+          )}
+        </div>
+      )}
+
       {resolution?.state === 'processed' && suggestion.status === 'open' && (
-        <div role="status" className="mb-3 rounded-xl border border-emerald-700/30 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
-          <span className="font-black uppercase tracking-wider">Již zpracováno</span>
-          <span className="text-emerald-300/70"> · stejná událost byla dříve {resolution.decision?.kind === 'rejected' || resolution.decision?.kind === 'dismissed' ? 'zamítnuta' : 'schválena'}.</span>
+        <div role="status" className="mb-4 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)] px-3 py-3 text-sm text-[var(--text-secondary)]">
+          <span className="font-semibold">Již zpracováno</span>
+          <span> · stejná událost byla dříve {resolution.decision?.kind === 'rejected' || resolution.decision?.kind === 'dismissed' ? 'zamítnuta' : 'schválena'}.</span>
         </div>
       )}
 
       {requiresDuplicateDecision && (
-        <div role="alert" className="mb-3 rounded-xl border border-amber-600/30 bg-amber-950/25 p-3">
-          <div className="flex items-start gap-2 text-amber-200">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <p className="text-xs font-black uppercase tracking-wider">Možná duplicita</p>
-              <p className="mt-1 text-xs text-amber-100/70">
+        <div role="alert" className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+          <div className="flex items-start gap-2 text-[var(--text-primary)]">
+            <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">Možná duplicita</p>
+              <p className="mt-1 text-sm leading-relaxed text-[var(--text-secondary)]">
                 Podobá se dříve zpracované události „{resolution.matchedTitle ?? 'bez názvu'}“. Rozhodni, zda jde o totéž.
               </p>
             </div>
@@ -253,7 +274,7 @@ export function SuggestionCard({
               type="button"
               onClick={() => onConfirmSameOccurrence(resolution.matchedOccurrenceKey!)}
               disabled={isProcessing}
-              className="rounded-lg border border-amber-500/30 bg-amber-600/20 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider text-amber-200 disabled:opacity-40"
+              className="min-h-11 rounded-lg border border-amber-500/40 px-3 text-sm font-semibold text-[var(--text-primary)] hover:bg-amber-500/10 disabled:opacity-40"
             >
               Je to stejné
             </button>
@@ -261,7 +282,7 @@ export function SuggestionCard({
               type="button"
               onClick={() => onConfirmDistinct(resolution.matchedOccurrenceKey!)}
               disabled={isProcessing}
-              className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider text-slate-300 disabled:opacity-40"
+              className="min-h-11 rounded-lg border border-[var(--control-border)] bg-[var(--surface-1)] px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-40"
             >
               Je to nové
             </button>
@@ -269,53 +290,43 @@ export function SuggestionCard({
         </div>
       )}
 
-      {/* TITLE + DESCRIPTION */}
-      <h3 className={`text-base font-black text-white mb-2 ${isResolved ? 'opacity-70' : ''}`}>
-        {suggestion.title}
-      </h3>
-      {suggestion.description && (
-        <p className="text-sm text-slate-400 leading-relaxed mb-3">
-          {suggestion.description}
-        </p>
-      )}
-
-      {/* META: deadline, related, source */}
-      <div className="flex flex-wrap gap-2 mb-3 text-[11px]">
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
         {deadlineText && (
-          <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1">
-            <Clock className="w-3 h-3" /> {deadlineText}
+          <span className="flex items-center gap-1.5 rounded-lg bg-[var(--surface-2)] px-3 py-2">
+            <Clock aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> {deadlineText}
           </span>
         )}
         {!isResolved && (
           <>
-            <div className="flex min-w-0 items-center gap-1 rounded-md bg-slate-800/50 p-1 text-slate-400">
+            <div role="group" aria-label="Termín návrhu" className="flex min-w-0 flex-wrap items-center rounded-lg border border-[var(--surface-border)]">
               <MonthDatePicker
                 value={deadlineInput}
                 onChange={setDeadlineInput}
                 label="Vybrat termín návrhu"
                 disabled={isProcessing}
                 allowClear
-                className="min-h-8 max-w-48 border-0 bg-transparent px-2 py-1 hover:bg-slate-800"
+                className="min-h-11 max-w-48 border-0 bg-transparent px-3 hover:bg-[var(--surface-2)]"
               />
               {deadlineInput !== (suggestion.context.deadline ? new Date(suggestion.context.deadline).toISOString().split('T')[0] : '') && (
                 <button
                   type="button"
                   onClick={handleSaveDeadline}
                   disabled={isProcessing}
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-emerald-400 transition-colors hover:bg-emerald-500/10 hover:text-emerald-300 disabled:opacity-50"
-                  title="Uložit deadline"
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-[var(--text-primary)] hover:bg-[var(--surface-2)] disabled:opacity-50"
                   aria-label="Uložit termín návrhu"
-                >✓</button>
+                >
+                  <Check aria-hidden="true" className="h-4 w-4" />
+                </button>
               )}
             </div>
-            <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1.5">
-              <Zap className="w-3 h-3" />
+            <div className="flex min-w-0 items-center rounded-lg border border-[var(--surface-border)] pl-3">
+              <Zap aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
               <select
+                aria-label="Priorita návrhu"
                 value={priorityInput}
                 onChange={(e) => setPriorityInput(e.target.value as 'high' | 'medium' | 'low')}
                 disabled={isProcessing}
-                className="bg-transparent border-none outline-none text-slate-300 font-mono text-[11px] disabled:opacity-50 cursor-pointer"
-                title="Změnit prioritu"
+                className="min-h-11 min-w-0 cursor-pointer rounded-lg border-none bg-[var(--surface-1)] pl-2 pr-3 text-xs text-[var(--text-secondary)] disabled:opacity-50"
               >
                 <option value="high">Vysoká</option>
                 <option value="medium">Střední</option>
@@ -323,150 +334,184 @@ export function SuggestionCard({
               </select>
               {priorityInput !== suggestion.context.priority && (
                 <button
+                  type="button"
                   onClick={handleSavePriority}
                   disabled={isProcessing}
-                  className="text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
-                  title="Uložit prioritu"
-                >✓</button>
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-[var(--text-primary)] hover:bg-[var(--surface-2)] disabled:opacity-50"
+                  aria-label="Uložit prioritu"
+                >
+                  <Check aria-hidden="true" className="h-4 w-4" />
+                </button>
               )}
-            </span>
+            </div>
           </>
         )}
         {suggestion.context.related_task_ids.length > 0 && (
-          <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 font-mono flex items-center gap-1">
-            <Paperclip className="w-3 h-3" /> task #{suggestion.context.related_task_ids.join(', #')}
+          <span className="flex min-w-0 items-start gap-1.5 px-1 py-2">
+            <Paperclip aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>Úkoly #{suggestion.context.related_task_ids.join(', #')}</span>
           </span>
         )}
         {suggestion.source && (
-          <span className="px-2 py-1 rounded-md bg-slate-800/50 text-slate-500 font-mono">
-            📧 {suggestion.source}
+          <span className="flex min-w-0 items-start gap-1.5 px-1 py-2">
+            <FileText aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{suggestion.source}</span>
           </span>
         )}
       </div>
 
-      {/* THREAD */}
       {replies.length > 0 && (
-        <div className="mb-4 p-3 rounded-xl bg-slate-950/50 border border-slate-800/50 space-y-2">
-          <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-1">
-            <MessageSquare className="w-3 h-3" /> Konverzace ({replies.length})
-          </div>
-          {replies.map((r) => (
-            <div key={r.id} className="flex gap-2 text-[12px] items-start">
-              <span
-                className={`font-bold shrink-0 ${
-                  r.type === 'action' ? 'text-emerald-400' : r.type === 'voice' ? 'text-cyan-400' : 'text-indigo-400'
-                }`}
-              >
-                {r.type === 'action' ? 'Akce' : r.type === 'voice' ? 'Ty' : 'Ty'}
-              </span>
-              <span className="text-slate-500 shrink-0">{formatTimestamp(r.created_at)}</span>
-              {r.type === 'voice' && r.voice_file_id ? (
-                <button
-                  onClick={() => playVoice(r.id)}
-                  className="px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold flex items-center gap-1"
-                >
-                  {playingVoiceId === r.id ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                  {playingVoiceId === r.id ? 'Stop' : 'Přehrát'}
-                </button>
-              ) : r.type === 'action' ? (
-                <span className="text-slate-300">
-                  {r.action === 'accept' && '✅ Přijato'}
-                  {r.action === 'reject' && '❌ Zamítnuto'}
-                  {r.action === 'defer' && `⏰ Odloženo do ${r.action_data?.defer_until || '?'}`}
-                </span>
-              ) : (
-                <span className="text-slate-300">{r.content}</span>
-              )}
+        <details
+          onToggle={(event) => setConversationExpanded(event.currentTarget.open)}
+          className="mb-4 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-bg)]"
+        >
+          <summary className="min-h-11 cursor-pointer rounded-xl px-3 py-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)]">
+            <MessageSquare aria-hidden="true" className="mx-1 inline-block h-3.5 w-3.5" />
+            Konverzace ({replies.length})
+          </summary>
+          {conversationExpanded && (
+            <div className="space-y-3 border-t border-[var(--surface-border)] p-3">
+              {replies.map((reply) => (
+                <div key={reply.id} className="text-sm">
+                  <div className="mb-1 flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                    <span className="font-medium">{reply.type === 'action' ? 'Akce' : 'Ty'}</span>
+                    <time dateTime={new Date(reply.created_at).toJSON() ?? undefined}>{formatTimestamp(reply.created_at)}</time>
+                  </div>
+                  {reply.type === 'voice' && reply.voice_file_id ? (
+                    <button
+                      type="button"
+                      onClick={() => playVoice(reply.id)}
+                      className="flex min-h-11 items-center gap-2 rounded-lg border border-[var(--control-border)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-2)]"
+                    >
+                      {playingVoiceId === reply.id ? <Pause aria-hidden="true" className="h-4 w-4" /> : <Play aria-hidden="true" className="h-4 w-4" />}
+                      {playingVoiceId === reply.id ? 'Pozastavit nahrávku' : 'Přehrát nahrávku'}
+                    </button>
+                  ) : reply.type === 'action' ? (
+                    <p className="text-[var(--text-secondary)]">
+                      {reply.action === 'accept' && 'Přijato'}
+                      {reply.action === 'reject' && 'Zamítnuto'}
+                      {reply.action === 'defer' && `Odloženo do ${reply.action_data?.defer_until || '?'}`}
+                    </p>
+                  ) : (
+                    <p className="whitespace-pre-line leading-relaxed text-[var(--text-secondary)]">{reply.content}</p>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </details>
       )}
 
-      {/* TEXT REPLY INLINE */}
-      <AnimatePresence initial={false}>
       {expandedTextReply && !isResolved && (
-        <motion.div key="text-reply" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-3 space-y-2 overflow-hidden rounded-xl border border-slate-800/50 bg-slate-950/50 p-3">
+        <div id={`${cardId}-reply`} className="mb-4 space-y-3 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-bg)] p-3">
+          <label htmlFor={`${cardId}-reply-input`} className="block text-sm font-medium text-[var(--text-primary)]">Odpověď pro Anu</label>
           <textarea
+            id={`${cardId}-reply-input`}
             value={textValue}
             onChange={(e) => setTextValue(e.target.value)}
-            placeholder="Text odpovědi pro Anu…"
+            placeholder="Napiš odpověď…"
             rows={3}
-            className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-600 resize-none"
+            className="w-full resize-y rounded-lg border border-[var(--control-border)] bg-[var(--surface-1)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
             autoFocus
           />
-          <div className="flex gap-2 justify-end">
+          <div className="flex justify-end gap-2">
             <button
+              type="button"
               onClick={() => { onExpandTextReply(false); setTextValue(''); }}
-              className="px-3 py-1.5 rounded-lg text-slate-400 text-[11px] font-black uppercase tracking-widest hover:text-slate-200"
+              className="min-h-11 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)]"
             >
               Zrušit
             </button>
             <button
+              type="button"
               onClick={handleTextSubmit}
               disabled={!textValue.trim() || isProcessing}
-              className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-black uppercase tracking-widest disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500"
+              className="flex min-h-11 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <Check className="w-3 h-3 inline-block mr-1" /> Odeslat
+              <Check aria-hidden="true" className="h-4 w-4" /> Odeslat
             </button>
           </div>
-        </motion.div>
+        </div>
       )}
-      </AnimatePresence>
 
-      {/* DEFER PICKER */}
-      <AnimatePresence initial={false}>
       {showDeferPicker && !isResolved && (
-        <motion.div key="defer-picker" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-3 space-y-2 overflow-hidden rounded-xl border border-slate-800/50 bg-slate-950/50 p-3">
-          <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Odložit do:</div>
+        <div id={`${cardId}-defer`} className="mb-4 space-y-3 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-bg)] p-3">
+          <p className="text-sm font-medium text-[var(--text-primary)]">Odložit do</p>
           <MonthDatePicker
             value={deferDate}
             onChange={setDeferDate}
             label="Odložit návrh do"
             disabled={isProcessing}
-            className="w-full justify-start"
+            className="min-h-11 w-full justify-start"
           />
-          <div className="flex gap-2 justify-end">
+          <div className="flex justify-end gap-2">
             <button
+              type="button"
               onClick={() => { setShowDeferPicker(false); setDeferDate(''); }}
-              className="px-3 py-1.5 rounded-lg text-slate-400 text-[11px] font-black uppercase tracking-widest hover:text-slate-200"
+              className="min-h-11 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)]"
             >
               Zrušit
             </button>
             <button
+              type="button"
               onClick={handleDeferSubmit}
               disabled={!deferDate || isProcessing}
-              className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-[11px] font-black uppercase tracking-widest disabled:opacity-40 hover:bg-amber-500"
+              className="flex min-h-11 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
             >
-              <Hourglass className="w-3 h-3 inline-block mr-1" /> Odložit
+              <Hourglass aria-hidden="true" className="h-4 w-4" /> Odložit
             </button>
           </div>
-        </motion.div>
+        </div>
       )}
-      </AnimatePresence>
 
-      {/* ACTION BUTTONS */}
       {!isResolved && !requiresDuplicateDecision && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2 border-t border-[var(--surface-border)] pt-4">
           <button
-            onClick={() => onAccept(true)}
+            type="button"
+            onClick={onAccept}
             disabled={isProcessing}
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 text-[11px] font-black uppercase tracking-widest border border-emerald-600/30 hover:bg-emerald-600/30 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
+            aria-label="Přijmout a vytvořit úkol"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-40 sm:w-auto"
           >
-            <CheckCircle2 className="w-3 h-3 inline-block mr-1" /> Přijmout + task
+            <CheckCircle2 aria-hidden="true" className="h-4 w-4 shrink-0" /> Vytvořit úkol
           </button>
           <button
+            type="button"
             onClick={onReject}
             disabled={isProcessing}
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-red-600/15 text-red-300 text-[11px] font-black uppercase tracking-widest border border-red-600/25 hover:bg-red-600/25 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-red-500/10 disabled:opacity-40"
           >
-            <X className="w-3 h-3 inline-block mr-1" /> Zamítnout
+            <X aria-hidden="true" className="h-4 w-4" /> Zamítnout
           </button>
           <button
-            onClick={() => setShowDeferPicker((v) => !v)}
+            type="button"
+            onClick={() => setShowDeferPicker((open) => !open)}
             disabled={isProcessing}
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-amber-600/15 text-amber-300 text-[11px] font-black uppercase tracking-widest border border-amber-600/25 hover:bg-amber-600/25 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
+            aria-expanded={showDeferPicker}
+            aria-controls={showDeferPicker ? `${cardId}-defer` : undefined}
+            className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-40"
           >
-            <Hourglass className="w-3 h-3 inline-block mr-1" /> Odložit
+            <Hourglass aria-hidden="true" className="h-4 w-4" /> Odložit
+          </button>
+          <button
+            type="button"
+            onClick={() => onExpandTextReply(!expandedTextReply)}
+            disabled={isProcessing}
+            aria-expanded={expandedTextReply}
+            aria-controls={expandedTextReply ? `${cardId}-reply` : undefined}
+            className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-40 sm:ml-auto"
+          >
+            <MessageSquare aria-hidden="true" className="h-4 w-4" /> Odpovědět
+          </button>
+          <button
+            type="button"
+            onClick={isRecording ? stopVoice : startVoice}
+            disabled={isProcessing}
+            aria-pressed={isRecording}
+            className={`flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] disabled:opacity-40 ${isRecording ? 'bg-red-500/15' : 'hover:bg-[var(--surface-2)]'}`}
+          >
+            <Mic aria-hidden="true" className="h-4 w-4" />
+            {isRecording ? 'Ukončit nahrávání' : 'Hlas'}
           </button>
           <button
             type="button"
@@ -474,40 +519,21 @@ export function SuggestionCard({
               if (window.confirm('Smazat návrh?')) await onDelete();
             }}
             disabled={isProcessing}
+            aria-label="Smazat návrh"
             title="Smazat návrh"
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-slate-800/30 text-slate-500 text-[11px] font-black uppercase tracking-widest border border-slate-700/50 hover:text-red-400 hover:border-red-500/30 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-[var(--text-muted)] hover:bg-red-500/10 disabled:opacity-40"
           >
-            <Trash2 className="w-3 h-3 inline-block mr-1" /> Smazat
-          </button>
-          <div className="flex-1" />
-          <button
-            onClick={() => onExpandTextReply(!expandedTextReply)}
-            disabled={isProcessing}
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-slate-800/50 text-slate-300 text-[11px] font-black uppercase tracking-widest border border-slate-700/50 hover:bg-slate-800 transition-[background-color,border-color,color,opacity] disabled:opacity-40"
-          >
-            <FileText className="w-3 h-3 inline-block mr-1" /> Text
-          </button>
-          <button
-            onClick={isRecording ? stopVoice : startVoice}
-            disabled={isProcessing}
-            className={`min-h-9 px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest border transition-[background-color,border-color,color,opacity] disabled:opacity-40 ${
-              isRecording
-                ? 'bg-red-600/20 text-red-300 border-red-600/30 animate-pulse'
-                : 'bg-slate-800/50 text-slate-300 border-slate-700/50 hover:bg-slate-800'
-            }`}
-          >
-            <Mic className="w-3 h-3 inline-block mr-1" />
-            {isRecording ? 'Stop' : 'Hlas'}
+            <Trash2 aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
       )}
 
       {isResolved && effectiveStatus === 'converted' && (
-        <div className="text-sm text-slate-500 flex items-center gap-1">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          Task je vytvořený v Plánu.
+        <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+          <CheckCircle2 aria-hidden="true" className="h-4 w-4 shrink-0" />
+          Úkol je vytvořený v Plánu.
         </div>
       )}
-    </motion.article>
+    </article>
   );
 }

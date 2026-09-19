@@ -55,7 +55,7 @@ Práce se omezuje na stránku Návrhy, její karty a opakované dohledávání i
 Následující volby jsou pracovní předpoklady autonomní úpravy, nikoli nově potvrzené produktové požadavky:
 
 - Výchozí dávka 20 karet a další dávky po 20 zachovají přístup ke všem návrhům a omezí počáteční vykreslení.
-- Skutečná změna filtru vrátí limit na první dávku; opakovaný klik na aktivní filtr, automatické obnovení a ruční obnovení limit zachovají.
+- Skutečná změna filtru vrátí limit na první dávku; opakovaný klik na aktivní filtr a obnova jej zachovají. Pokud nové položky při obnově posunou dříve viditelnou kartu za hranici, výřez se rozšíří tak, aby tato karta zůstala připojená a neztratila rozepsanou práci.
 - Vizuální úprava použije současný motiv, čitelnější písmo, jasnější hlavní akci a klidnější metadata; nepřidá nové obrazovky.
 - Výkonové přijetí se opře o počty vykreslených karet, počet dohledání identity a srovnatelný lokální benchmark. Číselné zrychlení času není před měřením tvrzeno.
 
@@ -142,6 +142,7 @@ Při filtru či obnově se nesmí přehodit pořadí a počty ani bez důvodu re
 - Po více dávkách jiný filtr resetuje limit, opětovný klik na aktivní filtr jej zachová a celkové počty zahrnují i skryté karty.
 - Návrhy hledaného stavu za první dvacítkou původních dat zůstávají ve výsledku, protože filtrování předchází výřezu.
 - Ruční a automatické obnovení zachovají počet načtených dávek i stabilní ID již viditelných karet.
+- Při příchodu novějšího návrhu zůstane rozepsaná odpověď v původně poslední viditelné kartě zachována; limit se podle potřeby rozšíří. Změna filtru jej nadále resetuje.
 - Po odchodu návrhu z filtru se výřez doplní dalším výsledkem; shodné časy zachovají dosavadní pořadí.
 
 **Verification:** U 200 odpovídajících návrhů se zpočátku vykreslí nejvýše 20 karet místo 200; všech 200 zůstane dostupných. Změřit stejné lokální workloady před a po bez zaměňování DOM počtu za síťovou latenci.
