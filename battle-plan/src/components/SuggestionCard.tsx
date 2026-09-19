@@ -208,16 +208,16 @@ export function SuggestionCard({
     <article
       aria-labelledby={`${cardId}-title`}
       aria-busy={isProcessing}
-      className="min-w-0 rounded-2xl border border-[var(--surface-border)] bg-[var(--surface-1)] p-4 [overflow-wrap:anywhere] sm:p-5"
+      className="suggestion-card min-w-0 rounded-2xl border border-[var(--surface-border)] bg-[var(--surface-1)] p-4 [overflow-wrap:anywhere] sm:p-5"
     >
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-[var(--text-muted)]">
-        <span className="font-medium">{category}</span>
-        <span className="inline-flex items-center gap-1.5">
+        <span data-category={suggestion.category} className="suggestion-chip rounded-md px-2 py-1 font-medium">{category}</span>
+        <span data-priority={suggestion.context.priority} className="suggestion-chip inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-medium">
           <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
           {priority.label}
         </span>
         {effectiveStatus !== 'open' && (
-          <span className="rounded-md bg-[var(--surface-2)] px-2 py-1 font-medium text-[var(--text-secondary)]">
+          <span data-status={effectiveStatus} className="suggestion-chip rounded-md px-2 py-1 font-medium">
             {status}
           </span>
         )}
@@ -252,7 +252,7 @@ export function SuggestionCard({
       )}
 
       {resolution?.state === 'processed' && suggestion.status === 'open' && (
-        <div role="status" className="mb-4 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)] px-3 py-3 text-sm text-[var(--text-secondary)]">
+        <div role="status" data-status={effectiveStatus} className="suggestion-chip mb-4 rounded-xl border border-[var(--surface-border)] px-3 py-3 text-sm">
           <span className="font-semibold">Již zpracováno</span>
           <span> · stejná událost byla dříve {resolution.decision?.kind === 'rejected' || resolution.decision?.kind === 'dismissed' ? 'zamítnuta' : 'schválena'}.</span>
         </div>
@@ -456,7 +456,7 @@ export function SuggestionCard({
               type="button"
               onClick={handleDeferSubmit}
               disabled={!deferDate || isProcessing}
-              className="flex min-h-11 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+              className="flex min-h-11 items-center gap-2 rounded-lg bg-amber-700 px-4 text-sm font-semibold text-on-accent hover:bg-amber-800 disabled:opacity-40"
             >
               <Hourglass aria-hidden="true" className="h-4 w-4" /> Odložit
             </button>
@@ -471,7 +471,7 @@ export function SuggestionCard({
             onClick={onAccept}
             disabled={isProcessing}
             aria-label="Přijmout a vytvořit úkol"
-            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-40 sm:w-auto"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-40 sm:w-auto"
           >
             <CheckCircle2 aria-hidden="true" className="h-4 w-4 shrink-0" /> Vytvořit úkol
           </button>
@@ -479,7 +479,8 @@ export function SuggestionCard({
             type="button"
             onClick={onReject}
             disabled={isProcessing}
-            className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-red-500/10 disabled:opacity-40"
+            data-status="rejected"
+            className="suggestion-action-soft flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium disabled:opacity-40"
           >
             <X aria-hidden="true" className="h-4 w-4" /> Zamítnout
           </button>
@@ -489,7 +490,8 @@ export function SuggestionCard({
             disabled={isProcessing}
             aria-expanded={showDeferPicker}
             aria-controls={showDeferPicker ? `${cardId}-defer` : undefined}
-            className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-40"
+            data-status="deferred"
+            className="suggestion-action-soft flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium disabled:opacity-40"
           >
             <Hourglass aria-hidden="true" className="h-4 w-4" /> Odložit
           </button>
@@ -499,7 +501,8 @@ export function SuggestionCard({
             disabled={isProcessing}
             aria-expanded={expandedTextReply}
             aria-controls={expandedTextReply ? `${cardId}-reply` : undefined}
-            className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-40 sm:ml-auto"
+            data-category="task"
+            className="suggestion-action-soft flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium disabled:opacity-40 sm:ml-auto"
           >
             <MessageSquare aria-hidden="true" className="h-4 w-4" /> Odpovědět
           </button>
@@ -529,7 +532,7 @@ export function SuggestionCard({
       )}
 
       {isResolved && effectiveStatus === 'converted' && (
-        <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+        <div data-status="converted" className="suggestion-color-text flex items-center gap-2 text-sm">
           <CheckCircle2 aria-hidden="true" className="h-4 w-4 shrink-0" />
           Úkol je vytvořený v Plánu.
         </div>

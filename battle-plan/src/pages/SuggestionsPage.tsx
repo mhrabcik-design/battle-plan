@@ -568,7 +568,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   }
 
   return (
-    <section aria-label="Návrhy od Anu" className="min-w-0 space-y-5">
+    <section aria-label="Návrhy od Anu" className="suggestions-colors min-w-0 space-y-5">
       {/* HEADER */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
@@ -594,9 +594,9 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-[var(--surface-border)] py-3 text-sm text-[var(--text-secondary)]">
-        <span><strong className="font-semibold text-[var(--text-primary)]">{counts.open}</strong> k rozhodnutí</span>
-        <span className="inline-flex items-center gap-1.5"><CheckCheck aria-hidden="true" className="h-4 w-4 text-emerald-500" />{counts.accepted + counts.converted} přijatých</span>
-        <span>{counts.deferred} odložených</span>
+        <span data-status="open" className="suggestion-color-text"><strong className="font-semibold">{counts.open}</strong> k rozhodnutí</span>
+        <span data-status="accepted" className="suggestion-color-text inline-flex items-center gap-1.5"><CheckCheck aria-hidden="true" className="h-4 w-4" />{counts.accepted + counts.converted} přijatých</span>
+        <span data-status="deferred" className="suggestion-color-text">{counts.deferred} odložených</span>
       </div>
 
       <div role="group" aria-label="Filtrovat návrhy podle stavu" className="grid grid-cols-3 gap-1.5 sm:flex sm:flex-wrap">
@@ -613,12 +613,12 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
                 }}
                 className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-medium transition-colors sm:gap-2 sm:px-3 ${
                   filter === opt.value
-                    ? 'bg-indigo-600 text-white'
+                    ? 'bg-indigo-600 font-semibold text-white'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'
                 }`}
               >
                 {opt.label}
-                <span className={`rounded-md px-1.5 py-0.5 text-xs tabular-nums ${filter === opt.value ? 'bg-white/15' : 'bg-[var(--surface-2)] text-[var(--text-muted)]'}`}>
+                <span data-status={opt.value} className={`rounded-md px-1.5 py-0.5 text-xs tabular-nums ${filter === opt.value ? 'bg-white/15' : 'suggestion-chip'}`}>
                   {opt.value === 'all' ? suggestions.length : counts[opt.value]}
                 </span>
               </button>
