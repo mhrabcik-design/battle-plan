@@ -9,7 +9,11 @@ Object.defineProperty(globalThis, 'localStorage', {
 const { applySemanticResult } = await import('./semanticEngine.ts');
 const signedOut = { state: 'SIGNED_OUT', accessToken: null } as const;
 
-beforeEach(() => db.tasks.clear());
+beforeEach(async () => {
+    await db.tasks.clear();
+    await db.agentProtocolEvents.clear();
+    await db.agentProtocolEffects.clear();
+});
 after(() => db.close());
 
 async function seedTask() {
@@ -50,6 +54,21 @@ test('voice all-day update removes the stored time and returns preserved identit
     assert.equal(result?.result?.publicId, original.publicId);
     assert.equal(result?.result?.suggestionOccurrenceKey, original.suggestionOccurrenceKey);
     assert.equal(result?.result?.agent_write_id, original.agent_write_id);
+    assert.ok(saved.protocolRevision);
+    assert.equal(await db.agentProtocolEvents.count(), 1);
+});
+
+test('voice editing a linked meeting offline commits a Calendar effect with the new content', async () => {
+    const original = await seedTask();
+    await db.tasks.update(original.id!, { type: 'meeting', googleEventId: 'linked-event' });
+    await applySemanticResult({ title: 'Updated by voice' }, original.id!, signedOut);
+    const effects = await db.agentProtocolEffects.toArray();
+    assert.equal(effects.length, 1);
+    assert.equal(effects[0].kind, 'calendar');
+    assert.equal(effects[0].operation, 'upsert');
+    if (effects[0].kind === 'calendar' && effects[0].operation === 'upsert') {
+        assert.equal(effects[0].payload.title, 'Updated by voice');
+    }
 });
 
 test('voice update does not revive a missing or deleted task', async () => {

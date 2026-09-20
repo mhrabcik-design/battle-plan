@@ -1,12 +1,30 @@
 import { useCallback, useRef, useState } from 'react';
 import { db, type Task } from '../db.ts';
-import { AuthUnavailableError, googleService } from '../services/googleService.ts';
+import { googleService } from '../services/googleService.ts';
 import { applySemanticResult } from '../services/semanticEngine.ts';
 import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types.ts';
 import { hasUsableAuth, isAuthUnavailable } from '../types.ts';
 import type { WeeklySchedulePatch } from '../utils/calendarUtils.ts';
 import { getSchedule, saveWeeklySchedule } from '../services/weeklySchedule.ts';
 import { ensureTaskDeadline } from '../services/taskNormalization.ts';
+import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations, taskMutationTables, type TaskEffectRequest } from '../services/taskMutations.ts';
+import { drainGoogleExternalEffects } from '../services/externalEffectOutbox.ts';
+
+const SYNC_PENDING_MSG = 'Změna je uložená lokálně, ale synchronizace s Googlem zatím není dokončená.';
+
+async function deliverEffects(effectIds: readonly string[]): Promise<boolean> {
+  if (!effectIds.length) return true;
+  try {
+    await drainGoogleExternalEffects(effectIds);
+    const effects = await db.agentProtocolEffects.bulkGet([...effectIds]);
+    return effects.every(effect => effect?.state === 'succeeded');
+  } catch (error) {
+    console.error('Task synchronization remains queued', error);
+    return false;
+  }
+}
+
+const uiMutationContext = () => newTaskMutationContext('ui', undefined, googleService.getAccountId() ?? undefined);
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
@@ -59,20 +77,21 @@ export function useTaskCommands({
   }, [googleAuth, editingTask, setEditingTask]);
 
   const toggleSubtask = useCallback(async (task: UnifiedTask, subTaskId: string) => {
-    if (!task.id || !task.subTasks) return;
-    const newSubTasks = task.subTasks.map(st => st.id === subTaskId ? { ...st, completed: !st.completed } : st);
-    const completedCount = newSubTasks.filter(st => st.completed).length;
-    const newProgress = Math.round((completedCount / newSubTasks.length) * 100);
-    const total = task.totalDuration || task.duration || 0;
-    const newDuration = Math.round(total * (1 - newProgress / 100));
-
-    await db.tasks.update(task.id, {
-      subTasks: newSubTasks,
-      progress: newProgress,
-      duration: newDuration,
-      totalDuration: total,
-      updatedAt: Date.now()
+    if (!task.id || task.isGoogleTask) return;
+    const result = await db.transaction('rw', taskMutationTables(db), async () => {
+      const current = await db.tasks.get(task.id!);
+      if (!current || current.isDeleted || (task.publicId && task.publicId !== current.publicId)
+        || !current.subTasks?.some(subtask => subtask.id === subTaskId)) return null;
+      const subTasks = current.subTasks.map(st => st.id === subTaskId ? { ...st, completed: !st.completed } : st);
+      const progress = Math.round(subTasks.filter(st => st.completed).length / subTasks.length * 100);
+      const totalDuration = current.totalDuration || current.duration || 0;
+      return taskMutations.updateTask({
+        localId: current.id, publicId: current.publicId, context: uiMutationContext(),
+        changes: { subTasks, progress, totalDuration, duration: Math.round(totalDuration * (1 - progress / 100)) },
+        effects: calendarEffectsForLocalTask(current, 'upsert'),
+      });
     });
+    if (result?.status === 'applied') await deliverEffects(result.effectIds);
   }, []);
 
   const handleToggleTask = useCallback(async (task: UnifiedTask): Promise<UnifiedTask | null> => {
@@ -92,24 +111,19 @@ export function useTaskCommands({
       const status: UnifiedTask['status'] = newStatus === 'completed' ? 'completed' : 'pending';
       return { ...task, status, updatedAt: Date.now() };
     } else if (task.id) {
-      const updatedTask = await db.transaction('rw', db.tasks, async () => {
+      const result = await db.transaction('rw', taskMutationTables(db), async () => {
         const current = await db.tasks.get(task.id!);
         if (!current || current.isDeleted || (task.publicId && task.publicId !== current.publicId)) return null;
         const status: Task['status'] = current.status === 'completed' ? 'pending' : 'completed';
-        const updatedAt = Date.now();
-        await db.tasks.update(task.id!, { status, updatedAt });
-        return { ...current, status, updatedAt };
+        const effects: TaskEffectRequest[] = calendarEffectsForLocalTask(current, 'upsert');
+        if (status === 'completed' && current.googleId) effects.push({ kind: 'google_tasks', operation: 'complete' });
+        return taskMutations.updateTask({
+          localId: current.id, publicId: current.publicId, changes: { status }, context: uiMutationContext(), effects,
+        });
       });
-      if (!updatedTask) return null;
-
-      if (updatedTask.googleEventId && hasUsableAuth(googleAuth)) {
-        try {
-          await googleService.addToCalendar(updatedTask);
-        } catch (e) {
-          console.error("Failed to update calendar event on toggle", e);
-        }
-      }
-      return updatedTask;
+      if (result?.status !== 'applied') return null;
+      await deliverEffects(result.effectIds);
+      return result.task;
     }
     return null;
   }, [googleAuth, refreshGoogleTasks]);
@@ -135,22 +149,9 @@ export function useTaskCommands({
     }
 
     if (!task.id) return null;
-    const change = await saveWeeklySchedule(db, task.id, patch, expected);
+    const change = await saveWeeklySchedule(db, task.id, patch, expected, { publicId: task.publicId, context: uiMutationContext() });
     if (!change) return null;
-    const updatedTask = change.after;
-
-    if (task.type === 'meeting' && task.googleEventId && hasUsableAuth(googleAuth)) {
-      const reportSyncFailure = (error?: unknown) => {
-        if (error) console.error('Calendar reschedule sync failed', error);
-        alert('Změna je uložená lokálně, ale synchronizace s Google Kalendářem selhala.');
-      };
-      try {
-        const eventId = await googleService.addToCalendar(updatedTask);
-        if (!eventId) reportSyncFailure();
-      } catch (error) {
-        reportSyncFailure(error);
-      }
-    }
+    if (!await deliverEffects(change.effectIds)) alert(SYNC_PENDING_MSG);
     return change;
   }, [googleAuth, refreshGoogleTasks]);
 
@@ -201,13 +202,16 @@ export function useTaskCommands({
       }
       await refreshGoogleTasks();
     } else if (task.id) {
-      if (task.googleEventId && hasUsableAuth(googleAuth)) {
-        try { await googleService.deleteFromCalendar(task.googleEventId); } catch { /* already deleted */ }
-        if (isAuthUnavailableNow()) {
-          alert(AUTH_UNAVAILABLE_MSG);
-        }
-      }
-      await db.tasks.update(task.id, { isDeleted: true, updatedAt: Date.now() });
+      const result = await db.transaction('rw', taskMutationTables(db), async () => {
+        const current = await db.tasks.get(task.id!);
+        if (!current || current.isDeleted || (task.publicId && task.publicId !== current.publicId)) return null;
+        return taskMutations.archiveTask({
+          localId: current.id, publicId: current.publicId, context: uiMutationContext(),
+          effects: calendarEffectsForLocalTask(current, 'delete'),
+        });
+      });
+      if (result?.status !== 'applied') return false;
+      if (!await deliverEffects(result.effectIds)) alert(SYNC_PENDING_MSG);
     } else return false;
     return true;
   }, [googleAuth, refreshGoogleTasks]);
@@ -236,37 +240,24 @@ export function useTaskCommands({
       } else {
         const taskData = { ...taskToSave };
         delete (taskData as Partial<UnifiedTask>).isGoogleTask;
-        delete (taskData as Partial<UnifiedTask>).googleId;
-        delete (taskData as Partial<UnifiedTask>).googleListId;
-        const savedTask = await db.transaction('rw', db.tasks, async () => {
+        const result = await db.transaction('rw', taskMutationTables(db), async () => {
           if (taskData.id) {
             const current = await db.tasks.get(taskData.id);
             if (!current || current.isDeleted || (taskData.publicId && taskData.publicId !== current.publicId)) return null;
-            await db.tasks.update(taskData.id, { ...taskData, updatedAt: Date.now() });
-          } else {
-            taskData.id = await db.tasks.add({ ...taskData, source: 'user', updatedAt: Date.now() });
+            return taskMutations.updateTask({
+              localId: current.id, publicId: current.publicId, changes: taskData,
+              expectedRevision: taskData.protocolRevision?.revision_id ?? null, context: uiMutationContext(),
+              effects: calendarEffectsForLocalTask({ ...current, type: taskData.type }, 'upsert', hasUsableAuth(googleAuth)),
+            });
           }
-          return db.tasks.get(taskData.id);
+          return taskMutations.createTask({
+            task: { ...taskData, source: 'user' }, context: uiMutationContext(),
+            effects: calendarEffectsForLocalTask(taskData, 'upsert', hasUsableAuth(googleAuth)),
+          });
         });
-        if (!savedTask) return { status: 'failed', message: 'Záznam už není dostupný. Změny nebyly uloženy.' };
-        let syncWarning: string | null = null;
-        if (savedTask.type === 'meeting' && hasUsableAuth(googleAuth)) {
-          try {
-            const eventId = await googleService.addToCalendar(savedTask);
-            if (eventId && eventId !== savedTask.googleEventId) {
-              await db.tasks.update(savedTask.id!, { googleEventId: eventId, updatedAt: Date.now() });
-            }
-            if (!eventId && isAuthUnavailableNow()) {
-              syncWarning = AUTH_UNAVAILABLE_MSG;
-            } else if (!eventId) {
-              syncWarning = 'Změna je uložená lokálně, ale synchronizace s Google Kalendářem selhala.';
-            }
-          } catch (e) {
-            console.error("Save Google sync failed", e);
-            syncWarning = 'Změna je uložená lokálně, ale synchronizace s Google Kalendářem selhala.';
-          }
-        }
-        if (syncWarning) return { status: 'success-sync-warning', message: syncWarning };
+        if (result?.status === 'stale') return { status: 'failed', message: 'Záznam se mezitím změnil. Otevřete jej znovu; rozepsané změny nebyly uloženy.' };
+        if (result?.status !== 'applied') return { status: 'failed', message: 'Záznam už není dostupný. Změny nebyly uloženy.' };
+        if (!await deliverEffects(result.effectIds)) return { status: 'success-sync-warning', message: SYNC_PENDING_MSG };
       }
       return { status: 'success' };
     };
@@ -276,25 +267,23 @@ export function useTaskCommands({
   }, [editingTask, googleAuth, refreshGoogleTasks]);
 
   const handleSyncToGoogle = useCallback(async (task: UnifiedTask) => {
-    if (!task.id || !hasUsableAuth(googleAuth)) {
+    if (!task.id || task.isGoogleTask) {
       return;
     }
     setIsProcessing(true);
     try {
-      const eventId = await googleService.addToCalendar(task);
-      if (eventId) {
-        await db.tasks.update(task.id, { googleEventId: eventId, updatedAt: Date.now() });
-      }
+      const result = await taskMutations.queueEffects({
+        localId: task.id, publicId: task.publicId, context: uiMutationContext(),
+        effects: [{ kind: 'calendar', operation: 'upsert' }],
+      });
+      if (result.status === 'queued' && !await deliverEffects(result.effectIds)) alert(SYNC_PENDING_MSG);
     } catch (err: unknown) {
-      if (err instanceof AuthUnavailableError) {
-        return;
-      }
       const msg = err instanceof Error ? err.message : String(err);
       alert(msg || "Chyba při synchronizaci s Googlem");
     } finally {
       setIsProcessing(false);
     }
-  }, [googleAuth, setIsProcessing]);
+  }, [setIsProcessing]);
 
   const handleExport = useCallback((task: UnifiedTask) => {
     const subTasksText = (task.subTasks || []).map(st => `${st.completed ? '✅' : '☐'} ${st.title}`).join('\n');

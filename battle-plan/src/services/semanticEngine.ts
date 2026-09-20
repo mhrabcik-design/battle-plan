@@ -5,6 +5,8 @@ import { hasUsableAuth } from '../types.ts';
 import { EXACT_TYPE_MAP, normalizeType, clampUrgency, clampIsAllDay, clampProgress, ensureTaskDeadline } from './taskNormalization.ts';
 import type { AppContext } from './appContext.ts';
 import { renderAppContextSection } from './appContext.ts';
+import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations, taskMutationTables } from './taskMutations.ts';
+import { drainGoogleExternalEffects } from './externalEffectOutbox.ts';
 export const getSystemPrompt = (dayName: string, today: string, now: string, contextInfo: string, appContext?: AppContext) => `
 Jsi "Bitevní Plán", elitní AI asistent pro management času a strategické myšlení.
 Tvým posláním je transformovat hlasové pokyny do perfektně strukturovaných dat podle tvého "AI Intelligence Manifestu".
@@ -158,43 +160,44 @@ export function normalizeEntity(
 
 export const applySemanticResult = async (result: unknown, updateId: number | null, googleAuth: GoogleAuthStatus) => {
     try {
+        const context = newTaskMutationContext('voice', undefined, googleService.getAccountId() ?? undefined);
         if (updateId) {
-            const existing = await db.tasks.get(updateId);
-            if (!existing || existing.isDeleted) return null;
-
-            const norm = normalizeEntity(result, 'update', existing);
-            const updated: Task = {
-                ...existing,
-                ...norm.value,
-                updatedAt: Date.now(),
-            };
-            await db.tasks.update(updateId, updated as Partial<Task>);
-            return { updatedId: updateId, result: updated };
+            const applied = await db.transaction('rw', taskMutationTables(db), async () => {
+                const existing = await db.tasks.get(updateId);
+                if (!existing || existing.isDeleted) return null;
+                const norm = normalizeEntity(result, 'update', existing);
+                return taskMutations.updateTask({
+                    localId: updateId, publicId: existing.publicId, changes: norm.value, context,
+                    effects: calendarEffectsForLocalTask(existing, 'upsert'),
+                });
+            });
+            if (applied?.status !== 'applied') return null;
+            await deliverVoiceEffects(applied.effectIds);
+            return { updatedId: updateId, result: applied.task };
         } else {
             const norm = normalizeEntity(result, 'create', undefined);
             const v = norm.value as Partial<Task> & { title: string; type: Task['type']; urgency: 1 | 2 | 3 };
-            const newTaskId = await db.tasks.add({
-                ...v,
-                status: 'pending',
-                updatedAt: Date.now(),
-                createdAt: Date.now()
+            const applied = await taskMutations.createTask({
+                task: { ...v, status: 'pending' }, context,
+                effects: calendarEffectsForLocalTask(v, 'upsert', hasUsableAuth(googleAuth)),
             });
-
-            if (v.type === 'meeting' && hasUsableAuth(googleAuth)) {
-                const addedTask = await db.tasks.get(newTaskId);
-                if (addedTask) {
-                    try {
-                        const eventId = await googleService.addToCalendar(addedTask);
-                        if (eventId) await db.tasks.update(newTaskId, { googleEventId: eventId });
-                    } catch (e) {
-                        console.error("Auto Google sync failed", e);
-                    }
-                }
-            }
-            return { newId: newTaskId };
+            if (applied.status !== 'applied') return null;
+            await deliverVoiceEffects(applied.effectIds);
+            return { newId: applied.task.id };
         }
     } catch (e) {
         console.error("applySemanticResult failed", e);
         throw e;
     }
 };
+
+async function deliverVoiceEffects(effectIds: readonly string[]): Promise<void> {
+    if (!effectIds.length) return;
+    try {
+        await drainGoogleExternalEffects(effectIds);
+    } catch (error) {
+        // The local voice edit is already committed; network failure must not
+        // invite a replay that creates a second task.
+        console.error('Voice Google synchronization remains queued', error);
+    }
+}

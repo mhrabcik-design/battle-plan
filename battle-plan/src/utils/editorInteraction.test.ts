@@ -27,3 +27,13 @@ test('persisting completion keeps unsaved fields dirty across completion and reo
   assert.equal(getEditorTaskSnapshot(applySavedEditorStatus(initial, { status: 'completed', updatedAt: 2 })),
     getEditorTaskSnapshot({ ...initial, status: 'completed', updatedAt: 3 }));
 });
+
+test('persisting completion advances the draft revision without replacing unsaved content', () => {
+  const initial: UnifiedTask = { id: 1, title: 'Saved', type: 'task', urgency: 2, status: 'pending', createdAt: 1, updatedAt: 1 };
+  const protocolRevision: NonNullable<UnifiedTask['protocolRevision']> = { revision_id: 'sha256:new', base_revision: null, mutation_id: 'mutation_new' };
+  const saved = { ...initial, status: 'completed' as const, updatedAt: 2, protocolRevision };
+  const draft = applySavedEditorStatus({ ...initial, title: 'Unsaved title' }, saved);
+  assert.deepEqual(draft.protocolRevision, protocolRevision);
+  assert.equal(draft.title, 'Unsaved title');
+  assert.equal(draft.status, 'completed');
+});
