@@ -1,7 +1,7 @@
 # U4 integration into the current application
 
-This implementation adapts the historic Hermes U4 proposal to main v4.3.73.
-It is pending integration; it does not enable signed v2 command execution.
+This implementation adapts the historic Hermes U4 proposal to the application
+based on main v4.3.73. It does not enable signed v2 command execution.
 The implementation contract is [the integration plan](../../plans/2026-09-20-integrate-hermes-u4-plan.md).
 
 ## Scope and evidence
@@ -31,17 +31,28 @@ Unavailable authentication cannot count as a successful delete; recoverable erro
 do not exhaust a short retry budget. Permanent failures remain visible and can be
 superseded by a corrected, successful effect.
 
+Account identity is verified against each accepted OAuth token before authentication
+becomes usable, including after reload and refresh. Stale identity responses cannot
+replace a newer session. Each delivery attempt has a 60-second deadline; timeout
+revokes its guard and schedules a retry. A drain handles up to four task groups
+concurrently while retaining FIFO within each task.
+
 Current editor locking, occurrence conversion, Drive identity matching, guarded
 schedule-only undo and view-independent backup remain in place. The editor also
-advances its draft revision after an immediate status toggle without discarding
-unsaved text.
+advances its draft revision after an immediate status toggle only when that
+mutation directly descends from the open draft. Unsaved text stays intact, and
+an intervening edit still makes the subsequent save fail as stale.
 
 ## Validation and limits
 
-At the pre-review checkpoint: all 479 tests passed, lint and TypeScript/Vite build
-passed, protocol validator generation matched, and 33 conformance fixtures passed.
+After review corrections: all 502 tests passed, lint, theme contract and
+TypeScript/Vite build passed, protocol validator generation matched, and 33
+conformance fixtures passed.
 Build warnings about chunk size and mixed static/dynamic imports are informational.
-The PR records any subsequent corrections and final counts.
+CE review `battleplan-ce-u4-review-20260920` completed. Confirmed account isolation,
+stale editor, stalled delivery and rollback coverage findings were corrected;
+independent verification of the authentication correction found no further blocker.
+The optional Claude review could not run because its CLI rejected `--safe-mode`.
 
 Browser checks run on an isolated local origin without a Google account. The
 real-account OAuth/Calendar smoke check is not covered by the simulated server.

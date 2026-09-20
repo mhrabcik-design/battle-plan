@@ -20,8 +20,7 @@ The historic Hermes U4 branch proposed an atomic task mutation service and Googl
 outbox. Applying that branch unchanged would discard newer editor, suggestion
 identity, schedule-undo and Drive-merge guarantees. Its local lease alone also
 could not prevent an already-issued HTTP request from overwriting a newer remote
-edit. The September integration adapts those ideas to the current callers; its
-release is pending merge at the time of this record.
+edit. The September integration adapts those ideas to the current callers.
 
 ## Guidance
 
@@ -63,6 +62,24 @@ when the first response is lost.
 Authentication and offline waits remain retryable. A permanent rejected effect is
 retained for diagnostics but permits a corrected successor; recovery creates a
 snapshot of current desired state instead of replaying an obsolete failed row.
+
+The cached Google email is only a login hint, not proof of the current token's
+account. Re-consent can return a token for another account. Verify userinfo for
+each accepted token, including restored and refreshed tokens, before exposing
+usable authentication. Capture the token and session generation so a late
+identity response cannot restore a signed-out or replaced session. Keep the
+effect's original account binding throughout this process.
+
+Lease renewal also needs a finite execution deadline. A request that never
+settles otherwise renews its lease forever and holds the scheduler open. Expire
+the local attempt guard before scheduling a retry; a late response must neither
+acknowledge success nor issue a follow-up write. Already-issued Calendar writes
+still rely on the stable identity and ETag protection above.
+
+An editor's status toggle must not grant a newer revision to an older draft.
+Advance its revision only when the saved mutation's base revision matches the
+draft's revision. Copying the latest revision while retaining old title or
+schedule fields would make the later stale save appear valid.
 
 ## When to Apply
 

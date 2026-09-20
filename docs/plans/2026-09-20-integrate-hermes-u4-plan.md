@@ -269,3 +269,19 @@ Report any real-account Google smoke check that cannot be performed without new 
 - Review findings affecting data integrity, duplicate effects, ordering, or misleading save feedback are resolved.
 - Documentation describes the actual implementation and its remote-delivery limits.
 - Abandoned code and experimental changes are removed from the final diff.
+
+## Execution Record
+
+Completed U1–U5 on 2026-09-21. R1–R5 are covered by the common mutation boundary,
+revision conflict tests and composed suggestion/import rollback tests. R6–R9 are
+covered by account-verified delivery, persistent ordered effects, stable Calendar
+identity, conditional remote writes, fenced acknowledgement and finite retries.
+R10–R11 retain the editor, schedule-only undo, backup/hydration and disabled v2
+runtime behavior.
+
+Final validation: 502 tests, lint, theme contract, TypeScript/Vite build and all 33
+protocol conformance fixtures passed. Local browser create/edit, status toggles
+with unsaved text, schedule/undo, diagnostics and reload were exercised. CE review
+and independent verification of its authentication corrections completed; the
+confirmed findings were fixed. Live authenticated Google smoke testing remains
+unverified because the isolated browser had no Google account.
