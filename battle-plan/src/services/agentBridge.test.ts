@@ -106,6 +106,7 @@ type GoogleServiceInternalState = {
     accessToken: string | null;
     expiresAt: number;
     userEmail: string | null;
+    verifiedAccount: { token: string; accountId: string } | null;
     trySilentRefresh: () => Promise<boolean>;
 };
 
@@ -134,6 +135,7 @@ function setGoogleServiceState(state: {
     if (state.accessToken !== undefined) svc.accessToken = state.accessToken;
     if (state.expiresAt !== undefined) svc.expiresAt = state.expiresAt;
     if (state.userEmail !== undefined) svc.userEmail = state.userEmail;
+    svc.verifiedAccount = svc.accessToken && svc.userEmail ? { token: svc.accessToken, accountId: svc.userEmail } : null;
 }
 
 async function resetDb() {

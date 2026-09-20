@@ -91,6 +91,7 @@ type GoogleServiceInternalState = {
     accessToken: string | null;
     expiresAt: number;
     userEmail: string | null;
+    verifiedAccount: { token: string; accountId: string } | null;
     trySilentRefresh: () => Promise<boolean>;
     getAuthState: () => string;
     getAuthStatus: () => { state: string; accessToken: string | null };
@@ -127,6 +128,9 @@ function setGoogleServiceState(state: {
     if (state.accessToken !== undefined) svc.accessToken = state.accessToken;
     if (state.expiresAt !== undefined) svc.expiresAt = state.expiresAt;
     if (state.userEmail !== undefined) svc.userEmail = state.userEmail;
+    // Drive tests start after Google initialization/userinfo has verified the
+    // session; a cached email alone no longer authorizes a stored bearer.
+    svc.verifiedAccount = svc.accessToken && svc.userEmail ? { token: svc.accessToken, accountId: svc.userEmail } : null;
 }
 
 test('buildDriveFileMetadata puts a new file into the BattlePlan Drive folder', () => {
@@ -383,10 +387,9 @@ test('U4: expired token (state REFRESH_PENDING), refresh succeeds — getAccessT
 
     const svc = googleService as unknown as GoogleServiceInternalState;
     let refreshCalls = 0;
-    svc.trySilentRefresh = async function (this: GoogleServiceInternalState) {
+    svc.trySilentRefresh = async () => {
         refreshCalls++;
-        this.accessToken = 'refreshed-live-token';
-        this.expiresAt = Date.now() + 60 * 60 * 1000;
+        setGoogleServiceState({ accessToken: 'refreshed-live-token', expiresAt: Date.now() + 60 * 60 * 1000 });
         return true;
     };
 
@@ -419,11 +422,10 @@ test('concurrent Drive initialization shares one silent refresh flight', async (
     const refreshPending = new Promise<void>((resolve) => {
         releaseRefresh = resolve;
     });
-    svc.trySilentRefresh = async function (this: GoogleServiceInternalState) {
+    svc.trySilentRefresh = async () => {
         refreshCalls++;
         await refreshPending;
-        this.accessToken = 'refreshed-live-token';
-        this.expiresAt = Date.now() + 60 * 60 * 1000;
+        setGoogleServiceState({ accessToken: 'refreshed-live-token', expiresAt: Date.now() + 60 * 60 * 1000 });
         return true;
     };
 

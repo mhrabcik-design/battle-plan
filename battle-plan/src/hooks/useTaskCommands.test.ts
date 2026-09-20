@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { db, type Task } from '../db.ts';
 import type { GoogleAuthStatus, UnifiedTask } from '../types.ts';
+import { applySavedEditorStatus } from '../utils/editorInteraction.ts';
 
 Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -204,6 +205,47 @@ test('stale editor cannot overwrite a task changed after opening', async () => {
     assert.equal((await staleEditor.handleSaveEdit()).status, 'failed');
     assert.equal((await db.tasks.get(id))?.title, 'Novější název');
     assert.equal(await db.agentProtocolEvents.count(), 1);
+});
+
+test('completion cannot authorize a stale draft to overwrite a newer title or schedule', async () => {
+    assert.equal((await commandsFor(draft({
+        title: 'Original title', deadline: '2026-10-02', startTime: '09:00',
+    })).handleSaveEdit()).status, 'success');
+    const opened = (await db.tasks.toArray())[0];
+    const dirty = { ...opened, description: 'Unsaved editor notes' };
+
+    assert.equal((await commandsFor({
+        ...opened, title: 'Newer title', deadline: '2026-10-05', startTime: '14:00',
+    }).handleSaveEdit()).status, 'success');
+    const completed = await commandsFor(dirty).handleToggleTask(dirty);
+    assert.ok(completed);
+    const draftAfterCompletion = applySavedEditorStatus(dirty, completed);
+    const beforeSave = (await db.tasks.get(opened.id!))!;
+    assert.equal(beforeSave.title, 'Newer title');
+    assert.equal(beforeSave.deadline, '2026-10-05');
+    assert.equal(beforeSave.startTime, '14:00');
+    assert.equal(beforeSave.status, 'completed');
+    assert.equal(draftAfterCompletion.description, 'Unsaved editor notes');
+
+    assert.equal((await commandsFor(draftAfterCompletion).handleSaveEdit()).status, 'failed');
+    assert.deepEqual(await db.tasks.get(opened.id!), beforeSave);
+    assert.equal(await db.agentProtocolEvents.count(), 3);
+});
+
+test('completion of a current editor draft still permits saving its unsaved text', async () => {
+    assert.equal((await commandsFor(draft({ title: 'Saved title' })).handleSaveEdit()).status, 'success');
+    const opened = (await db.tasks.toArray())[0];
+    const dirty = { ...opened, title: 'Unsaved title', description: 'Unsaved editor notes' };
+    const completed = await commandsFor(dirty).handleToggleTask(dirty);
+    assert.ok(completed);
+    const draftAfterCompletion = applySavedEditorStatus(dirty, completed);
+
+    assert.equal((await commandsFor(draftAfterCompletion).handleSaveEdit()).status, 'success');
+    const saved = (await db.tasks.get(opened.id!))!;
+    assert.equal(saved.title, 'Unsaved title');
+    assert.equal(saved.description, 'Unsaved editor notes');
+    assert.equal(saved.status, 'completed');
+    assert.equal(await db.agentProtocolEvents.count(), 3);
 });
 
 test('editing a linked meeting while signed out commits its change and durable Calendar effect', async () => {

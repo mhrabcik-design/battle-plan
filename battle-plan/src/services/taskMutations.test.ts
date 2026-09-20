@@ -65,17 +65,29 @@ test('pending Calendar create, edit and archive keep one target with durable ord
     assert.equal((await db.tasks.get(created.task.id!))?.googleEventId, undefined);
 });
 
-test('an enclosing transaction rolls back the mutation and surrounding work', async (t) => {
+test('an enclosing transaction rolls back a persisted Calendar effect and surrounding work', async (t) => {
     const db = await database(t);
     const service = new TaskMutationService(db);
     await assert.rejects(db.transaction('rw', [...taskMutationTables(db), db.settings], async () => {
-        await service.createTask({ task: task(), context: { actor: 'battleplan-user', origin: 'ui', causeId: CAUSES.ui } });
+        await service.createTask({
+            task: { ...task(), type: 'meeting' },
+            context: { actor: 'battleplan-user', origin: 'ui', causeId: CAUSES.ui },
+            effects: [{ kind: 'calendar', operation: 'upsert' }],
+        });
         await db.settings.put({ id: 'outer', value: 'written' });
+        assert.equal(await db.tasks.count(), 1);
+        assert.equal(await db.agentProtocolEvents.count(), 1);
+        assert.equal(await db.agentProtocolOutbox.count(), 1);
+        assert.equal(await db.agentProtocolEffects.count(), 1);
+        assert.equal(await db.agentEventStreams.count(), 1);
+        assert.equal(await db.settings.count(), 1);
         throw new Error('outer-failure');
     }), /outer-failure/);
     assert.equal(await db.tasks.count(), 0);
     assert.equal(await db.agentProtocolEvents.count(), 0);
     assert.equal(await db.agentProtocolOutbox.count(), 0);
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+    assert.equal(await db.agentEventStreams.count(), 0);
     assert.equal(await db.settings.count(), 0);
 });
 

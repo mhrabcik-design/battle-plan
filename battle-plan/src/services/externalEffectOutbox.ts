@@ -15,6 +15,7 @@ interface ExternalEffectOutboxOptions {
     canExecute?: () => boolean;
     now?: () => number;
     leaseDurationMs?: number;
+    executionTimeoutMs?: number;
     scheduleRenewal?: (callback: () => Promise<void>, delayMs: number) => () => void;
 }
 export interface ExternalEffectDrainResult {
@@ -71,33 +72,60 @@ export class ExternalEffectOutbox {
             group.push(effect);
             groups.set(effect.entityPublicId, group);
         }
-        // Independent tasks continue even when one task has a slow or failed request.
-        await Promise.all([...groups.values()].map(async (effects) => {
-            for (const effect of effects.sort(bySequence)) {
-                if (selected && !selected.has(effect.id)) break;
-                const claimed = await this.claim(effect.id);
-                if (!claimed) break;
-                result.attempted++;
-                const stopRenewal = this.startRenewal(claimed);
-                try {
-                    const execution = await this.options.execute(structuredClone(claimed), {
-                        isCurrent: () => this.isCurrent(claimed),
-                    });
-                    if (await this.complete(claimed, execution)) result.succeeded++;
-                    else break;
-                } catch (error) {
-                    const outcome = await this.fail(claimed, error);
-                    if (outcome === 'failed') result.failed++;
-                    else {
-                        if (outcome === 'retry_scheduled') result.retryScheduled++;
-                        break;
+        // Bound recovery bursts while retaining FIFO within each independent task.
+        const queuedGroups = [...groups.values()];
+        let nextGroup = 0;
+        await Promise.all(Array.from({ length: Math.min(4, queuedGroups.length) }, async () => {
+            while (nextGroup < queuedGroups.length) {
+                const effects = queuedGroups[nextGroup++];
+                for (const effect of effects.sort(bySequence)) {
+                    if (selected && !selected.has(effect.id)) break;
+                    const claimed = await this.claim(effect.id);
+                    if (!claimed) break;
+                    result.attempted++;
+                    try {
+                        const execution = await this.executeWithDeadline(claimed);
+                        if (await this.complete(claimed, execution)) result.succeeded++;
+                        else break;
+                    } catch (error) {
+                        const outcome = await this.fail(claimed, error);
+                        if (outcome === 'failed') result.failed++;
+                        else {
+                            if (outcome === 'retry_scheduled') result.retryScheduled++;
+                            break;
+                        }
                     }
-                } finally {
-                    stopRenewal();
                 }
             }
         }));
         return result;
+    }
+
+    private async executeWithDeadline(claimed: AgentProtocolEffectRow) {
+        let active = true;
+        const stopRenewal = this.startRenewal(claimed, () => active);
+        const expire = () => {
+            if (!active) return;
+            active = false;
+            stopRenewal();
+        };
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                expire();
+                reject(new Error('Google effect execution timed out'));
+            }, this.options.executionTimeoutMs ?? 60_000);
+        });
+        try {
+            // gapi cannot cancel an issued request. Revoke follow-up writes; stable
+            // Calendar IDs/ETags and complete-only Tasks writes protect late sends.
+            return await Promise.race([deadline, this.options.execute(structuredClone(claimed), {
+                isCurrent: async () => active && await this.isCurrent(claimed) && active,
+            })]);
+        } finally {
+            expire();
+            clearTimeout(timer);
+        }
     }
 
     private sessionMatches(effect: AgentProtocolEffectRow) {
@@ -131,11 +159,12 @@ export class ExternalEffectOutbox {
         return this.owns(await this.db.agentProtocolEffects.get(claimed.id), claimed) && this.sessionMatches(claimed);
     }
 
-    private startRenewal(claimed: AgentProtocolEffectRow) {
+    private startRenewal(claimed: AgentProtocolEffectRow, isActive: () => boolean) {
         const callback = () => {
+            if (!isActive()) return Promise.resolve();
             return this.db.transaction('rw', this.db.agentProtocolEffects, async () => {
                 const current = await this.db.agentProtocolEffects.get(claimed.id);
-                if (!this.owns(current, claimed) || !this.sessionMatches(claimed)) return;
+                if (!isActive() || !this.owns(current, claimed) || !this.sessionMatches(claimed)) return;
                 await this.db.agentProtocolEffects.update(claimed.id, { leaseExpiresAt: this.now() + this.leaseDurationMs });
             }).catch(() => { /* A failed renewal loses ownership; the pre-send guard and acknowledgement enforce it. */ });
         };

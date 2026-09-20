@@ -175,7 +175,7 @@ class AgentBridge {
       const task = { ...norm.value, source: 'agent', agent_write_id: write.id } as TaskDraft;
       const result = await taskMutations.createTask({
         task, context,
-        effects: calendarEffectsForLocalTask(task, 'upsert', hasUsableAuth(googleService.getAuthStatus())),
+        effects: calendarEffectsForLocalTask(task, 'upsert', hasUsableAuth(googleService.getAuthStatus()) && Boolean(context.googleAccountId)),
       });
       if (result.status !== 'applied') return terminalWrite(`task mutation ${result.status}`);
       await this.deliverTaskEffects(result.effectIds);

@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import { BattlePlanDB, type AgentProtocolEffectRow } from '../db.ts';
 import { TaskMutationService, newTaskMutationContext } from './taskMutations.ts';
 import {
@@ -11,8 +12,9 @@ const ACCOUNT = 'owner@example.com';
 const upsert = [{ kind: 'calendar', operation: 'upsert' }] as const;
 const deferred = <T = void>() => {
     let resolve!: (value: T) => void;
-    const promise = new Promise<T>((yes) => { resolve = yes; });
-    return { promise, resolve };
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
 };
 async function database(t: { after: (fn: () => Promise<void>) => void }) {
     const db = new BattlePlanDB(`Effects-${crypto.randomUUID()}`);
@@ -166,6 +168,180 @@ test('a stalled request renews its claim and competing workers cannot overtake i
     assert.equal(heartbeat, undefined);
 });
 
+test('an execution deadline releases a hung drain and later task changes progress without reloading', { timeout: 2_000 }, async (t) => {
+    const db = await database(t);
+    const { effectId } = await meeting(db);
+    let stopped = 0;
+    let heartbeat!: () => Promise<void>;
+    let expiredGuard!: () => Promise<boolean>;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, executionTimeoutMs: 20,
+        scheduleRenewal: (callback) => { heartbeat = callback; return () => { stopped++; }; },
+        execute: async (effect, guard) => {
+            if (effect.id !== effectId) return { externalId: target(effect) };
+            expiredGuard = guard.isCurrent;
+            return new Promise(() => {});
+        },
+    });
+    assert.equal((await worker.drainOnce()).retryScheduled, 1);
+    assert.equal(stopped, 1);
+    assert.equal(await expiredGuard(), false);
+    const timedOut = (await db.agentProtocolEffects.get(effectId))!;
+    assert.equal(timedOut.state, 'retry_scheduled');
+    assert.equal(timedOut.leaseExpiresAt, undefined);
+    await heartbeat();
+    assert.deepEqual(await db.agentProtocolEffects.get(effectId), timedOut, 'a queued heartbeat cannot revive an expired attempt');
+    const later = await meeting(db);
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    assert.equal((await db.agentProtocolEffects.get(later.effectId))?.state, 'succeeded');
+});
+
+test('late resolution and rejection after a deadline cannot replace a retry or newer result', { timeout: 2_000 }, async (t) => {
+    for (const scenario of ['resolve-before-retry', 'reject-before-retry', 'resolve-after-success', 'reject-after-success']) {
+        await t.test(scenario, async (subtest) => {
+            const db = await database(subtest);
+            const { task, effectId } = await meeting(db);
+            const release = deferred<{ externalId?: string }>();
+            let now = 100;
+            const expired = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, now: () => now,
+                executionTimeoutMs: 20, execute: () => release.promise,
+            });
+            assert.equal((await expired.drainOnce()).retryScheduled, 1);
+            assert.equal((await db.tasks.get(task.id!))?.googleEventId, undefined);
+            const retry = (await db.agentProtocolEffects.get(effectId))!;
+            const settle = async () => {
+                if (scenario.startsWith('resolve')) release.resolve({ externalId: task.reservedGoogleEventId });
+                else release.reject({ status: 400 });
+                await setImmediate();
+            };
+            if (scenario.endsWith('before-retry')) {
+                await settle();
+                assert.deepEqual(await db.agentProtocolEffects.get(effectId), retry);
+                assert.equal((await db.tasks.get(task.id!))?.googleEventId, undefined);
+            }
+            now = retry.nextAttemptAt!;
+            const successor = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, now: () => now,
+                execute: async (effect) => ({ externalId: target(effect) }),
+            });
+            assert.equal((await successor.drainOnce()).succeeded, 1);
+            const completed = await db.agentProtocolEffects.get(effectId);
+            const completedTask = await db.tasks.get(task.id!);
+            if (scenario.endsWith('after-success')) await settle();
+            assert.deepEqual(await db.agentProtocolEffects.get(effectId), completed);
+            assert.deepEqual(await db.tasks.get(task.id!), completedTask);
+        });
+    }
+});
+
+test('a deadline invalidates a guard whose ownership read was already in flight', { timeout: 2_000 }, async (t) => {
+    const db = await database(t);
+    await meeting(db);
+    const readEntered = deferred();
+    const releaseRead = deferred();
+    const executorFinished = deferred();
+    const originalGet = db.agentProtocolEffects.get.bind(db.agentProtocolEffects);
+    let pauseRead = false;
+    t.mock.method(db.agentProtocolEffects, 'get', (id: string) => {
+        const read = originalGet(id);
+        if (!pauseRead) return read;
+        pauseRead = false;
+        return read.then(async (snapshot) => {
+            readEntered.resolve();
+            await releaseRead.promise;
+            return snapshot;
+        });
+    });
+    let writes = 0;
+    let lateGuard: boolean | undefined;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, executionTimeoutMs: 30,
+        execute: async (effect, guard) => {
+            pauseRead = true;
+            lateGuard = await guard.isCurrent();
+            if (lateGuard) writes++;
+            executorFinished.resolve();
+            return { externalId: target(effect) };
+        },
+    });
+    const draining = worker.drainOnce();
+    await readEntered.promise;
+    assert.equal((await draining).retryScheduled, 1);
+    releaseRead.resolve();
+    await executorFinished.promise;
+    assert.equal(lateGuard, false, 'an old running snapshot does not restore the expired local guard');
+    assert.equal(writes, 0);
+});
+
+test('a heartbeat reading ownership when the deadline expires cannot extend the lease', async (t) => {
+    const db = await database(t);
+    await meeting(db);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const entered = deferred();
+    let now = 100;
+    let heartbeat!: () => Promise<void>;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, now: () => now, executionTimeoutMs: 20,
+        scheduleRenewal: (callback) => { heartbeat = callback; return () => {}; },
+        execute: () => { entered.resolve(); return new Promise(() => {}); },
+    });
+    const draining = worker.drainOnce();
+    await entered.promise;
+    let pauseRead = true;
+    const originalGet = db.agentProtocolEffects.get.bind(db.agentProtocolEffects);
+    t.mock.method(db.agentProtocolEffects, 'get', (id: string) => {
+        const read = originalGet(id);
+        if (!pauseRead) return read;
+        pauseRead = false;
+        return read.then((snapshot) => { t.mock.timers.tick(20); return snapshot; });
+    });
+    let renewals = 0;
+    db.agentProtocolEffects.hook('updating', (changes: Partial<AgentProtocolEffectRow>) => {
+        if (changes.leaseExpiresAt !== undefined) renewals++;
+    });
+    now = 150;
+    await heartbeat();
+    assert.equal((await draining).retryScheduled, 1);
+    assert.equal(renewals, 0);
+});
+
+test('a backlog uses at most four entity workers and preserves FIFO within every task', { timeout: 5_000 }, async (t) => {
+    const db = await database(t);
+    for (let i = 0; i < 12; i++) {
+        const { service, task } = await meeting(db);
+        await service.updateTask({ localId: task.id, changes: { title: `Later ${i}` },
+            context: newTaskMutationContext('ui'), effects: [...upsert] });
+    }
+    const release = deferred();
+    const fourEntered = deferred();
+    const activeEntities = new Set<string>();
+    const sequences = new Map<string, number[]>();
+    let peak = 0;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT,
+        scheduleRenewal: () => () => {},
+        execute: async (effect) => {
+            assert.equal(activeEntities.has(effect.entityPublicId), false);
+            activeEntities.add(effect.entityPublicId);
+            peak = Math.max(peak, activeEntities.size);
+            const order = sequences.get(effect.entityPublicId) ?? [];
+            order.push(effect.sequence);
+            sequences.set(effect.entityPublicId, order);
+            if (activeEntities.size === 4) fourEntered.resolve();
+            await release.promise;
+            activeEntities.delete(effect.entityPublicId);
+            return { externalId: target(effect) };
+        },
+    });
+    const draining = worker.drainOnce();
+    try {
+        await fourEntered.promise;
+        await db.agentProtocolEffects.toArray();
+        assert.equal(peak, 4);
+    } finally {
+        release.resolve();
+        assert.equal((await draining).succeeded, 24);
+    }
+    assert.equal(peak, 4);
+    assert.equal(sequences.size, 12);
+    for (const order of sequences.values()) assert.deepEqual(order, [1, 2]);
+});
+
 test('an expired delayed claim cannot acknowledge or pass its remote guard after another worker succeeds', async (t) => {
     const db = await database(t);
     const { task, effectId, service } = await meeting(db);
@@ -232,7 +408,9 @@ test('Google adapter returning unavailable never reports a calendar delete or Ta
     await assert.rejects(executeGoogleExternalEffect(client, completion, { isCurrent: async () => true }), /unavailable/);
 });
 
-async function googleHarness(options: { afterInsert?: () => Promise<void>; beforeWrite?: () => Promise<void> } = {}) {
+async function googleHarness(options: {
+    afterInsert?: () => Promise<void>; beforeGet?: () => Promise<void>; beforeWrite?: () => Promise<void>;
+} = {}) {
     const values = new Map([['google_access_token', 'token'], ['google_token_expires_at', String(Date.now() + 3_600_000)],
         ['google_user_email', ACCOUNT]]);
     const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value),
@@ -255,6 +433,7 @@ async function googleHarness(options: { afterInsert?: () => Promise<void>; befor
             const event = remote.get(id);
             if (method === 'GET') {
                 if (!event) throw { status: 404 };
+                await options.beforeGet?.();
                 return { status: 200, body: JSON.stringify(event) };
             }
             await options.beforeWrite?.();
@@ -264,10 +443,16 @@ async function googleHarness(options: { afterInsert?: () => Promise<void>; befor
             return { status: method === 'DELETE' ? 204 : 200, body: JSON.stringify({ id }) };
         },
     };
-    Object.assign(globalThis, { localStorage: storage, window: { localStorage: storage,
+    Object.assign(globalThis, { localStorage: storage,
+        fetch: async (url: string) => {
+            assert.equal(url, 'https://www.googleapis.com/oauth2/v3/userinfo');
+            return { ok: true, json: async () => ({ email: ACCOUNT }) };
+        }, window: { localStorage: storage,
         gapi: { client }, dispatchEvent: () => true, addEventListener: () => {}, removeEventListener: () => {} } });
     const { GoogleService } = await import('./googleService.ts');
-    return { service: new GoogleService(), remote, get inserts() { return inserts; }, get conflicts() { return conflicts; } };
+    const service = new GoogleService();
+    await service.fetchUserInfo();
+    return { service, remote, get inserts() { return inserts; }, get conflicts() { return conflicts; } };
 }
 
 test('real guarded adapter delivers queued create, edit and archive against one reserved event', async (t) => {
@@ -297,7 +482,34 @@ test('real guarded adapter delivers queued create, edit and archive against one 
     assert.equal(latest.googleEventId, undefined, 'late acknowledgements never attach metadata to archived tasks');
 });
 
-test('real conditional write already in flight cannot undo successor updates after a lease expires', async (t) => {
+test('a real Calendar GET completing after the deadline cannot send a follow-up write', { timeout: 2_000 }, async (t) => {
+    const db = await database(t);
+    const { task, effectId } = await meeting(db);
+    const initial = (await db.agentProtocolEffects.get(effectId))!;
+    if (initial.operation !== 'upsert') throw new Error('expected upsert');
+    await db.agentProtocolEffects.put({ ...initial, payload: { ...initial.payload, googleEventId: task.reservedGoogleEventId } });
+    const entered = deferred();
+    const release = deferred();
+    const executionFinished = deferred();
+    let writes = 0;
+    const google = await googleHarness({ beforeGet: async () => { entered.resolve(); await release.promise; },
+        beforeWrite: async () => { writes++; },
+    });
+    google.remote.set(task.reservedGoogleEventId!, { etag: '"original"', summary: 'Original' });
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, executionTimeoutMs: 30,
+        execute: (effect, guard) => executeGoogleExternalEffect(google.service, effect, guard).finally(() => executionFinished.resolve()),
+    });
+    const draining = worker.drainOnce();
+    await entered.promise;
+    assert.equal((await draining).retryScheduled, 1);
+    release.resolve();
+    await executionFinished.promise;
+    assert.equal(writes, 0);
+    assert.equal(google.remote.get(task.reservedGoogleEventId!)?.summary, 'Original');
+    assert.equal((await db.agentProtocolEffects.get(effectId))?.state, 'retry_scheduled');
+});
+
+test('real conditional write already in flight cannot undo successor updates after its deadline', async (t) => {
     const db = await database(t);
     const { task, service, effectId } = await meeting(db);
     const initial = (await db.agentProtocolEffects.get(effectId))!;
@@ -307,6 +519,7 @@ test('real conditional write already in flight cannot undo successor updates aft
     let now = 100;
     const entered = deferred();
     const release = deferred();
+    const executionFinished = deferred();
     let writes = 0;
     const google = await googleHarness({ beforeWrite: async () => {
         if (++writes === 1) { entered.resolve(); await release.promise; }
@@ -314,14 +527,17 @@ test('real conditional write already in flight cannot undo successor updates aft
     google.remote.set(task.reservedGoogleEventId!, { etag: '"original"', summary: 'Original' });
     const options = { accountId: () => ACCOUNT, now: () => now, leaseDurationMs: 100, scheduleRenewal: () => () => {},
         execute: (effect: AgentProtocolEffectRow, guard: { isCurrent: () => Promise<boolean> }) => executeGoogleExternalEffect(google.service, effect, guard) };
-    const old = new ExternalEffectOutbox(db, options).drainOnce();
+    const old = new ExternalEffectOutbox(db, { ...options, executionTimeoutMs: 30,
+        execute: (effect, guard) => options.execute(effect, guard).finally(() => executionFinished.resolve()),
+    }).drainOnce();
     await entered.promise;
     await service.updateTask({ localId: task.id, changes: { title: 'Latest', internalNotes: 'Latest private notes' },
         context: newTaskMutationContext('ui'), effects: [...upsert] });
-    now = 201;
+    assert.equal((await old).retryScheduled, 1);
+    now = (await db.agentProtocolEffects.get(effectId))!.nextAttemptAt!;
     assert.equal((await new ExternalEffectOutbox(db, options).drainOnce()).succeeded, 2);
     release.resolve();
-    assert.equal((await old).succeeded, 0);
+    await executionFinished.promise;
     assert.equal(google.conflicts, 1, 'Google rejects the late stale ETag');
     assert.equal(google.remote.get(task.reservedGoogleEventId!)?.summary, 'Latest [BP]');
     assert.match(google.remote.get(task.reservedGoogleEventId!)?.description ?? '', /Latest private notes/);

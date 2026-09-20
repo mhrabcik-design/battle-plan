@@ -79,3 +79,10 @@ test('voice update does not revive a missing or deleted task', async () => {
     assert.equal(await applySemanticResult({ title: 'Deleted' }, original.id!, signedOut), null);
     assert.equal((await db.tasks.get(original.id!))?.title, original.title);
 });
+
+test('stale signed-in UI state cannot create an unbound Calendar effect before identity verification', async () => {
+    await applySemanticResult({ title: 'During sign-in', type: 'meeting' }, null,
+        { state: 'SIGNED_IN', accessToken: 'previous-render-token' });
+    assert.equal(await db.tasks.count(), 1, 'local creation remains available');
+    assert.equal(await db.agentProtocolEffects.count(), 0, 'automatic Calendar opt-in needs a verified identity');
+});

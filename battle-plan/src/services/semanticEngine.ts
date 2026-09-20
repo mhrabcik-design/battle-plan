@@ -179,7 +179,7 @@ export const applySemanticResult = async (result: unknown, updateId: number | nu
             const v = norm.value as Partial<Task> & { title: string; type: Task['type']; urgency: 1 | 2 | 3 };
             const applied = await taskMutations.createTask({
                 task: { ...v, status: 'pending' }, context,
-                effects: calendarEffectsForLocalTask(v, 'upsert', hasUsableAuth(googleAuth)),
+                effects: calendarEffectsForLocalTask(v, 'upsert', hasUsableAuth(googleAuth) && Boolean(context.googleAccountId)),
             });
             if (applied.status !== 'applied') return null;
             await deliverVoiceEffects(applied.effectIds);

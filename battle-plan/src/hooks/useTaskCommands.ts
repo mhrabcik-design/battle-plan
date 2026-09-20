@@ -240,19 +240,21 @@ export function useTaskCommands({
       } else {
         const taskData = { ...taskToSave };
         delete (taskData as Partial<UnifiedTask>).isGoogleTask;
+        const context = uiMutationContext();
+        const allowUnlinkedCalendar = hasUsableAuth(googleAuth) && Boolean(context.googleAccountId);
         const result = await db.transaction('rw', taskMutationTables(db), async () => {
           if (taskData.id) {
             const current = await db.tasks.get(taskData.id);
             if (!current || current.isDeleted || (taskData.publicId && taskData.publicId !== current.publicId)) return null;
             return taskMutations.updateTask({
               localId: current.id, publicId: current.publicId, changes: taskData,
-              expectedRevision: taskData.protocolRevision?.revision_id ?? null, context: uiMutationContext(),
-              effects: calendarEffectsForLocalTask({ ...current, type: taskData.type }, 'upsert', hasUsableAuth(googleAuth)),
+              expectedRevision: taskData.protocolRevision?.revision_id ?? null, context,
+              effects: calendarEffectsForLocalTask({ ...current, type: taskData.type }, 'upsert', allowUnlinkedCalendar),
             });
           }
           return taskMutations.createTask({
-            task: { ...taskData, source: 'user' }, context: uiMutationContext(),
-            effects: calendarEffectsForLocalTask(taskData, 'upsert', hasUsableAuth(googleAuth)),
+            task: { ...taskData, source: 'user' }, context,
+            effects: calendarEffectsForLocalTask(taskData, 'upsert', allowUnlinkedCalendar),
           });
         });
         if (result?.status === 'stale') return { status: 'failed', message: 'Záznam se mezitím změnil. Otevřete jej znovu; rozepsané změny nebyly uloženy.' };
