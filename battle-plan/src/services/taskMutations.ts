@@ -8,6 +8,7 @@ import {
 } from '../db.ts';
 import type { ProtocolRevision } from './agentProtocol/contracts.ts';
 import {
+    UUID, IDENTITY, SHA256,
     type AgentProtocolLedger,
     type CommandClaimToken,
     type PendingEffectInput,
@@ -20,10 +21,6 @@ import {
 
 export const TASK_EVENT_STREAM_ID = 'battleplan-events';
 export const TASK_EVENT_PRODUCER_ID = 'battleplan-producer';
-
-const UUID = /^(?:[Uu][Rr][Nn]:[Uu][Uu][Ii][Dd]:)?[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$/;
-const IDENTITY = /^[a-z][a-z0-9._:-]{2,127}$/;
-const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 export type TaskMutationOrigin = AgentProtocolEventRow['origin'];
 

@@ -121,9 +121,9 @@ export type FinalizeCommandResult =
 
 const RECEIPT_SEPARATOR = '\0';
 const DECIMAL_COUNTER = /^(0|[1-9][0-9]*)$/;
-const SHA256 = /^sha256:[0-9a-f]{64}$/;
-const UUID = /^(?:[Uu][Rr][Nn]:[Uu][Uu][Ii][Dd]:)?[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$/;
-const IDENTITY = /^[a-z][a-z0-9._:-]{2,127}$/;
+export const SHA256 = /^sha256:[0-9a-f]{64}$/;
+export const UUID = /^(?:[Uu][Rr][Nn]:[Uu][Uu][Ii][Dd]:)?[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$/;
+export const IDENTITY = /^[a-z][a-z0-9._:-]{2,127}$/;
 
 function receiptId(receiverId: string, commandId: string): string {
     return `${receiverId}${RECEIPT_SEPARATOR}${commandId}`;

@@ -3,7 +3,7 @@ import {
 } from '../db.ts';
 import type { ProtocolEffect, ResultPayload } from './agentProtocol/contracts.ts';
 import { validateResultPayloadContract } from './agentProtocol/validation.ts';
-import { applyTaskEffectMetadata, newTaskMutationContext, type TaskMutationOrigin } from './taskMutations.ts';
+import { applyTaskEffectMetadata } from './taskMutations.ts';
 import type { CalendarWriteGuard, GoogleService } from './googleService.ts';
 import { hasUsableAuth } from '../types.ts';
 
@@ -241,17 +241,17 @@ export async function drainGoogleExternalEffects(effectIds?: readonly string[]):
     }).drainOnce(effectIds);
 }
 
-export async function currentGoogleTaskMutationContext(origin: TaskMutationOrigin) {
-    const { googleService } = await import('./googleService.ts');
-    return newTaskMutationContext(origin, undefined, googleService.getAccountId() ?? undefined);
-}
-
 /** Failed records remain inspectable; a later successful delivery of the same kind resolves their visible warning. */
 export function summarizeExternalEffects(effects: AgentProtocolEffectRow[], accountId: string | null) {
+    const latestSuccess = new Map<string, number>();
+    for (const effect of effects) {
+        if (effect.state !== 'succeeded') continue;
+        const key = `${effect.entityPublicId}\0${effect.kind}`;
+        latestSuccess.set(key, Math.max(latestSuccess.get(key) ?? 0, effect.sequence));
+    }
     const pending = effects.filter(isActive);
-    const failed = effects.filter((effect) => effect.state === 'failed' && !effects.some((later) =>
-        later.entityPublicId === effect.entityPublicId && later.kind === effect.kind
-        && later.sequence > effect.sequence && later.state === 'succeeded'));
+    const failed = effects.filter((effect) => effect.state === 'failed'
+        && (latestSuccess.get(`${effect.entityPublicId}\0${effect.kind}`) ?? 0) <= effect.sequence);
     return {
         pending: pending.length, failed: failed.length,
         accountBlocked: pending.filter((effect) => !effect.accountId || effect.accountId !== accountId).length,
