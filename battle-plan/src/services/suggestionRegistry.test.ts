@@ -120,6 +120,8 @@ test('conversion is atomic and idempotent for repeated approval', async () => {
     assert.equal(second.task.deadline, '2026-09-11');
     assert.equal(await database.tasks.count(), 1);
     assert.equal(await database.suggestionDecisions.where('kind').equals('converted').count(), 1);
+    assert.ok(first.task.protocolRevision);
+    assert.equal(await database.agentProtocolEvents.count(), 1, 'conversion replay emits no second event');
 });
 
 test('conversion rolls the task back when decision persistence fails', async () => {
@@ -136,6 +138,9 @@ test('conversion rolls the task back when decision persistence fails', async () 
     assert.equal(await database.tasks.count(), 0);
     assert.equal(await database.suggestionDecisions.count(), 0);
     assert.equal(await database.agentProtocolOutbox.count(), 0);
+    assert.equal(await database.agentProtocolEvents.count(), 0);
+    assert.equal(await database.agentEventStreams.count(), 0);
+    assert.equal(await database.agentProtocolEffects.count(), 0);
 });
 
 test('a protocol decision creates a durable Hermes response with the same identity', async () => {
@@ -168,8 +173,8 @@ test('conversion rolls back task and decision when the Hermes response cannot be
         subject_id: 'tax.vat-series',
         occurrence_key: 'tax.vat-2026-07',
     });
-    database.agentProtocolOutbox.hook('creating', () => {
-        throw new Error('response-outbox-write-failed');
+    database.agentProtocolOutbox.hook('creating', (_id, row) => {
+        if (row.family === 'response') throw new Error('response-outbox-write-failed');
     });
 
     await assert.rejects(
@@ -179,6 +184,8 @@ test('conversion rolls back task and decision when the Hermes response cannot be
     assert.equal(await database.tasks.count(), 0);
     assert.equal(await database.suggestionDecisions.count(), 0);
     assert.equal(await database.agentProtocolOutbox.count(), 0);
+    assert.equal(await database.agentProtocolEvents.count(), 0, 'response failure rolls back the prepared mutation');
+    assert.equal(await database.agentEventStreams.count(), 0);
 });
 
 test('fuzzy similarity is only a warning until the user confirms the occurrences are the same', async () => {

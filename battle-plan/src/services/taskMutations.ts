@@ -472,7 +472,7 @@ export class TaskMutationService {
         };
         const task = { ...next, protocolRevision: revision };
         const effects = effectRows(task, context, requestedEffects, now, this.createUuid);
-        task.effectSequence = effects.at(-1)?.sequence ?? task.effectSequence;
+        if (effects.length) task.effectSequence = effects.at(-1)!.sequence;
         return {
             operation,
             eventType: task.isDeleted ? 'entity_deleted' : existing ? 'entity_updated' : 'entity_created',
