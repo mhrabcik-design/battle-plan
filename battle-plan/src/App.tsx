@@ -5,6 +5,7 @@ import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
 import { useDriveSyncOrchestration } from './hooks/useDriveSyncOrchestration';
 import { useTaskBackup } from './hooks/useTaskBackup';
+import { useExternalEffectOutbox } from './hooks/useExternalEffectOutbox';
 import { useSuggestionsBadge } from './hooks/useSuggestionsBadge';
 import { useAgentBridgePolling } from './hooks/useAgentBridgePolling';
 import { useTaskCommands } from './hooks/useTaskCommands';
@@ -163,6 +164,7 @@ function App() {
   }, [addLog, updateSyncHealth]);
 
   useAgentProtocolDeviceIdentity({ onSettled: observeAgentProtocolIdentity });
+  useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth });
 
   useEffect(() => {
     let cancelled = false;
