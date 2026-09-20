@@ -147,10 +147,12 @@ function installGapiMock(api: {
     calendarEventsInsert?: (args?: unknown) => Promise<unknown>;
     calendarEventsUpdate?: (args?: unknown) => Promise<unknown>;
     calendarEventsDelete?: () => Promise<unknown>;
+    request?: (args: { path: string; method: string; headers: Record<string, string>; body: string }) => Promise<unknown>;
 }) {
     (globalThis as unknown as { window: { gapi: unknown } }).window.gapi = {
         client: {
             setToken: () => {},
+            request: api.request,
             tasks: {
                 tasklists: { list: api.tasklistsList ?? (async () => ({ result: { items: [] } })) },
                 tasks: {
@@ -1314,4 +1316,77 @@ test('v2 Drive transport exposes its exact narrow scope and account cache discri
 
     assert.equal(AGENT_PROTOCOL_DRIVE_SCOPE, 'https://www.googleapis.com/auth/drive.file');
     assert.equal(svc.getAccountId(), 'user@example.com');
+});
+
+test('durable Calendar creation reserves resource.id and preserves completed event details', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMock({ calendarEventsInsert: async (args) => {
+        const request = args as { eventId?: string; resource: Record<string, unknown> };
+        assert.equal(request.eventId, undefined);
+        assert.equal(request.resource.id, 'bp012345');
+        assert.match(String(request.resource.description), /Private note/);
+        assert.deepEqual(request.resource.reminders, { useDefault: false, overrides: [] });
+        return { result: { id: 'bp012345' } };
+    } });
+    assert.equal(await freshService().addToCalendar({
+        title: 'Done', date: '2026-09-20', status: 'completed', internalNotes: 'Private note',
+        reservedGoogleEventId: 'bp012345',
+    }, { isCurrent: async () => true }), 'bp012345');
+});
+
+test('ambiguous Calendar insert retries the reserved ID with an ETag conditional update', async () => {
+    clearStore();
+    seedSignedInStorage();
+    const methods: string[] = [];
+    installGapiMock({
+        calendarEventsInsert: async () => { throw { status: 409 }; },
+        request: async (request) => {
+            methods.push(request.method);
+            assert.match(request.path, /events\/bp012345$/);
+            if (request.method === 'GET') return { status: 200, body: JSON.stringify({ id: 'bp012345', etag: '"v1"' }) };
+            assert.equal(request.headers['If-Match'], '"v1"');
+            assert.equal(JSON.parse(request.body).summary, 'Updated [BP]');
+            return { status: 200, body: JSON.stringify({ id: 'bp012345' }) };
+        },
+    });
+    assert.equal(await freshService().addToCalendar({
+        title: 'Updated', date: '2026-09-20', reservedGoogleEventId: 'bp012345',
+    }, { isCurrent: async () => true }), 'bp012345');
+    assert.deepEqual(methods, ['GET', 'PUT']);
+});
+
+test('Calendar lease loss after GET prevents writing and 412 is never blindly retried', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let writes = 0;
+    installGapiMock({ request: async ({ method }) => {
+        if (method === 'GET') return { status: 200, body: JSON.stringify({ etag: '"v1"' }) };
+        writes++;
+        throw { status: 412 };
+    } });
+    const task = { title: 'Old', date: '2026-09-20', googleEventId: 'existing' };
+    await assert.rejects(freshService().addToCalendar(task, { isCurrent: async () => false }), /ownership/);
+    assert.equal(writes, 0);
+    await assert.rejects(freshService().addToCalendar(task, { isCurrent: async () => true }),
+        (error: unknown) => (error as { status?: number }).status === 412);
+    assert.equal(writes, 1);
+});
+
+test('durable Calendar delete uses If-Match; missing is success and unavailable auth is not', async () => {
+    clearStore();
+    seedSignedInStorage();
+    const methods: string[] = [];
+    installGapiMock({ request: async (request) => {
+        methods.push(request.method);
+        if (request.method === 'GET') return { status: 200, body: JSON.stringify({ etag: '"v2"' }) };
+        assert.equal(request.headers['If-Match'], '"v2"');
+        return { status: 204 };
+    } });
+    assert.equal(await freshService().deleteFromCalendar('existing', { isCurrent: async () => true }), true);
+    assert.deepEqual(methods, ['GET', 'DELETE']);
+    installGapiMock({ request: async () => { throw { status: 404 }; } });
+    assert.equal(await freshService().deleteFromCalendar('missing', { isCurrent: async () => true }), true);
+    clearStore();
+    assert.notEqual(await freshService().deleteFromCalendar('existing', { isCurrent: async () => true }), true);
 });

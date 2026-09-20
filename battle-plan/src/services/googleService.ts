@@ -2,6 +2,25 @@
 import type { GoogleAuthState, GoogleAuthStatus, GoogleTaskRaw } from '../types';
 export type { GoogleAuthState, GoogleAuthStatus };
 
+/** Rechecked after reading the remote ETag and immediately before sending a queued write. */
+export interface CalendarWriteGuard {
+    isCurrent: () => Promise<boolean>;
+}
+
+export class GoogleCalendarError extends Error {
+    readonly status?: number;
+    constructor(message: string, status?: number) {
+        super(message);
+        this.name = 'GoogleCalendarError';
+        this.status = status;
+    }
+}
+
+function googleErrorStatus(error: unknown): number | undefined {
+    const value = error as { status?: number; result?: { error?: { code?: number } } };
+    return value?.status ?? value?.result?.error?.code;
+}
+
 declare global {
     interface Window {
         gapi: {
@@ -631,7 +650,23 @@ class GoogleService {
         }
     }
 
-    async addToCalendar(task: any) {
+    private async calendarConditionalWrite(eventId: string, method: 'PUT' | 'DELETE', event: unknown, guard: CalendarWriteGuard) {
+        const path = `/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`;
+        const response = await window.gapi.client.request({ path, method: 'GET', headers: {}, body: '' });
+        const current = JSON.parse(response.body || '{}') as { etag?: string; status?: string };
+        if (current.status === 'cancelled' && method === 'DELETE') return eventId;
+        if (!current.etag) throw new GoogleCalendarError('Calendar resource has no ETag');
+        if (!await guard.isCurrent()) throw new GoogleCalendarError('Calendar effect ownership lost');
+        // A late request cannot overwrite a successor that changed this ETag.
+        // 412 must return to the queue, where ownership and ordering are checked anew.
+        await window.gapi.client.request({
+            path, method, headers: { 'If-Match': current.etag, 'Content-Type': 'application/json' },
+            body: method === 'DELETE' ? '' : JSON.stringify(event),
+        });
+        return eventId;
+    }
+
+    async addToCalendar(task: any, guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
 
         try {
@@ -691,9 +726,21 @@ class GoogleService {
                 'resource': event,
             };
             if (task.googleEventId) params.eventId = task.googleEventId;
-
-            const response = await window.gapi.client.calendar.events[method](params);
-            return response.result.id;
+            if (task.googleEventId && guard) {
+                return await this.calendarConditionalWrite(task.googleEventId, 'PUT', event, guard);
+            }
+            if (!task.googleEventId && task.reservedGoogleEventId) event.id = task.reservedGoogleEventId;
+            if (guard && !await guard.isCurrent()) throw new GoogleCalendarError('Calendar effect ownership lost');
+            try {
+                const response = await window.gapi.client.calendar.events[method](params);
+                return response.result.id;
+            } catch (error) {
+                // The first insert may have succeeded before its response was lost.
+                if (method === 'insert' && task.reservedGoogleEventId && guard && googleErrorStatus(error) === 409) {
+                    return await this.calendarConditionalWrite(task.reservedGoogleEventId, 'PUT', event, guard);
+                }
+                throw error;
+            }
         } catch (e: unknown) {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
@@ -702,19 +749,24 @@ class GoogleService {
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || JSON.stringify(err);
-            throw new Error(`Google Calendar Error: ${errorMsg}`);
+            throw new GoogleCalendarError(`Google Calendar Error: ${errorMsg}`, googleErrorStatus(e));
         }
     }
 
-    async deleteFromCalendar(eventId: string) {
+    async deleteFromCalendar(eventId: string, guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
         try {
+            if (guard) {
+                await this.calendarConditionalWrite(eventId, 'DELETE', undefined, guard);
+                return true;
+            }
             await window.gapi.client.calendar.events.delete({
                 'calendarId': 'primary',
                 'eventId': eventId
             });
             return true;
         } catch (e: unknown) {
+            if (googleErrorStatus(e) === 404 || googleErrorStatus(e) === 410) return true;
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
             if (isUnauthenticatedError(e)) {
@@ -722,7 +774,7 @@ class GoogleService {
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || "Neznámá chyba Googlu";
-            throw new Error(`Kalendář smazání selhalo: ${errorMsg}`);
+            throw new GoogleCalendarError(`Kalendář smazání selhalo: ${errorMsg}`, googleErrorStatus(e));
         }
     }
 
