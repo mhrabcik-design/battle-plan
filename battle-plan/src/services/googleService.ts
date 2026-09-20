@@ -601,9 +601,10 @@ class GoogleService {
         }
     }
 
-    async updateGoogleTask(taskId: string, updates: Record<string, unknown>, taskListId: string = '@default') {
+    async updateGoogleTask(taskId: string, updates: Record<string, unknown>, taskListId: string = '@default', guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
         if (!this.googleTasksScopeAvailable) return null;
+        if (guard && !await guard.isCurrent()) throw new Error('Google Tasks effect ownership lost');
         try {
             const response = await window.gapi.client.tasks.tasks.patch({
                 tasklist: taskListId,
@@ -622,6 +623,7 @@ class GoogleService {
                 return null;
             }
             console.error('Error updating Google Task', e);
+            if (guard) throw Object.assign(new Error('Google Tasks write failed'), { status: googleErrorStatus(e) });
             return null;
         }
     }

@@ -1390,3 +1390,16 @@ test('durable Calendar delete uses If-Match; missing is success and unavailable 
     clearStore();
     assert.notEqual(await freshService().deleteFromCalendar('existing', { isCurrent: async () => true }), true);
 });
+
+test('queued Google Tasks checks ownership after authentication and preserves failure status', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let writes = 0;
+    installGapiMock({ tasksPatch: async () => { writes++; throw { status: 404 }; } });
+    await assert.rejects(freshService().updateGoogleTask('task-id', { status: 'completed' }, '@default',
+        { isCurrent: async () => false }), /ownership/);
+    assert.equal(writes, 0);
+    await assert.rejects(freshService().updateGoogleTask('task-id', { status: 'completed' }, '@default',
+        { isCurrent: async () => true }), (error: unknown) => (error as { status?: number }).status === 404);
+    assert.equal(writes, 1);
+});
