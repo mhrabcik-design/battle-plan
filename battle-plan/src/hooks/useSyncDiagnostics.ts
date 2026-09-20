@@ -24,16 +24,15 @@ export function useSyncDiagnostics() {
         tasks: createSyncHealth('Tasks Drive Sync', 'Čeká na přihlášení'),
         worklogs: createSyncHealth('WorkLogs Sync', 'Čeká na přihlášení'),
         suggestions: createSyncHealth('Suggestions Sync', 'Čeká na přihlášení'),
+        externalEffects: createSyncHealth('Kalendář a Google Tasks', 'Načítám čekající změny'),
     });
 
     const updateSyncHealth = useCallback((key: string, patch: Partial<SyncHealth>) => {
-        setSyncHealth(prev => ({
-            ...prev,
-            [key]: {
-                ...(prev[key] ?? createSyncHealth(key)),
-                ...patch,
-            },
-        }));
+        setSyncHealth(prev => {
+            const current = prev[key];
+            if (current && (Object.keys(patch) as (keyof SyncHealth)[]).every(field => Object.is(current[field], patch[field]))) return prev;
+            return { ...prev, [key]: { ...(current ?? createSyncHealth(key)), ...patch } };
+        });
     }, []);
 
     return { syncHealth, updateSyncHealth };

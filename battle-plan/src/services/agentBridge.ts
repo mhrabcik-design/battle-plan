@@ -17,6 +17,9 @@ import {
   updateWorkLogWithProjectSelection,
 } from './workLogPersistence.ts';
 import { createWorkLogSyncId } from '../utils/workLogSyncIdentity.ts';
+import { hasUsableAuth } from '../types.ts';
+import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations, taskMutationTables, type TaskDraft, type TaskEffectRequest } from './taskMutations.ts';
+import { drainGoogleExternalEffects } from './externalEffectOutbox.ts';
 
 export type AgentWriteAction =
   | 'create_task'
@@ -166,76 +169,55 @@ class AgentBridge {
     write: AgentWrite
   ): Promise<ApplyWriteResult> {
     const data = (write.task_data ?? {}) as Partial<Task> & { id?: number };
+    const context = newTaskMutationContext('hermes', undefined, googleService.getAccountId() ?? undefined);
     if (write.action === 'create_task') {
       const norm = normalizeEntity(data, 'create', undefined);
-      const newId = await db.tasks.add({
-        ...norm.value,
-        source: 'agent',
-        agent_write_id: write.id,
-        updatedAt: Date.now(),
-        createdAt: Date.now(),
-      } as Task);
-
-      // Calendar parity: meeting types with usable Google auth get a Calendar event.
-      if (norm.value.type === 'meeting') {
-        const eventId = await googleService.addToCalendar({ ...norm.value, id: newId } as Task);
-        if (eventId) {
-          await db.tasks.update(newId, { googleEventId: eventId });
-        }
-      }
-
-      return appliedWrite({ newId: newId as number, last_error: norm.last_error });
-    }
-
-    if (write.action === 'update_task') {
-      if (!data.id) return terminalWrite('task_data.id missing');
-      const existing = await db.tasks.get(data.id);
-      if (!existing) return terminalWrite('task not found');
-      const norm = normalizeEntity(data, 'update', existing);
-      await db.tasks.update(data.id, {
-        ...norm.value,
-        source: existing.source ?? 'agent',
-        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-        updatedAt: Date.now(),
+      const task = { ...norm.value, source: 'agent', agent_write_id: write.id } as TaskDraft;
+      const result = await taskMutations.createTask({
+        task, context,
+        effects: calendarEffectsForLocalTask(task, 'upsert', hasUsableAuth(googleService.getAuthStatus()) && Boolean(context.googleAccountId)),
       });
-      return appliedWrite({ last_error: norm.last_error });
+      if (result.status !== 'applied') return terminalWrite(`task mutation ${result.status}`);
+      await this.deliverTaskEffects(result.effectIds);
+      return appliedWrite({ newId: result.task.id, last_error: norm.last_error });
     }
 
-    if (write.action === 'complete_task') {
-      if (!data.id) return terminalWrite('task_data.id missing');
-      const existing = await db.tasks.get(data.id);
-      if (!existing) return terminalWrite('task not found');
-      const norm = normalizeEntity(data, 'complete', existing);
-      await db.tasks.update(data.id, {
-        ...norm.value,
-        source: existing.source ?? 'agent',
-        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-        updatedAt: Date.now(),
-      });
-      // Google Tasks parity: complete the linked Google Task when googleId is set.
-      const linked = existing as Task & { googleId?: string; googleListId?: string };
-      if (linked.googleId) {
-        await googleService.updateGoogleTask(linked.googleId, { status: 'completed' }, linked.googleListId);
-      }
-      return appliedWrite({ last_error: norm.last_error });
-    }
-
-    // delete_task
     if (!data.id) return terminalWrite('task_data.id missing');
-    const existing = await db.tasks.get(data.id);
-    if (!existing) return terminalWrite('task not found');
-    await db.tasks.update(data.id, {
-      isDeleted: true,
-      source: existing.source ?? 'agent',
-      agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
-      updatedAt: Date.now(),
+    const mutation = await db.transaction('rw', taskMutationTables(db), async () => {
+      const existing = await db.tasks.get(data.id!);
+      if (!existing || existing.isDeleted || (data.publicId && existing.publicId !== data.publicId)) return null;
+      const action = write.action === 'delete_task' ? 'delete' : write.action === 'complete_task' ? 'complete' : 'update';
+      const norm = normalizeEntity(data, action, existing);
+      const changes = {
+        ...(action === 'delete' ? {} : norm.value),
+        source: existing.source ?? 'agent',
+        agent_write_id: existing.source === 'agent' ? (existing.agent_write_id ?? write.id) : undefined,
+      };
+      const effects: TaskEffectRequest[] = calendarEffectsForLocalTask(existing, action === 'delete' ? 'delete' : 'upsert');
+      if (action === 'complete' && existing.googleId) effects.push({ kind: 'google_tasks', operation: 'complete' });
+      const input = {
+        localId: existing.id, publicId: existing.publicId, changes, context, effects,
+        expectedRevision: data.protocolRevision?.revision_id,
+      };
+      const result = action === 'delete' ? await taskMutations.archiveTask(input)
+        : action === 'complete' ? await taskMutations.completeTask(input) : await taskMutations.updateTask(input);
+      return { result, last_error: norm.last_error };
     });
-    // Calendar parity: clean up the linked Calendar event for meetings.
-    const linked = existing as Task & { googleEventId?: string };
-    if (linked.googleEventId) {
-      await googleService.deleteFromCalendar(linked.googleEventId);
+    if (!mutation) return terminalWrite('task not found');
+    if (mutation.result.status !== 'applied') return terminalWrite(`task mutation ${mutation.result.status}`);
+    await this.deliverTaskEffects(mutation.result.effectIds);
+    return appliedWrite({ last_error: mutation.last_error });
+  }
+
+  private async deliverTaskEffects(effectIds: readonly string[]): Promise<void> {
+    if (!effectIds.length) return;
+    try {
+      await drainGoogleExternalEffects(effectIds);
+    } catch (error) {
+      // A locally applied legacy write must be acknowledged even when Google
+      // delivery waits, otherwise polling would replay the domain mutation.
+      console.error('AgentBridge: Google synchronization remains queued', error);
     }
-    return appliedWrite();
   }
 
   private async applyWorklogAction(

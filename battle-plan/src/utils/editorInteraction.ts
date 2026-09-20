@@ -10,7 +10,10 @@ export function getEditorCloseIntent({ recording, dirty }: { recording: boolean;
 
 export const getEditorTaskSnapshot = (task: UnifiedTask): string => JSON.stringify({ ...task, updatedAt: 0 });
 
-/** Completion saves only status; text typed before or during the request stays a draft. */
-export function applySavedEditorStatus(task: UnifiedTask, saved: Pick<UnifiedTask, 'status' | 'updatedAt'>): UnifiedTask {
-  return { ...task, status: saved.status, updatedAt: saved.updatedAt };
+/** Completion keeps draft content and advances only a directly preceding revision. */
+export function applySavedEditorStatus(task: UnifiedTask, saved: Pick<UnifiedTask, 'status' | 'updatedAt' | 'protocolRevision'>): UnifiedTask {
+  const protocolRevision = saved.protocolRevision?.base_revision === (task.protocolRevision?.revision_id ?? null)
+    ? saved.protocolRevision
+    : task.protocolRevision;
+  return { ...task, status: saved.status, updatedAt: saved.updatedAt, protocolRevision };
 }

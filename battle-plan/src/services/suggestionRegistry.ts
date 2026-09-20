@@ -15,6 +15,7 @@ import {
 import type { AgentSuggestion, AgentSuggestionReply } from './suggestionsSync.ts';
 import type { ResponsePayload } from './agentProtocol/contracts.ts';
 import { ensureTaskDeadline } from './taskNormalization.ts';
+import { newTaskMutationContext, TaskMutationService, taskMutationTables } from './taskMutations.ts';
 
 const TERMINAL_KINDS = new Set<SuggestionDecisionKind>([
     'accepted',
@@ -645,14 +646,16 @@ export class SuggestionRegistry {
     }
 
     async convertToTask(
-        suggestion: AgentSuggestion,
-        draft: SuggestionTaskDraft,
+        inputSuggestion: AgentSuggestion,
+        inputDraft: SuggestionTaskDraft,
         now = Date.now(),
     ): Promise<SuggestionConversionResult> {
+        const suggestion = structuredClone(inputSuggestion);
+        const draft = structuredClone(inputDraft);
         return this.database.transaction(
             'rw',
             [
-                this.database.tasks,
+                ...taskMutationTables(this.database),
                 this.database.suggestionSubjects,
                 this.database.suggestionOccurrences,
                 this.database.suggestionDecisions,
@@ -697,13 +700,16 @@ export class SuggestionRegistry {
                     return { outcome: 'existing', task: existingTask, decision: recoveredDecision };
                 }
 
-                const taskId = await this.database.tasks.add({
-                    ...ensureTaskDeadline(draft, new Date(now)),
-                    suggestionSubjectId: subject.id,
-                    suggestionOccurrenceKey: occurrence.id,
+                const mutation = await new TaskMutationService(this.database, { now: () => now }).createTask({
+                    task: {
+                        ...ensureTaskDeadline(draft, new Date(now)),
+                        suggestionSubjectId: subject.id,
+                        suggestionOccurrenceKey: occurrence.id,
+                    },
+                    context: newTaskMutationContext('ui'),
                 });
-                const task = await this.database.tasks.get(taskId);
-                if (!task) throw new Error('suggestion task was not persisted');
+                if (mutation.status !== 'applied') throw new Error('suggestion task was not persisted');
+                const task = mutation.task;
                 const decision: SuggestionDecisionRow = {
                     id: `sdec_${crypto.randomUUID()}`,
                     subjectId: subject.id,

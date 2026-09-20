@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import Dexie from 'dexie';
 import { BattlePlanDB, type Task } from '../db.ts';
 import { getSchedule, saveWeeklySchedule } from './weeklySchedule.ts';
+import { newTaskMutationContext, TaskMutationService } from './taskMutations.ts';
 
 test('undo restores move and resize fields, preserves later text edits and refuses newer schedules or deleted tasks', async () => {
     const database = new BattlePlanDB(`weekly-undo-${crypto.randomUUID()}`);
@@ -12,11 +13,15 @@ test('undo restores move and resize fields, preserves later text edits and refus
         const id = await database.tasks.add(task);
         const moved = await saveWeeklySchedule(database, id, { date: '2026-09-17', deadline: '2026-09-17', startTime: '15:00', isAllDay: false, duration: 90 });
         assert.ok(moved);
-        await database.tasks.update(id, { title: 'Edited title' });
+        assert.ok(moved.after.protocolRevision);
+        assert.equal(await database.agentProtocolEvents.count(), 1);
+        await new TaskMutationService(database).updateTask({ localId: id, changes: { title: 'Edited title' }, context: newTaskMutationContext('ui') });
         const undone = await saveWeeklySchedule(database, id, getSchedule(moved.before), moved.after);
         assert.ok(undone);
         assert.deepEqual(getSchedule(undone.after), getSchedule(task));
         assert.equal(undone.after.title, 'Edited title');
+        assert.notEqual(undone.after.protocolRevision?.revision_id, moved.after.protocolRevision?.revision_id);
+        assert.equal(await database.agentProtocolEvents.count(), 3);
         assert.equal((await database.tasks.get(id))?.duration, undefined);
         const resized = await saveWeeklySchedule(database, id, { duration: 120, startTime: '17:00' });
         assert.ok(resized);

@@ -2,6 +2,25 @@
 import type { GoogleAuthState, GoogleAuthStatus, GoogleTaskRaw } from '../types';
 export type { GoogleAuthState, GoogleAuthStatus };
 
+/** Rechecked after reading the remote ETag and immediately before sending a queued write. */
+export interface CalendarWriteGuard {
+    isCurrent: () => Promise<boolean>;
+}
+
+export class GoogleCalendarError extends Error {
+    readonly status?: number;
+    constructor(message: string, status?: number) {
+        super(message);
+        this.name = 'GoogleCalendarError';
+        this.status = status;
+    }
+}
+
+function googleErrorStatus(error: unknown): number | undefined {
+    const value = error as { status?: number; result?: { error?: { code?: number } } };
+    return value?.status ?? value?.result?.error?.code;
+}
+
 declare global {
     interface Window {
         gapi: {
@@ -124,6 +143,11 @@ class GoogleService {
     private accessToken: string | null = null;
     private expiresAt: number = 0;
     private userEmail: string | null = null;
+    // The stored email is only a login hint. Delivery ownership requires userinfo
+    // fetched with the exact bearer currently installed in gapi.
+    private verifiedAccount: { token: string; accountId: string } | null = null;
+    private authGeneration = 0;
+    private identityInFlight: { generation: number; promise: Promise<boolean> } | null = null;
     private previousStatus: GoogleAuthStatus | null = null;
     private refreshInFlight: Promise<boolean> | null = null;
     private lastRefreshFailedAt: number | null = null;
@@ -152,20 +176,30 @@ class GoogleService {
                     });
 
                     if (this.accessToken) {
-                        window.gapi.client.setToken({ access_token: this.accessToken });
-                        this.dispatchAuthChange();
+                        if (Date.now() > this.expiresAt - 60000) {
+                            const generation = this.authGeneration;
+                            if (!await this.runRefresh() && generation === this.authGeneration) this.markAuthUnavailable();
+                        } else {
+                            try {
+                                window.gapi.client.setToken({ access_token: this.accessToken });
+                                await this.fetchUserInfo();
+                            } catch {
+                                this.markAuthUnavailable();
+                            }
+                        }
                     }
                     resolve();
                 });
             };
 
             const gisLoad = () => {
+                const generation = this.authGeneration;
                 this.tokenClient = window.google.accounts.oauth2.initTokenClient({
                     client_id: CLIENT_ID,
                     scope: SCOPES,
-                    callback: this.handleTokenResponse,
+                    callback: (response) => { void this.handleTokenResponse(response, generation); },
                     error_callback: () => {
-                        this.markAuthUnavailable();
+                        if (generation === this.authGeneration) this.markAuthUnavailable();
                     },
                 });
             };
@@ -176,13 +210,14 @@ class GoogleService {
             const checkScripts = setInterval(() => {
                 if (window.gapi && window.google?.accounts?.oauth2) {
                     clearInterval(checkScripts);
+                    clearTimeout(scriptTimer);
                     resolved = true;
                     gapiLoad();
                     gisLoad();
                 }
             }, 100);
 
-            setTimeout(() => {
+            const scriptTimer = setTimeout(() => {
                 if (!resolved) {
                     clearInterval(checkScripts);
                     reject(new Error('Google scripts failed to load within timeout'));
@@ -197,7 +232,7 @@ class GoogleService {
             return this.refreshInFlight;
         }
         const promise = this.trySilentRefresh().finally(() => {
-            this.refreshInFlight = null;
+            if (this.refreshInFlight === promise) this.refreshInFlight = null;
         });
         this.refreshInFlight = promise;
         return promise;
@@ -205,6 +240,7 @@ class GoogleService {
 
     async trySilentRefresh() {
         if (!this.tokenClient || !this.userEmail) return false;
+        const generation = this.authGeneration;
 
         return new Promise<boolean>((resolve) => {
             let settled = false;
@@ -217,11 +253,7 @@ class GoogleService {
                     clearTimeout(timer);
                     timer = null;
                 }
-                if (result) {
-                    this.lastRefreshFailedAt = null;
-                } else {
-                    this.lastRefreshFailedAt = Date.now();
-                }
+                if (generation === this.authGeneration) this.lastRefreshFailedAt = result ? null : Date.now();
                 resolve(result);
             };
 
@@ -235,6 +267,7 @@ class GoogleService {
                 client_id: CLIENT_ID,
                 scope: SCOPES,
                 callback: (response: TokenResponse) => {
+                    if (settled || generation !== this.authGeneration) { done(false); return; }
                     if (response.error !== undefined) {
                         done(false);
                         return;
@@ -250,29 +283,9 @@ class GoogleService {
                         done(false);
                         return;
                     }
-                    this.googleTasksScopeAvailable = tokenHasGoogleTasksScope(response);
-                    this.accessToken = response.access_token;
-                    const expiresIn = response.expires_in || 3600;
-                    this.expiresAt = Date.now() + (expiresIn * 1000);
-
-                    localStorage.setItem('google_access_token', response.access_token);
-                    localStorage.setItem('google_token_expires_at', this.expiresAt.toString());
-
-                    try {
-                        window.gapi.client.setToken({ access_token: response.access_token });
-                    } catch (setTokenErr) {
-                        // U2 fix: setToken throw leaves localStorage updated
-                        // but gapi.client without a bearer. Flip to OFFLINE_AUTH
-                        // so the user can re-grant from Settings.
-                        console.error('gapi.client.setToken failed on silent refresh', setTokenErr);
-                        this.markAuthUnavailable();
-                        done(false);
-                        return;
-                    }
-
-                    this.dispatchAuthChange();
-
-                    done(true);
+                    // GIS has answered; identity lookup has its own bounded wait.
+                    if (timer !== null) { clearTimeout(timer); timer = null; }
+                    void this.handleTokenResponse(response, generation).then(done, () => done(false));
                 },
                 error_callback: () => done(false),
             });
@@ -296,31 +309,59 @@ class GoogleService {
         });
     }
 
-    async fetchUserInfo() {
-        try {
-            const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                headers: { 'Authorization': `Bearer ${this.accessToken}` }
-            });
-            if (!response.ok) return;
-            const data = await response.json();
-            if (data.email) {
-                this.userEmail = data.email;
-                localStorage.setItem('google_user_email', data.email);
+    fetchUserInfo(): Promise<boolean> {
+        const token = this.accessToken;
+        const generation = this.authGeneration;
+        if (!token) return Promise.resolve(false);
+        if (this.getAccountId()) return Promise.resolve(true);
+        if (this.identityInFlight?.generation === generation) return this.identityInFlight.promise;
+        const promise = (async () => {
+            const controller = new AbortController();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const lookup = (async (): Promise<string | null> => {
+                try {
+                    const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                        headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+                    });
+                    if (!response.ok) return null;
+                    const data: unknown = await response.json();
+                    return data !== null && typeof data === 'object' && 'email' in data
+                        && typeof data.email === 'string' && data.email.trim() ? data.email : null;
+                } catch {
+                    return null;
+                }
+            })();
+            const accountId = await Promise.race([lookup, new Promise<null>((resolve) => {
+                timer = setTimeout(() => { controller.abort(); resolve(null); }, this.refreshTimeoutMs);
+            })]);
+            clearTimeout(timer);
+            if (generation !== this.authGeneration || token !== this.accessToken) return false;
+            if (!accountId) {
+                this.markAuthUnavailable();
+                return false;
             }
-        } catch (e) {
-            console.error('Failed to fetch user info', e);
-        }
+            this.verifiedAccount = { token, accountId };
+            this.userEmail = accountId;
+            this.lastRefreshFailedAt = null;
+            localStorage.setItem('google_user_email', accountId);
+            this.dispatchAuthChange();
+            return true;
+        })().finally(() => {
+            if (this.identityInFlight?.promise === promise) this.identityInFlight = null;
+        });
+        this.identityInFlight = { generation, promise };
+        return promise;
     }
 
     getAuthStatus(): GoogleAuthStatus {
         return {
             state: this.getAuthState(),
-            accessToken: this.accessToken
+            accessToken: this.getAccountId() ? this.accessToken : null
         };
     }
 
     getAccountId(): string | null {
-        return this.userEmail;
+        return this.verifiedAccount?.token === this.accessToken ? this.verifiedAccount.accountId : null;
     }
 
     private dispatchAuthChange() {
@@ -345,6 +386,8 @@ class GoogleService {
         // transient 401 must not erase the user's stored grant. The user
         // can still clear it explicitly via Settings > Odpojit.
         this.lastRefreshFailedAt = Date.now();
+        this.authGeneration++;
+        this.verifiedAccount = null;
         this.accessToken = null;
         try {
             if (window.gapi?.client) {
@@ -363,6 +406,7 @@ class GoogleService {
             }
             return 'SIGNED_OUT';
         }
+        if (!this.getAccountId()) return this.userEmail ? 'OFFLINE_AUTH' : 'SIGNED_OUT';
         const isExpired = Date.now() > (this.expiresAt - 60000);
         if (isExpired) {
             return 'REFRESH_PENDING';
@@ -371,9 +415,19 @@ class GoogleService {
     }
 
     private async ensureFreshToken(): Promise<'ok' | 'auth-unavailable'> {
+        if (this.accessToken && !this.getAccountId()) {
+            if (Date.now() > this.expiresAt - 60000) {
+                const generation = this.authGeneration;
+                if (!await this.runRefresh()) {
+                    if (generation === this.authGeneration) this.markAuthUnavailable();
+                    return 'auth-unavailable';
+                }
+            } else if (!await this.fetchUserInfo()) return 'auth-unavailable';
+        }
         const state = this.getAuthState();
         if (state === 'SIGNED_IN') return 'ok';
         if (state === 'REFRESH_PENDING') {
+            const generation = this.authGeneration;
             let refreshed = false;
             try {
                 refreshed = await this.runRefresh();
@@ -388,7 +442,7 @@ class GoogleService {
             // transition to OFFLINE_AUTH so the user can re-grant from Settings.
             // Otherwise the singleton stays in REFRESH_PENDING forever and the
             // sync icon never flips to failed.
-            this.markAuthUnavailable();
+            if (generation === this.authGeneration) this.markAuthUnavailable();
             return 'auth-unavailable';
         }
         return 'auth-unavailable';
@@ -398,7 +452,8 @@ class GoogleService {
         // U5: single-flight. A double-click on 'Sign in' does not produce two
         // GIS prompts; the second call awaits the in-flight promise.
         if (this.signInInFlight) return this.signInInFlight;
-        const promise = (async () => {
+        const generation = ++this.authGeneration;
+        const promise = new Promise<void>((resolve, reject) => {
             // Always force the user-visible request itself through the consent
             // flow. GIS treats requestAccessToken(options) as an override of
             // initTokenClient config; passing { prompt: '' } here suppresses
@@ -412,9 +467,10 @@ class GoogleService {
                 scope: SCOPES,
                 prompt: 'consent',
                 include_granted_scopes: false,
-                callback: this.handleTokenResponse,
+                callback: (response) => { void this.handleTokenResponse(response, generation).then(() => resolve(), reject); },
                 error_callback: () => {
-                    this.markAuthUnavailable();
+                    if (generation === this.authGeneration) this.markAuthUnavailable();
+                    resolve();
                 },
             });
             consentClient.requestAccessToken({
@@ -422,28 +478,30 @@ class GoogleService {
                 scope: SCOPES,
                 include_granted_scopes: false,
             });
-        })().finally(() => {
-            this.signInInFlight = null;
+        }).finally(() => {
+            if (this.signInInFlight === promise) this.signInInFlight = null;
         });
         this.signInInFlight = promise;
         return promise;
     }
-    private handleTokenResponse = (response: TokenResponse) => {
-        this.lastRefreshFailedAt = null;
+    private handleTokenResponse = async (response: TokenResponse, generation = this.authGeneration): Promise<boolean> => {
+        if (generation !== this.authGeneration) return false;
         if (response.error !== undefined) {
             console.error('GIS Error:', response);
-            return;
+            return false;
         }
         if (!response.access_token) {
             // Empty access_token (malformed response) must not be persisted
             // (U2 fix).
-            return;
+            return false;
         }
         if (!tokenHasCoreScopes(response)) {
             console.warn('Consent returned a token missing core scopes', { grantedScopes: response.scope, requiredScopes: CORE_SCOPES });
             this.markAuthUnavailable();
-            return;
+            return false;
         }
+        this.authGeneration++;
+        this.verifiedAccount = null;
         this.googleTasksScopeAvailable = tokenHasGoogleTasksScope(response);
         this.accessToken = response.access_token;
         const expiresIn = response.expires_in || 3600;
@@ -460,17 +518,19 @@ class GoogleService {
             // user can re-grant from Settings.
             console.error('gapi.client.setToken failed on consent', setTokenErr);
             this.markAuthUnavailable();
-            return;
+            return false;
         }
-
-        if (!this.userEmail) {
-            void this.fetchUserInfo();
-        }
-
+        // Publish the unavailable transition before the asynchronous identity
+        // request, including when re-consent replaces an already usable token.
         this.dispatchAuthChange();
+        return this.fetchUserInfo();
     };
 
     signOut() {
+        this.authGeneration++;
+        this.verifiedAccount = null;
+        this.signInInFlight = null;
+        this.refreshInFlight = null;
         if (this.accessToken) {
             fetch(`https://oauth2.googleapis.com/revoke?token=${this.accessToken}`, { method: 'POST' }).catch(() => {});
         }
@@ -582,9 +642,10 @@ class GoogleService {
         }
     }
 
-    async updateGoogleTask(taskId: string, updates: Record<string, unknown>, taskListId: string = '@default') {
+    async updateGoogleTask(taskId: string, updates: Record<string, unknown>, taskListId: string = '@default', guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return null;
         if (!this.googleTasksScopeAvailable) return null;
+        if (guard && !await guard.isCurrent()) throw new Error('Google Tasks effect ownership lost');
         try {
             const response = await window.gapi.client.tasks.tasks.patch({
                 tasklist: taskListId,
@@ -603,6 +664,7 @@ class GoogleService {
                 return null;
             }
             console.error('Error updating Google Task', e);
+            if (guard) throw Object.assign(new Error('Google Tasks write failed'), { status: googleErrorStatus(e) });
             return null;
         }
     }
@@ -631,7 +693,23 @@ class GoogleService {
         }
     }
 
-    async addToCalendar(task: any) {
+    private async calendarConditionalWrite(eventId: string, method: 'PUT' | 'DELETE', event: unknown, guard: CalendarWriteGuard) {
+        const path = `/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`;
+        const response = await window.gapi.client.request({ path, method: 'GET', headers: {}, body: '' });
+        const current = JSON.parse(response.body || '{}') as { etag?: string; status?: string };
+        if (current.status === 'cancelled' && method === 'DELETE') return eventId;
+        if (!current.etag) throw new GoogleCalendarError('Calendar resource has no ETag');
+        if (!await guard.isCurrent()) throw new GoogleCalendarError('Calendar effect ownership lost');
+        // A late request cannot overwrite a successor that changed this ETag.
+        // 412 must return to the queue, where ownership and ordering are checked anew.
+        await window.gapi.client.request({
+            path, method, headers: { 'If-Match': current.etag, 'Content-Type': 'application/json' },
+            body: method === 'DELETE' ? '' : JSON.stringify(event),
+        });
+        return eventId;
+    }
+
+    async addToCalendar(task: any, guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
 
         try {
@@ -691,9 +769,21 @@ class GoogleService {
                 'resource': event,
             };
             if (task.googleEventId) params.eventId = task.googleEventId;
-
-            const response = await window.gapi.client.calendar.events[method](params);
-            return response.result.id;
+            if (task.googleEventId && guard) {
+                return await this.calendarConditionalWrite(task.googleEventId, 'PUT', event, guard);
+            }
+            if (!task.googleEventId && task.reservedGoogleEventId) event.id = task.reservedGoogleEventId;
+            if (guard && !await guard.isCurrent()) throw new GoogleCalendarError('Calendar effect ownership lost');
+            try {
+                const response = await window.gapi.client.calendar.events[method](params);
+                return response.result.id;
+            } catch (error) {
+                // The first insert may have succeeded before its response was lost.
+                if (method === 'insert' && task.reservedGoogleEventId && guard && googleErrorStatus(error) === 409) {
+                    return await this.calendarConditionalWrite(task.reservedGoogleEventId, 'PUT', event, guard);
+                }
+                throw error;
+            }
         } catch (e: unknown) {
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
@@ -702,19 +792,24 @@ class GoogleService {
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || JSON.stringify(err);
-            throw new Error(`Google Calendar Error: ${errorMsg}`);
+            throw new GoogleCalendarError(`Google Calendar Error: ${errorMsg}`, googleErrorStatus(e));
         }
     }
 
-    async deleteFromCalendar(eventId: string) {
+    async deleteFromCalendar(eventId: string, guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
         try {
+            if (guard) {
+                await this.calendarConditionalWrite(eventId, 'DELETE', undefined, guard);
+                return true;
+            }
             await window.gapi.client.calendar.events.delete({
                 'calendarId': 'primary',
                 'eventId': eventId
             });
             return true;
         } catch (e: unknown) {
+            if (googleErrorStatus(e) === 404 || googleErrorStatus(e) === 410) return true;
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
             if (isUnauthenticatedError(e)) {
@@ -722,7 +817,7 @@ class GoogleService {
                 return;
             }
             const errorMsg = err?.result?.error?.message || err?.message || "Neznámá chyba Googlu";
-            throw new Error(`Kalendář smazání selhalo: ${errorMsg}`);
+            throw new GoogleCalendarError(`Kalendář smazání selhalo: ${errorMsg}`, googleErrorStatus(e));
         }
     }
 

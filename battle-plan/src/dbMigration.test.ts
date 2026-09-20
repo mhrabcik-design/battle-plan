@@ -6,7 +6,30 @@ import Dexie from 'dexie';
 
 import { BattlePlanDB } from './db.ts';
 
-const CURRENT_DB_VERSION = 18;
+const CURRENT_DB_VERSION = 19;
+
+test('v19 preserves v18 data and quarantines effects without a replayable payload', async () => {
+    const name = `BattlePlanDB-v19-upgrade-${crypto.randomUUID()}`;
+    const legacy = new Dexie(name);
+    legacy.version(18).stores({ ...LEGACY_V17_STORES, workLogDeletionTombstones: 'syncId' });
+    await legacy.open();
+    await legacy.table('tasks').add({ id: 7, publicId: 'task_preserved', title: 'Preserved', type: 'task', urgency: 2, status: 'pending', suggestionSubjectId: 'subject', suggestionOccurrenceKey: 'occurrence', createdAt: 1, updatedAt: 2 });
+    await legacy.table('workLogDeletionTombstones').add({ syncId: 'removed', survivorSyncId: 'kept', fingerprint: 'fingerprint', reason: 'confirmed-duplicate', deletedAt: 3 });
+    await legacy.table('agentProtocolEffects').add({ id: 'legacy-effect', commandReceiptId: 'receipt', kind: 'calendar', state: 'pending', attempts: 0, fencingToken: 1, createdAt: 1, updatedAt: 1 });
+    legacy.close();
+    const upgraded = new BattlePlanDB(name);
+    try {
+        await upgraded.open();
+        assert.equal(upgraded.verno, CURRENT_DB_VERSION);
+        assert.equal((await upgraded.tasks.get(7))?.suggestionOccurrenceKey, 'occurrence');
+        assert.equal((await upgraded.workLogDeletionTombstones.get('removed'))?.survivorSyncId, 'kept');
+        assert.equal((await upgraded.agentProtocolEffects.get('legacy-effect'))?.state, 'failed');
+        assert.equal((await upgraded.agentProtocolEffects.get('legacy-effect'))?.lastErrorCode, 'capability_blocked');
+        assert.ok(upgraded.agentProtocolEffects.schema.idxByName['[entityPublicId+sequence]']);
+    } finally {
+        await upgraded.delete();
+    }
+});
 
 const V9_STORES = {
     tasks: '++id, type, date, deadline, urgency, status, googleEventId, updatedAt, isDeleted, createdAt',

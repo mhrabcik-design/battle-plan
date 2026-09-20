@@ -23,6 +23,8 @@ export interface Task {
     id?: number;
     /** Portable protocol identity. Numeric `id` remains the local Dexie key. */
     publicId?: string;
+    /** Content-addressed collaboration revision, independent of local keys. */
+    protocolRevision?: ProtocolRevision;
     title: string;
     description?: string;
     internalNotes?: string;
@@ -38,6 +40,13 @@ export interface Task {
     subTasks?: SubTask[];
     progress?: number; // 0-100
     googleEventId?: string;
+    /** Reserved once before a Calendar create can be delivered. */
+    reservedGoogleEventId?: string;
+    googleId?: string;
+    googleListId?: string;
+    googleAccountId?: string;
+    /** Durable sequence allocator, retained even after old effects are pruned. */
+    effectSequence?: number;
     source?: 'user' | 'agent'; // attribution: which surface produced this row
     agent_write_id?: string; // inbox AgentWrite.id (only present when source === 'agent')
     /** Stable Suggestions subject that produced this task. */
@@ -275,18 +284,49 @@ export type AgentProtocolOutboxRow = AgentProtocolOutboxBase & (
     | { family: 'capability'; payload: CapabilityPayload }
 );
 
-export interface AgentProtocolEffectRow {
+interface AgentProtocolEffectRowBase {
     id: string;
-    commandReceiptId: string;
+    commandReceiptId?: string;
     kind: ProtocolEffect['kind'];
+    entityKind: 'task';
+    entityPublicId: string;
+    mutationId: string;
+    sequence: number;
+    accountId?: string;
     state: AgentProtocolEffectState;
     attempts: number;
     fencingToken: number;
+    leaseOwner?: string;
+    leaseExpiresAt?: number;
     nextAttemptAt?: number;
     lastErrorCode?: ProtocolErrorCode;
+    lastErrorMessage?: string;
     createdAt: number;
     updatedAt: number;
 }
+
+export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
+    | {
+        kind: 'calendar';
+        operation: 'upsert';
+        payload: {
+            title: string;
+            description?: string;
+            internalNotes?: string;
+            status: Task['status'];
+            totalDuration?: number;
+            date?: string;
+            deadline?: string;
+            startTime?: string;
+            duration?: number;
+            isAllDay?: boolean;
+            googleEventId?: string;
+            reservedEventId: string;
+        };
+    }
+    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string } }
+    | { kind: 'google_tasks'; operation: 'complete'; payload: { googleTaskId: string; googleListId?: string } }
+);
 
 export interface AgentConsumerStateRow {
     id: string;
@@ -617,6 +657,19 @@ export class BattlePlanDB extends Dexie {
         // duplicate removal. The removed sync identity is the durable key.
         this.version(18).stores({
             workLogDeletionTombstones: 'syncId',
+        });
+
+        // v19 indexes durable task effects without replaying incomplete U3 rows.
+        this.version(19).stores({
+            agentProtocolEffects: 'id, commandReceiptId, kind, state, entityPublicId, [entityPublicId+sequence], nextAttemptAt, updatedAt',
+        }).upgrade(async (transaction) => {
+            await transaction.table('agentProtocolEffects').toCollection().modify((effect) => {
+                if (!effect.entityPublicId || !effect.payload || !effect.operation || !Number.isSafeInteger(effect.sequence)) {
+                    effect.state = 'failed';
+                    effect.lastErrorCode = 'capability_blocked';
+                    effect.lastErrorMessage = 'Legacy effect has no durable delivery payload';
+                }
+            });
         });
 
         // Keep identities present and immutable until all mutation paths share

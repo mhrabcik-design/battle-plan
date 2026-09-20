@@ -27,3 +27,33 @@ test('persisting completion keeps unsaved fields dirty across completion and reo
   assert.equal(getEditorTaskSnapshot(applySavedEditorStatus(initial, { status: 'completed', updatedAt: 2 })),
     getEditorTaskSnapshot({ ...initial, status: 'completed', updatedAt: 3 }));
 });
+
+test('persisting completion advances the draft revision without replacing unsaved content', () => {
+  const initial: UnifiedTask = { id: 1, title: 'Saved', type: 'task', urgency: 2, status: 'pending', createdAt: 1, updatedAt: 1 };
+  const protocolRevision: NonNullable<UnifiedTask['protocolRevision']> = { revision_id: 'sha256:new', base_revision: null, mutation_id: 'mutation_new' };
+  const saved = { ...initial, status: 'completed' as const, updatedAt: 2, protocolRevision };
+  const draft = applySavedEditorStatus({ ...initial, title: 'Unsaved title' }, saved);
+  assert.deepEqual(draft.protocolRevision, protocolRevision);
+  assert.equal(draft.title, 'Unsaved title');
+  assert.equal(draft.status, 'completed');
+});
+
+test('persisting completion advances a current revision but keeps a stale draft revision', () => {
+  const initial: UnifiedTask = {
+    id: 1, title: 'Unsaved title', type: 'task', urgency: 2, status: 'pending', createdAt: 1, updatedAt: 1,
+    protocolRevision: { revision_id: 'sha256:opened', base_revision: null, mutation_id: 'mutation_opened' },
+  };
+  const directRevision: NonNullable<UnifiedTask['protocolRevision']> = { revision_id: 'sha256:completed', base_revision: 'sha256:opened', mutation_id: 'mutation_completed' };
+  const direct = applySavedEditorStatus(initial, { status: 'completed', updatedAt: 2, protocolRevision: directRevision });
+  assert.deepEqual(direct.protocolRevision, directRevision);
+  assert.equal(direct.title, 'Unsaved title');
+
+  const stale = applySavedEditorStatus(initial, {
+    status: 'completed', updatedAt: 3,
+    protocolRevision: { ...directRevision, base_revision: 'sha256:another_edit' },
+  });
+  assert.deepEqual(stale.protocolRevision, initial.protocolRevision);
+  assert.equal(stale.title, 'Unsaved title');
+  assert.equal(stale.status, 'completed');
+  assert.equal(stale.updatedAt, 3);
+});

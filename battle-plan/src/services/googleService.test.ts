@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { afterEach, beforeEach, mock, test } from 'node:test';
 
 const store = new Map<string, string>();
 const localStorage = {
@@ -29,15 +29,29 @@ const localStorage = {
 
 const { AGENT_PROTOCOL_DRIVE_SCOPE, GoogleService, getFollowingCivilDate } = await import('./googleService.ts');
 
+beforeEach(() => {
+    mock.method(globalThis, 'fetch', async () => Response.json({ email: localStorage.getItem('google_user_email') ?? 'user@example.com' }));
+});
+afterEach(() => mock.restoreAll());
+
+function verifySessionFixture(svc: InstanceType<typeof GoogleService>, token: string) {
+    // API/auth-state unit tests start after userinfo has already verified the
+    // bearer. The real startup and consent boundary is tested separately below.
+    Object.assign(svc, { verifiedAccount: { token, accountId: 'user@example.com' } });
+}
+
 function freshService(): InstanceType<typeof GoogleService> {
-    return new GoogleService();
+    const svc = new GoogleService();
+    const token = localStorage.getItem('google_access_token');
+    if (token && localStorage.getItem('google_user_email')) verifySessionFixture(svc, token);
+    return svc;
 }
 
 function clearStore() {
     store.clear();
 }
 
-test('getAuthState returns SIGNED_IN when fresh token is in localStorage and within expiry window', () => {
+test('getAuthState returns SIGNED_IN for a verified fresh token within expiry window', () => {
     clearStore();
     localStorage.setItem('google_access_token', 'fresh-token');
     localStorage.setItem('google_token_expires_at', String(Date.now() + 60 * 60 * 1000));
@@ -147,10 +161,12 @@ function installGapiMock(api: {
     calendarEventsInsert?: (args?: unknown) => Promise<unknown>;
     calendarEventsUpdate?: (args?: unknown) => Promise<unknown>;
     calendarEventsDelete?: () => Promise<unknown>;
+    request?: (args: { path: string; method: string; headers: Record<string, string>; body: string }) => Promise<unknown>;
 }) {
     (globalThis as unknown as { window: { gapi: unknown } }).window.gapi = {
         client: {
             setToken: () => {},
+            request: api.request,
             tasks: {
                 tasklists: { list: api.tasklistsList ?? (async () => ({ result: { items: [] } })) },
                 tasks: {
@@ -657,7 +673,7 @@ test('handleTokenResponse accepts core scopes and disables Google Tasks when the
 
     const svc = freshService();
     const handler = (svc as unknown as { handleTokenResponse: (r: { access_token: string; expires_in: number; scope: string }) => void }).handleTokenResponse;
-    handler({
+    await handler({
         access_token: 'token-without-tasks-scope',
         expires_in: 3600,
         scope: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive',
@@ -698,7 +714,7 @@ test('handleTokenResponse trusts response.scope over GIS helper for optional Tas
 
     const svc = freshService();
     const handler = (svc as unknown as { handleTokenResponse: (r: { access_token: string; expires_in: number; scope: string }) => void }).handleTokenResponse;
-    handler({
+    await handler({
         access_token: 'token-without-tasks-scope',
         expires_in: 3600,
         scope: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive',
@@ -708,7 +724,7 @@ test('handleTokenResponse trusts response.scope over GIS helper for optional Tas
     assert.equal(tasksListCalls, 0, 'stale GIS granted-scope helper must not trigger a Tasks network request');
 });
 
-test('U3: integration — successful first-sign-in token response populates google_access_token, google_token_expires_at, and google_user_email in localStorage', async () => {
+test('U3: integration — successful first-sign-in token response populates token, expiry, and verified email in localStorage', async (t) => {
     clearStore();
     // No userEmail => first sign-in
     // Pre-existing stale access token to confirm it gets overwritten.
@@ -736,14 +752,10 @@ test('U3: integration — successful first-sign-in token response populates goog
     });
 
     const svc = freshService();
-    // Stub out fetchUserInfo (called from the token callback when userEmail is absent)
-    (svc as unknown as { fetchUserInfo: () => Promise<void> }).fetchUserInfo = async function (this: InstanceType<typeof GoogleService>) {
-        (this as unknown as { userEmail: string }).userEmail = 'first-signin-user@example.com';
-        localStorage.setItem('google_user_email', 'first-signin-user@example.com');
-    };
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ email: 'first-signin-user@example.com' }));
 
     // Assert the config is wired up for the first-sign-in flow
-    svc.signIn();
+    await svc.signIn();
     const cfg = firstSignInConfig as { prompt?: string; include_granted_scopes?: boolean } | undefined;
     assert.ok(cfg && typeof cfg === 'object', 'first sign-in must invoke initTokenClient with a config');
     assert.equal(cfg.prompt, 'consent', 'first sign-in config must set prompt=consent');
@@ -797,6 +809,7 @@ test('OFFLINE_AUTH: silent refresh just succeeded → state is SIGNED_IN (or REF
     const svc = freshService();
     // Set up as if refresh just succeeded: fresh token in the future, lastRefreshFailedAt null.
     (svc as unknown as { accessToken: string | null }).accessToken = 'fresh-token';
+    verifySessionFixture(svc, 'fresh-token');
     (svc as unknown as { expiresAt: number }).expiresAt = Date.now() + 60 * 60 * 1000;
     (svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt = null;
 
@@ -812,6 +825,7 @@ test('OFFLINE_AUTH: silent refresh succeeded but token is within 60s of expiry �
 
     const svc = freshService();
     (svc as unknown as { accessToken: string | null }).accessToken = 'fresh-but-soon-expiring';
+    verifySessionFixture(svc, 'fresh-but-soon-expiring');
     (svc as unknown as { expiresAt: number }).expiresAt = Date.now() + 30 * 1000; // 30s from now, inside the 60s window
     (svc as unknown as { lastRefreshFailedAt: number | null }).lastRefreshFailedAt = null;
 
@@ -841,6 +855,7 @@ test('OFFLINE_AUTH: signOut clears lastRefreshFailedAt and resets state to SIGNE
 
     // Now simulate a successful re-sign-in (post-signOut state, fresh token arrives via handleTokenResponse).
     (svc as unknown as { accessToken: string | null }).accessToken = 'reauth-fresh-token';
+    verifySessionFixture(svc, 'reauth-fresh-token');
     (svc as unknown as { expiresAt: number }).expiresAt = Date.now() + 60 * 60 * 1000;
 
     const status = svc.getAuthStatus();
@@ -882,7 +897,7 @@ test('OFFLINE_AUTH: successful signIn() after a failed refresh clears lastRefres
     (svc as unknown as { lastRefreshFailedAt: number }).lastRefreshFailedAt = Date.now();
     assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH');
 
-    svc.signIn();
+    await svc.signIn();
     // Allow microtasks to settle (signIn is synchronous; the consentClient
     // mock invokes handleTokenResponse synchronously inside requestAccessToken,
     // which writes localStorage and dispatches the change event).
@@ -1018,7 +1033,7 @@ test('U2.4: handleTokenResponse (consent path) gapi.client.setToken throw does n
     const svc = freshService();
     // Drive the consent callback directly with a fresh token.
     const handler = (svc as unknown as { handleTokenResponse: (r: { access_token: string; expires_in: number }) => void }).handleTokenResponse;
-    handler({ access_token: 'fresh-from-consent', expires_in: 3600 });
+    await handler({ access_token: 'fresh-from-consent', expires_in: 3600 });
 
     // State must be OFFLINE_AUTH (setToken failure flipped it), not SIGNED_IN.
     assert.equal(svc.getAuthStatus().state, 'OFFLINE_AUTH', 'setToken throw on consent must flip state to OFFLINE_AUTH');
@@ -1307,11 +1322,347 @@ test('addToCalendar updates a timed event end from the current duration', async 
     assert.equal(request?.resource?.end?.dateTime, new Date(start.getTime() + 90 * 60_000).toISOString());
 });
 
-test('v2 Drive transport exposes its exact narrow scope and account cache discriminator', () => {
+test('v2 Drive transport exposes its narrow scope without treating a login hint as account proof', () => {
     clearStore();
     localStorage.setItem('google_user_email', 'user@example.com');
     const svc = freshService();
 
     assert.equal(AGENT_PROTOCOL_DRIVE_SCOPE, 'https://www.googleapis.com/auth/drive.file');
-    assert.equal(svc.getAccountId(), 'user@example.com');
+    assert.equal(svc.getAccountId(), null);
+});
+
+test('durable Calendar creation reserves resource.id and preserves completed event details', async () => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMock({ calendarEventsInsert: async (args) => {
+        const request = args as { eventId?: string; resource: Record<string, unknown> };
+        assert.equal(request.eventId, undefined);
+        assert.equal(request.resource.id, 'bp012345');
+        assert.match(String(request.resource.description), /Private note/);
+        assert.deepEqual(request.resource.reminders, { useDefault: false, overrides: [] });
+        return { result: { id: 'bp012345' } };
+    } });
+    assert.equal(await freshService().addToCalendar({
+        title: 'Done', date: '2026-09-20', status: 'completed', internalNotes: 'Private note',
+        reservedGoogleEventId: 'bp012345',
+    }, { isCurrent: async () => true }), 'bp012345');
+});
+
+test('ambiguous Calendar insert retries the reserved ID with an ETag conditional update', async () => {
+    clearStore();
+    seedSignedInStorage();
+    const methods: string[] = [];
+    installGapiMock({
+        calendarEventsInsert: async () => { throw { status: 409 }; },
+        request: async (request) => {
+            methods.push(request.method);
+            assert.match(request.path, /events\/bp012345$/);
+            if (request.method === 'GET') return { status: 200, body: JSON.stringify({ id: 'bp012345', etag: '"v1"' }) };
+            assert.equal(request.headers['If-Match'], '"v1"');
+            assert.equal(JSON.parse(request.body).summary, 'Updated [BP]');
+            return { status: 200, body: JSON.stringify({ id: 'bp012345' }) };
+        },
+    });
+    assert.equal(await freshService().addToCalendar({
+        title: 'Updated', date: '2026-09-20', reservedGoogleEventId: 'bp012345',
+    }, { isCurrent: async () => true }), 'bp012345');
+    assert.deepEqual(methods, ['GET', 'PUT']);
+});
+
+test('Calendar lease loss after GET prevents writing and 412 is never blindly retried', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let writes = 0;
+    installGapiMock({ request: async ({ method }) => {
+        if (method === 'GET') return { status: 200, body: JSON.stringify({ etag: '"v1"' }) };
+        writes++;
+        throw { status: 412 };
+    } });
+    const task = { title: 'Old', date: '2026-09-20', googleEventId: 'existing' };
+    await assert.rejects(freshService().addToCalendar(task, { isCurrent: async () => false }), /ownership/);
+    assert.equal(writes, 0);
+    await assert.rejects(freshService().addToCalendar(task, { isCurrent: async () => true }),
+        (error: unknown) => (error as { status?: number }).status === 412);
+    assert.equal(writes, 1);
+});
+
+const deferred = <T>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((yes) => { resolve = yes; });
+    return { promise, resolve };
+};
+
+function consent(svc: InstanceType<typeof GoogleService>, token: string) {
+    installGisMock({ initTokenClient: (config) => ({ requestAccessToken: () => {
+        (config as { callback: (response: { access_token: string; expires_in: number; scope: string }) => void })
+            .callback({ access_token: token, expires_in: 3600,
+                scope: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/tasks' });
+    } }) });
+    return svc.signIn();
+}
+
+test('restored credentials stay unavailable until current-token userinfo is verified', async (t) => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMock({});
+    const identity = deferred<Response>();
+    t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, init?: RequestInit) => {
+        assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer fresh-token');
+        return identity.promise;
+    });
+    const svc = new GoogleService();
+    assert.equal(svc.getAccountId(), null);
+    assert.equal(svc.getAuthStatus().accessToken, null);
+    assert.equal(svc.getAuthState(), 'OFFLINE_AUTH');
+    const verification = svc.fetchUserInfo();
+    identity.resolve(Response.json({ email: 'verified@example.com' }));
+    assert.equal(await verification, true);
+    assert.equal(svc.getAccountId(), 'verified@example.com');
+    assert.equal(svc.getAuthState(), 'SIGNED_IN');
+});
+
+test('first consent stays unavailable before identity; subsequent task effects are bound and delivered', async (t) => {
+    const { BattlePlanDB } = await import('../db.ts');
+    const { TaskMutationService, newTaskMutationContext } = await import('./taskMutations.ts');
+    const { ExternalEffectOutbox, executeGoogleExternalEffect } = await import('./externalEffectOutbox.ts');
+    const { hasUsableAuth } = await import('../types.ts');
+    const database = new BattlePlanDB(`FirstConsent-${crypto.randomUUID()}`);
+    await database.open();
+    t.after(() => database.delete());
+    clearStore();
+    installGapiMock({ calendarEventsInsert: async (args) => ({ result: { id: (args as { resource: { id: string } }).resource.id } }) });
+    const identity = deferred<Response>();
+    t.mock.method(globalThis, 'fetch', async () => identity.promise);
+    const svc = new GoogleService();
+    const signing = consent(svc, 'new-token');
+    assert.equal(svc.getAuthState(), 'SIGNED_OUT');
+    assert.equal(svc.getAuthStatus().accessToken, null);
+    assert.equal(svc.getAccountId(), null);
+    assert.equal(hasUsableAuth(svc.getAuthStatus()), false);
+    identity.resolve(Response.json({ email: 'new@example.com' }));
+    await signing;
+    assert.equal(svc.getAuthState(), 'SIGNED_IN');
+    assert.equal(svc.getAccountId(), 'new@example.com');
+    const created = await new TaskMutationService(database).createTask({
+        task: { title: 'First meeting', type: 'meeting', urgency: 2, status: 'pending' },
+        context: newTaskMutationContext('ui', undefined, svc.getAccountId()!),
+        effects: [{ kind: 'calendar', operation: 'upsert' }],
+    });
+    assert.equal(created.status, 'applied');
+    const effects = await database.agentProtocolEffects.toArray();
+    assert.equal(effects[0].accountId, 'new@example.com');
+    const worker = new ExternalEffectOutbox(database, {
+        accountId: () => svc.getAccountId(), canExecute: () => hasUsableAuth(svc.getAuthStatus()),
+        execute: (effect, guard) => executeGoogleExternalEffect(svc, effect, guard),
+    });
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+});
+
+test('init verifies a restored fresh token and refreshes an expired token before identity lookup', async (t) => {
+    for (const expired of [false, true]) {
+        clearStore();
+        seedSignedInStorage();
+        if (expired) localStorage.setItem('google_token_expires_at', String(Date.now() - 1));
+        installGapiMock({});
+        window.gapi.load = (_name, callback) => callback();
+        window.gapi.client.init = async () => {};
+        let refreshRequests = 0;
+        installGisMock({ initTokenClient: (config) => ({ requestAccessToken: () => {
+            refreshRequests++;
+            (config as { callback: (response: { access_token: string; expires_in: number }) => void })
+                .callback({ access_token: 'refreshed-token', expires_in: 3600 });
+        } }) });
+        const lookupBearers: string[] = [];
+        t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, init?: RequestInit) => {
+            lookupBearers.push(new Headers(init?.headers).get('Authorization')!);
+            return Response.json({ email: 'restored@example.com' });
+        });
+        const svc = new GoogleService();
+        await svc.init();
+        assert.equal(refreshRequests, expired ? 1 : 0);
+        assert.deepEqual(lookupBearers, [expired ? 'Bearer refreshed-token' : 'Bearer fresh-token']);
+        assert.equal(svc.getAccountId(), 'restored@example.com');
+        assert.equal(svc.getAuthState(), 'SIGNED_IN');
+    }
+});
+
+test('an API call refreshes an unverified expired token instead of querying userinfo with it', async (t) => {
+    clearStore();
+    seedSignedInStorage();
+    localStorage.setItem('google_token_expires_at', String(Date.now() - 1));
+    installGapiMock({});
+    installGisMock({ initTokenClient: (config) => ({ requestAccessToken: () => {
+        (config as { callback: (response: { access_token: string; expires_in: number }) => void })
+            .callback({ access_token: 'refreshed-token', expires_in: 3600 });
+    } }) });
+    const lookupBearers: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, init?: RequestInit) => {
+        lookupBearers.push(new Headers(init?.headers).get('Authorization')!);
+        return Response.json({ email: 'restored@example.com' });
+    });
+    const svc = new GoogleService();
+    Object.assign(svc, { tokenClient: { requestAccessToken: () => {} } });
+    await svc.getTaskLists();
+    assert.deepEqual(lookupBearers, ['Bearer refreshed-token']);
+    assert.equal(svc.getAuthState(), 'SIGNED_IN');
+});
+
+test('failed or incomplete userinfo never falls back to a cached account', async (t) => {
+    for (const response of [new Response('', { status: 503 }), Response.json({ sub: 'missing-email' })]) {
+        clearStore();
+        seedSignedInStorage();
+        installGapiMock({});
+        t.mock.method(globalThis, 'fetch', async () => response);
+        const svc = new GoogleService();
+        await consent(svc, 'replacement-token');
+        assert.equal(svc.getAuthState(), 'OFFLINE_AUTH');
+        assert.equal(svc.getAccountId(), null);
+        assert.equal(svc.getAuthStatus().accessToken, null);
+        assert.equal(localStorage.getItem('google_access_token'), 'replacement-token');
+        assert.equal(localStorage.getItem('google_user_email'), 'user@example.com');
+    }
+});
+
+test('late userinfo cannot restore a signed-out session or overwrite a later account', async (t) => {
+    for (const oldResponse of [Response.json({ email: 'old@example.com' }), new Response('', { status: 503 })]) {
+        clearStore();
+        installGapiMock({});
+        const oldIdentity = deferred<Response>();
+        t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+            if (String(url).includes('/revoke')) return new Response();
+            return new Headers(init?.headers).get('Authorization') === 'Bearer old-token'
+                ? oldIdentity.promise : Response.json({ email: 'new@example.com' });
+        });
+        const svc = new GoogleService();
+        const oldSignIn = consent(svc, 'old-token');
+        svc.signOut();
+        assert.equal(svc.getAccountId(), null);
+        assert.equal(localStorage.getItem('google_user_email'), null);
+        await consent(svc, 'new-token');
+        oldIdentity.resolve(oldResponse);
+        await oldSignIn;
+        assert.equal(svc.getAccountId(), 'new@example.com');
+        assert.equal(svc.getAuthStatus().accessToken, 'new-token');
+        assert.equal(localStorage.getItem('google_user_email'), 'new@example.com');
+    }
+});
+
+test('userinfo that completes after signout leaves credentials cleared', async (t) => {
+    clearStore();
+    installGapiMock({});
+    const identity = deferred<Response>();
+    t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL) => String(url).includes('/revoke') ? new Response() : identity.promise);
+    const svc = new GoogleService();
+    const signing = consent(svc, 'old-token');
+    svc.signOut();
+    identity.resolve(Response.json({ email: 'old@example.com' }));
+    await signing;
+    assert.equal(svc.getAuthState(), 'SIGNED_OUT');
+    assert.equal(svc.getAccountId(), null);
+    assert.equal(localStorage.getItem('google_access_token'), null);
+    assert.equal(localStorage.getItem('google_user_email'), null);
+});
+
+test('a timed-out silent-refresh callback cannot replace a subsequent consent session', async (t) => {
+    clearStore();
+    seedSignedInStorage();
+    installGapiMock({});
+    let lateResponse!: (response: { access_token: string; expires_in: number }) => void;
+    installGisMock({ initTokenClient: (config) => {
+        lateResponse = (config as { callback: typeof lateResponse }).callback;
+        return { requestAccessToken: () => {} };
+    } });
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ email: 'new@example.com' }));
+    const svc = new GoogleService({ refreshTimeoutMs: 10 });
+    Object.assign(svc, { tokenClient: { requestAccessToken: () => {} } });
+    assert.equal(await svc.trySilentRefresh(), false);
+    await consent(svc, 'new-token');
+    lateResponse({ access_token: 'old-late-token', expires_in: 3600 });
+    await Promise.resolve();
+    assert.equal(svc.getAccountId(), 'new@example.com');
+    assert.equal(svc.getAuthStatus().accessToken, 'new-token');
+    assert.equal(localStorage.getItem('google_access_token'), 'new-token');
+});
+
+test('OFFLINE_AUTH A followed by consent B never delivers or acknowledges A effects under B', async (t) => {
+    const { BattlePlanDB } = await import('../db.ts');
+    const { TaskMutationService, newTaskMutationContext } = await import('./taskMutations.ts');
+    const { ExternalEffectOutbox, executeGoogleExternalEffect } = await import('./externalEffectOutbox.ts');
+    const { hasUsableAuth } = await import('../types.ts');
+    const database = new BattlePlanDB(`AccountIsolation-${crypto.randomUUID()}`);
+    await database.open();
+    t.after(() => database.delete());
+    clearStore();
+    let bearer: string | null = null;
+    const deliveries: string[] = [];
+    installGapiMock({
+        tasklistsList: async () => { throw { status: 401 }; },
+        calendarEventsInsert: async (args) => {
+            deliveries.push(bearer!);
+            return { result: { id: (args as { resource: { id: string } }).resource.id } };
+        },
+    });
+    window.gapi.client.setToken = (token) => { bearer = token?.access_token ?? null; };
+    const identityB = deferred<Response>();
+    t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, init?: RequestInit) => new Headers(init?.headers).get('Authorization') === 'Bearer token-b'
+        ? identityB.promise : Response.json({ email: 'a@example.com' }));
+    const svc = new GoogleService();
+    await consent(svc, 'token-a');
+    const mutations = new TaskMutationService(database);
+    const created = await mutations.createTask({
+        task: { title: 'Private meeting A', internalNotes: 'Private notes A', status: 'pending', type: 'meeting', urgency: 2 },
+        context: newTaskMutationContext('ui', undefined, svc.getAccountId()!),
+        effects: [{ kind: 'calendar', operation: 'upsert' }],
+    });
+    assert.equal(created.status, 'applied');
+    if (created.status !== 'applied') throw new Error('expected task');
+    const worker = new ExternalEffectOutbox(database, {
+        accountId: () => svc.getAccountId(), canExecute: () => hasUsableAuth(svc.getAuthStatus()),
+        execute: (effect, guard) => executeGoogleExternalEffect(svc, effect, guard),
+    });
+    await svc.getTaskLists();
+    assert.equal(svc.getAuthState(), 'OFFLINE_AUTH');
+    const signingB = consent(svc, 'token-b');
+    assert.equal((await worker.drainOnce()).attempted, 0);
+    identityB.resolve(Response.json({ email: 'b@example.com' }));
+    await signingB;
+    assert.equal(svc.getAccountId(), 'b@example.com');
+    assert.equal((await worker.drainOnce()).attempted, 0);
+    assert.deepEqual(deliveries, []);
+    assert.equal((await database.agentProtocolEffects.get(created.effectIds[0]))?.state, 'pending');
+    assert.equal((await database.tasks.get(created.task.id!))?.googleAccountId, 'a@example.com');
+    await consent(svc, 'token-a-again');
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    assert.deepEqual(deliveries, ['token-a-again']);
+});
+
+test('durable Calendar delete uses If-Match; missing is success and unavailable auth is not', async () => {
+    clearStore();
+    seedSignedInStorage();
+    const methods: string[] = [];
+    installGapiMock({ request: async (request) => {
+        methods.push(request.method);
+        if (request.method === 'GET') return { status: 200, body: JSON.stringify({ etag: '"v2"' }) };
+        assert.equal(request.headers['If-Match'], '"v2"');
+        return { status: 204 };
+    } });
+    assert.equal(await freshService().deleteFromCalendar('existing', { isCurrent: async () => true }), true);
+    assert.deepEqual(methods, ['GET', 'DELETE']);
+    installGapiMock({ request: async () => { throw { status: 404 }; } });
+    assert.equal(await freshService().deleteFromCalendar('missing', { isCurrent: async () => true }), true);
+    clearStore();
+    assert.notEqual(await freshService().deleteFromCalendar('existing', { isCurrent: async () => true }), true);
+});
+
+test('queued Google Tasks checks ownership after authentication and preserves failure status', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let writes = 0;
+    installGapiMock({ tasksPatch: async () => { writes++; throw { status: 404 }; } });
+    await assert.rejects(freshService().updateGoogleTask('task-id', { status: 'completed' }, '@default',
+        { isCurrent: async () => false }), /ownership/);
+    assert.equal(writes, 0);
+    await assert.rejects(freshService().updateGoogleTask('task-id', { status: 'completed' }, '@default',
+        { isCurrent: async () => true }), (error: unknown) => (error as { status?: number }).status === 404);
+    assert.equal(writes, 1);
 });

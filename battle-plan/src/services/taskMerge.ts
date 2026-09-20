@@ -1,5 +1,6 @@
 import { db, type Task } from '../db.ts';
 import { taskBackupRevision } from '../utils/taskBackupRevision.ts';
+import { newTaskMutationContext, taskMutations, taskMutationTables } from './taskMutations.ts';
 
 async function portableTask(task: Task): Promise<Task> {
     if (task.publicId) return task;
@@ -13,9 +14,9 @@ async function portableTask(task: Task): Promise<Task> {
 export async function mergeTasksFromDrive(tasks: Task[]): Promise<boolean> {
     // Hash before entering IndexedDB: awaiting WebCrypto inside a transaction
     // lets the browser close that transaction before the following write.
-    const portableTasks = await Promise.all(tasks.map(portableTask));
+    const portableTasks = await Promise.all(structuredClone(tasks).map(portableTask));
     let changed = false;
-    await db.transaction('rw', db.tasks, async () => {
+    await db.transaction('rw', taskMutationTables(db), async () => {
         for (const cloudTask of portableTasks) {
             const [byPublicId, byOccurrence] = await Promise.all([
                 db.tasks.where('publicId').equals(cloudTask.publicId!).first(),
@@ -37,21 +38,13 @@ export async function mergeTasksFromDrive(tasks: Task[]): Promise<boolean> {
                 && localTask.suggestionOccurrenceKey !== cloudTask.suggestionOccurrenceKey) {
                 throw new Error('Konflikt identity návrhu: shodný úkol má různé occurrence identity.');
             }
-            if (!localTask) {
-                const incoming = { ...cloudTask };
-                delete incoming.id;
-                await db.tasks.add(incoming);
-                changed = true;
-            } else if ((cloudTask.updatedAt || cloudTask.createdAt || 0) > (localTask.updatedAt || localTask.createdAt || 0)) {
-                await db.tasks.put({
-                    ...cloudTask,
-                    id: localTask.id,
-                    publicId: localTask.publicId,
-                    suggestionOccurrenceKey: localTask.suggestionOccurrenceKey ?? cloudTask.suggestionOccurrenceKey,
-                    suggestionSubjectId: localTask.suggestionSubjectId ?? cloudTask.suggestionSubjectId,
-                });
-                changed = true;
-            }
+            const result = await taskMutations.importTask({
+                task: cloudTask,
+                localId: localTask?.id,
+                context: newTaskMutationContext('drive'),
+            });
+            if (result.status === 'applied') changed = true;
+            else if (result.status !== 'unchanged') throw new Error(`Task import failed: ${result.status}`);
         }
     });
     return changed;

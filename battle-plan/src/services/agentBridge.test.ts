@@ -49,7 +49,7 @@ const gapiMock: {
     calendarInsertCalls: [],
     calendarDeleteCalls: [],
     tasksPatchCalls: [],
-    calendarInsertImpl: async () => ({ result: { id: 'cal-evt-1' } }),
+    calendarInsertImpl: async (args: unknown) => ({ result: { id: (args as { resource: { id: string } }).resource.id } }),
     calendarDeleteImpl: async () => ({}),
     tasksPatchImpl: async () => ({ result: { id: 'task-1' } }),
 };
@@ -61,8 +61,17 @@ const gapiMock: {
         tasks: { tasks: { patch: async (args: unknown) => { gapiMock.tasksPatchCalls.push(args); return gapiMock.tasksPatchImpl(args); } } },
         request: async (args: unknown) => {
             // Drive API for DriveJsonStore — return a 404 so readJsonFile returns null and applyWrite can still run.
-            if (typeof args === 'object' && args !== null && 'path' in args) {
+            if (typeof args === 'object' && args !== null && 'path' in args && 'method' in args) {
                 const path = (args as { path: string }).path;
+                if (path.startsWith('/calendar/v3/')) {
+                    if (args.method === 'GET') {
+                        return { body: JSON.stringify({ etag: '"calendar-version-1"' }) };
+                    }
+                    if (args.method === 'DELETE') {
+                        gapiMock.calendarDeleteCalls.push(args);
+                    }
+                    return { body: '{}' };
+                }
                 if (path.includes('/files/') && (args as unknown as { method: string }).method === 'GET') {
                     const err = new Error('Not Found') as Error & { status?: number; code?: number };
                     err.status = 404; err.code = 404;
@@ -97,6 +106,7 @@ type GoogleServiceInternalState = {
     accessToken: string | null;
     expiresAt: number;
     userEmail: string | null;
+    verifiedAccount: { token: string; accountId: string } | null;
     trySilentRefresh: () => Promise<boolean>;
 };
 
@@ -125,10 +135,13 @@ function setGoogleServiceState(state: {
     if (state.accessToken !== undefined) svc.accessToken = state.accessToken;
     if (state.expiresAt !== undefined) svc.expiresAt = state.expiresAt;
     if (state.userEmail !== undefined) svc.userEmail = state.userEmail;
+    svc.verifiedAccount = svc.accessToken && svc.userEmail ? { token: svc.accessToken, accountId: svc.userEmail } : null;
 }
 
 async function resetDb() {
     await db.tasks.clear();
+    await db.agentProtocolEvents.clear();
+    await db.agentProtocolEffects.clear();
     await db.workLogs.clear();
     await db.projects.clear();
     await db.settings.clear();
@@ -212,6 +225,8 @@ test('U3: create_task stamps source=agent and agent_write_id on the row', async 
     assert.equal(stored!.agent_write_id, 'agent-1');
     assert.equal(stored!.deadline, '2026-09-11');
     assert.equal(stored!.date, '2026-09-11');
+    assert.ok(stored!.protocolRevision);
+    assert.equal(await db.agentProtocolEvents.count(), 1);
 });
 
 test('voice creation and updates keep undated tasks in the current week', async (t) => {
@@ -231,7 +246,7 @@ test('voice creation and updates keep undated tasks in the current week', async 
     assert.equal((await db.tasks.get(id))?.deadline, '2026-09-11');
 });
 
-test('U3: create_task with type=meeting calls addToCalendar and patches googleEventId', async () => {
+test('U3: create_task delivers its durable Calendar effect and records only the reserved event identity', async () => {
     seedSignedInStorage();
     setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
     (agentBridge as unknown as { drive: { init: () => Promise<boolean>; readJsonFile: () => Promise<{ fileId: string | null; data: unknown } | null>; writeJsonFile: () => Promise<string> } }).drive = {
@@ -261,11 +276,14 @@ test('U3: create_task with type=meeting calls addToCalendar and patches googleEv
     const stored = await db.tasks.get(result.newId!);
     assert.ok(stored);
     assert.equal(stored!.type, 'meeting');
-    assert.equal(stored!.googleEventId, 'cal-evt-1');
+    assert.match(stored!.reservedGoogleEventId!, /^bp[0-9a-f]{32}$/);
+    assert.equal(stored!.googleEventId, stored!.reservedGoogleEventId);
+    assert.ok(stored!.protocolRevision);
+    assert.equal((await db.agentProtocolEffects.toArray())[0].state, 'succeeded');
     assert.equal(gapiMock.calendarInsertCalls.length, 1, 'calendar.events.insert should be called once');
 });
 
-test('U3: delete_task with googleEventId calls deleteFromCalendar', async () => {
+test('U3: delete_task delivers its durable Calendar deletion with an ETag', async () => {
     seedSignedInStorage();
     setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
     (agentBridge as unknown as { drive: { init: () => Promise<boolean>; readJsonFile: () => Promise<{ fileId: string | null; data: unknown } | null>; writeJsonFile: () => Promise<string> } }).drive = {
@@ -287,7 +305,11 @@ test('U3: delete_task with googleEventId calls deleteFromCalendar', async () => 
     };
     const result = await agentBridge.applyWrite(write);
     assert.equal(result.success, true);
-    assert.equal(gapiMock.calendarDeleteCalls.length, 1, 'calendar.events.delete should be called once');
+    assert.equal(gapiMock.calendarDeleteCalls.length, 1, 'conditional Calendar delete should be called once');
+    const request = gapiMock.calendarDeleteCalls[0] as { headers: Record<string, string> };
+    assert.equal(request.headers['If-Match'], '"calendar-version-1"');
+    assert.equal((await db.agentProtocolEffects.toArray())[0].state, 'succeeded');
+    assert.equal((await db.tasks.get(id))?.isDeleted, true);
 });
 
 test('U3: complete_task with googleId calls updateGoogleTask with status:completed', async () => {
@@ -312,6 +334,56 @@ test('U3: complete_task with googleId calls updateGoogleTask with status:complet
     const result = await agentBridge.applyWrite(write);
     assert.equal(result.success, true);
     assert.equal(gapiMock.tasksPatchCalls.length, 1, 'tasks.tasks.patch should be called once');
+    assert.equal((await db.agentProtocolEffects.toArray())[0].state, 'succeeded');
+    assert.ok((await db.tasks.get(id))?.protocolRevision);
+});
+
+test('legacy updates preserve user provenance and queue Calendar changes while signed out', async () => {
+    clearStore();
+    setGoogleServiceState({ accessToken: null, userEmail: null });
+    await resetDb();
+    const id = await db.tasks.add({
+        title: 'Original', type: 'meeting', urgency: 2, status: 'pending', date: '2026-10-02',
+        source: 'user', googleEventId: 'linked-event', createdAt: 1, updatedAt: 1,
+    });
+    const original = (await db.tasks.get(id))!;
+    const applied = await agentBridge.applyWrite({ id: 'legacy-edit', action: 'update_task',
+        task_data: { id, title: 'Agent edit' }, created_at: 2 });
+    assert.equal(applied.disposition, 'applied');
+    const saved = (await db.tasks.get(id))!;
+    assert.equal(saved.source, 'user');
+    assert.equal(saved.agent_write_id, undefined);
+    assert.equal(saved.publicId, original.publicId);
+    assert.ok(saved.protocolRevision);
+    const effects = await db.agentProtocolEffects.toArray();
+    assert.equal(effects.length, 1);
+    assert.equal(effects[0].state, 'pending');
+    assert.equal(effects[0].operation, 'upsert');
+    assert.equal(await db.agentProtocolEvents.count(), 1);
+    assert.equal(gapiMock.calendarInsertCalls.length, 0);
+});
+
+test('legacy edits reject a stale revision, mismatched identity, and deleted task', async () => {
+    clearStore();
+    setGoogleServiceState({ accessToken: null, userEmail: null });
+    await resetDb();
+    const created = await agentBridge.applyWrite({ id: 'legacy-create', action: 'create_task',
+        task_data: { title: 'Original', type: 'task' }, created_at: 1 });
+    const original = (await db.tasks.get(created.newId!))!;
+    await agentBridge.applyWrite({ id: 'legacy-edit', action: 'update_task',
+        task_data: { id: original.id, title: 'Newer edit' }, created_at: 2 });
+    const stale = await agentBridge.applyWrite({ id: 'legacy-stale', action: 'update_task',
+        task_data: { ...original, title: 'Stale edit' }, created_at: 3 });
+    assert.equal(stale.disposition, 'terminal');
+    assert.equal((await db.tasks.get(original.id!))?.title, 'Newer edit');
+    const mismatch = await agentBridge.applyWrite({ id: 'legacy-mismatch', action: 'delete_task',
+        task_data: { id: original.id, publicId: 'task_other' }, created_at: 4 });
+    assert.equal(mismatch.disposition, 'terminal');
+    await db.tasks.update(original.id!, { isDeleted: true });
+    const deleted = await agentBridge.applyWrite({ id: 'legacy-deleted', action: 'complete_task',
+        task_data: { id: original.id }, created_at: 5 });
+    assert.equal(deleted.disposition, 'terminal');
+    assert.equal(await db.agentProtocolEvents.count(), 2);
 });
 
 test('U2: normalizeEntity clamps urgency 4 to 3', async () => {
@@ -928,7 +1000,7 @@ test('U7: agentInbox is a Dexie Table and the current schema opens', async () =>
     assert.ok(names.includes('workLogs'), 'workLogs must be present');
     assert.ok(names.includes('projects'), 'projects must be present');
     assert.ok(names.includes('settings'), 'settings must be present');
-    assert.equal(await db.verno, 18);
+    assert.equal(await db.verno, 19);
 });
 
 
