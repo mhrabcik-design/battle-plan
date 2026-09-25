@@ -82,6 +82,14 @@ jobs:
         working-directory: battle-plan
         run: npm test
 
+      - name: Theme contract
+        working-directory: battle-plan
+        run: npm run check:theme
+
+      - name: Agent protocol conformance
+        working-directory: battle-plan
+        run: npm run test:agent-protocol
+
       - name: Build
         working-directory: battle-plan
         run: npm run build
