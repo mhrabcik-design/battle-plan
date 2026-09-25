@@ -379,7 +379,6 @@ const syncVisualState = deriveSyncVisualState({
     googleAuth,
     setGoogleAuth,
     setGoogleTaskLists,
-    setApiKey,
     setSelectedModel,
     setUiScale,
     setLastSync,

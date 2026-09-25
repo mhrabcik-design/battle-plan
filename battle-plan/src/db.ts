@@ -108,14 +108,19 @@ export interface WorkLog {
     createdAt: number;
 }
 
-export interface WorkLogDeletionTombstone {
+export type WorkLogDeletionTombstone = {
     /** Removed WorkLog sync identity and durable primary key. */
     syncId: string;
+    deletedAt: number;
+} & ({
+    reason: 'confirmed-duplicate';
     survivorSyncId: string;
     fingerprint: string;
-    reason: 'confirmed-duplicate';
-    deletedAt: number;
-}
+} | {
+    reason: 'user-deleted';
+    survivorSyncId?: never;
+    fingerprint?: never;
+});
 
 export type SuggestionDecisionKind =
     | 'commented'

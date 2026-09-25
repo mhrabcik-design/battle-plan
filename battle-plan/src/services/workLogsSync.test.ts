@@ -1032,3 +1032,68 @@ test('Drive identity conflict rejects atomically before importing projects or Wo
     await assert.rejects(mergeCloudToLocal([], cyclePayload));
     assert.equal(await db.projects.count(), 0);
 });
+
+test('ordinary deletion tombstones suppress stale snapshots while preserving identical independent work', async () => {
+    await resetDb();
+    const deleted = { syncId: 'ordinary-deleted', date: '2026-09-25', projectId: 1, projectName: 'Test', people: 'Martin', hours: 1, source: 'manual' as const, createdAt: 10, updatedAt: 10 };
+    await db.workLogs.bulkAdd([deleted, { ...deleted, syncId: 'independent-work' }]);
+    const tombstone = { syncId: deleted.syncId, reason: 'user-deleted', deletedAt: 20 } as WorkLogDeletionTombstone;
+    await mergeCloudToLocal([deleted], [], [tombstone]);
+    await mergeCloudToLocal([{ ...deleted, updatedAt: 30 }], []);
+    assert.deepEqual((await db.workLogs.toArray()).map(row => row.syncId), ['independent-work']);
+    assert.deepEqual(await db.workLogDeletionTombstones.toArray(), [tombstone]);
+});
+
+test('ordinary deletion publishes and verifies its journal before the worklog snapshot', async () => {
+    const store = new FakeImmutableWorkLogsStore();
+    const sync = new WorkLogsSync(store);
+    await sync.init();
+    const tombstone = { syncId: 'ordinary-deleted', reason: 'user-deleted', deletedAt: 20 } as WorkLogDeletionTombstone;
+    assert.equal((await sync.saveAllDetailed({ workLogs: [], projects: [], workLogDeletionTombstones: [tombstone] }) as {kind: string}).kind, 'published');
+    assert.deepEqual(store.writes.map(write => write.name), ['work_log_deletion_tombstones.json', 'work_logs_data.json']);
+});
+
+test('ordinary local deletion survives the upload preliminary pull of a legacy snapshot', async () => {
+    await resetDb();
+    const { deleteWorkLog } = await vite.ssrLoadModule('/src/services/workLogDeletion.ts') as { deleteWorkLog: (id: number) => Promise<boolean> };
+    const stale = { syncId: 'ordinary-upload-deleted', date: '2026-09-25', projectId: 1, projectName: 'Test', people: 'Martin', hours: 1, source: 'manual' as const, createdAt: 10, updatedAt: 10 };
+    const id = await db.workLogs.add({ ...stale });
+    await deleteWorkLog(id);
+    const tombstones = await db.workLogDeletionTombstones.toArray();
+    const sync = workLogsSync as { isInitialized: boolean; loadAllDetailed: () => Promise<unknown>; saveAllDetailed: (payload: { workLogs: unknown[]; workLogDeletionTombstones: WorkLogDeletionTombstone[] }) => Promise<unknown> };
+    const original = { isInitialized: sync.isInitialized, loadAllDetailed: sync.loadAllDetailed, saveAllDetailed: sync.saveAllDetailed };
+    try {
+        sync.isInitialized = true;
+        sync.loadAllDetailed = async () => ({ kind: 'loaded', data: { timestamp: 10, workLogs: [stale], projects: [], workLogDeletionTombstones: [] } });
+        sync.saveAllDetailed = async payload => {
+            assert.deepEqual(payload.workLogs, []);
+            assert.deepEqual(payload.workLogDeletionTombstones, tombstones);
+            return { kind: 'published', timestamp: 30 };
+        };
+        assert.equal(await mergeLocalToCloud(), true);
+        assert.equal(await db.workLogs.count(), 0);
+    } finally { Object.assign(sync, original); }
+});
+
+test('ordinary tombstones reject conflicting reasons and malformed duplicate metadata atomically', async () => {
+    await resetDb();
+    const row = { syncId: 'ordinary-conflict', date: '2026-09-25', projectId: 1, projectName: 'Test', people: 'Martin', hours: 1, source: 'manual' as const, createdAt: 10, updatedAt: 10 };
+    await db.workLogs.add(row);
+    await db.workLogDeletionTombstones.put({ syncId: row.syncId, reason: 'user-deleted', deletedAt: 20 });
+    const before = await db.workLogs.toArray();
+    await assert.rejects(mergeCloudToLocal([], [], [{ syncId: row.syncId, reason: 'confirmed-duplicate', survivorSyncId: 'other', fingerprint: 'copy', deletedAt: 21 }]), /conflicting WorkLog tombstone/);
+    assert.deepEqual(await db.workLogs.toArray(), before);
+    await assert.rejects(mergeCloudToLocal([], [], [{ syncId: row.syncId, reason: 'user-deleted', survivorSyncId: 'other', deletedAt: 21 } as unknown as WorkLogDeletionTombstone]), /platný formát/);
+    assert.deepEqual(await db.workLogs.toArray(), before);
+});
+
+test('unverified ordinary deletion journal never allows the worklog snapshot to be published', async () => {
+    const store = new FakeImmutableWorkLogsStore();
+    store.persistWrites = false;
+    const sync = new WorkLogsSync(store);
+    await sync.init();
+    const result = await sync.saveAllDetailed({ workLogs: [], projects: [], workLogDeletionTombstones: [{ syncId: 'ordinary-unverified', reason: 'user-deleted', deletedAt: 20 }] }) as {kind: string};
+    assert.equal(result.kind, 'verification-failed');
+    assert.equal(store.writes.length, 3);
+    assert.ok(store.writes.every(write => write.name === 'work_log_deletion_tombstones.json'));
+});

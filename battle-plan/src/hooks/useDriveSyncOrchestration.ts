@@ -9,6 +9,7 @@ import type { GoogleAuthStatus, GoogleTaskList } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
 import { hydrateTaskBackup } from './taskBackupCoordinator.ts';
+import { filterTaskBackupSettings } from '../utils/taskBackupSettings.ts';
 import {
   autoSyncFailureHealth,
   driveUnavailableHealth,
@@ -21,7 +22,6 @@ interface UseDriveSyncOrchestrationArgs {
   googleAuth: GoogleAuthStatus;
   setGoogleAuth: (status: GoogleAuthStatus) => void;
   setGoogleTaskLists: (lists: GoogleTaskList[]) => void;
-  setApiKey: (value: string) => void;
   setSelectedModel: (value: string) => void;
   setUiScale: (value: number) => void;
   setLastSync: (value: string | null) => void;
@@ -33,7 +33,6 @@ export function useDriveSyncOrchestration({
   googleAuth,
   setGoogleAuth,
   setGoogleTaskLists,
-  setApiKey,
   setSelectedModel,
   setUiScale,
   setLastSync,
@@ -93,10 +92,9 @@ export function useDriveSyncOrchestration({
             const { tasks: driveTasks, settings: driveSettings } = payloadData;
 
             if (driveSettings) {
-              for (const s of driveSettings) {
+              for (const s of filterTaskBackupSettings(driveSettings)) {
                 await db.settings.put(s);
                 if (cancelled) return;
-                if (s.id === 'gemini_api_key') setApiKey(s.value);
                 if (s.id === 'gemini_model') setSelectedModel(s.value);
                 if (s.id === 'ui_scale') setUiScale(Number(s.value));
               }
@@ -243,7 +241,7 @@ export function useDriveSyncOrchestration({
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
     };
-  }, [hasUsableAuthValue, accessToken, setGoogleAuth, setGoogleTaskLists, setApiKey, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
+  }, [hasUsableAuthValue, accessToken, setGoogleAuth, setGoogleTaskLists, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
 
   return { taskBackupReady: hasUsableAuthValue && hydrated !== null && hydrated.accessToken === accessToken };
 }

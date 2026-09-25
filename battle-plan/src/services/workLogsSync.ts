@@ -102,11 +102,13 @@ function parseWorkLogDeletionTombstone(value: unknown): WorkLogDeletionTombstone
     const row = value as Partial<WorkLogDeletionTombstone>;
     if (
         typeof row.syncId !== 'string' || row.syncId.trim() === ''
-        || typeof row.survivorSyncId !== 'string' || row.survivorSyncId.trim() === ''
-        || row.syncId === row.survivorSyncId
-        || typeof row.fingerprint !== 'string' || row.fingerprint === ''
-        || row.reason !== 'confirmed-duplicate'
         || typeof row.deletedAt !== 'number' || !Number.isFinite(row.deletedAt)
+        || (row.reason === 'confirmed-duplicate'
+            ? typeof row.survivorSyncId !== 'string' || row.survivorSyncId.trim() === ''
+                || row.syncId === row.survivorSyncId
+                || typeof row.fingerprint !== 'string' || row.fingerprint === ''
+            : row.reason !== 'user-deleted'
+                || row.survivorSyncId !== undefined || row.fingerprint !== undefined)
     ) {
         throw new Error('WorkLog tombstone nemá platný formát');
     }

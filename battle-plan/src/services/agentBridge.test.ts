@@ -184,20 +184,6 @@ test('U6: agentBridge.init({ createFolder: false }) is supported for tests', asy
     assert.deepEqual(received, { createFolder: false });
 });
 
-test('U6: agentBridge.init() hydrates processedIds from db.agentInbox.applied_at', async () => {
-    clearStore();
-    await db.agentInbox.put({ id: 'h1', action: 'create_task', entity_type: 'task', payload: {}, received_at: 1, applied_at: 2 });
-    await db.agentInbox.put({ id: 'h2', action: 'create_task', entity_type: 'task', payload: {}, received_at: 3, applied_at: 0 });
-    (agentBridge as unknown as { drive: { init: () => Promise<boolean> }; isInitialized: boolean }).drive = {
-        init: async () => true,
-    };
-    (agentBridge as unknown as { isInitialized: boolean }).isInitialized = false;
-    await agentBridge.init();
-    const cache = (agentBridge as unknown as { processedIds: Set<string> }).processedIds;
-    assert.ok(cache.has('h1'), 'applied row should be hydrated into processedIds');
-    assert.equal(cache.has('h2'), false, 'un-applied row (applied_at === 0) should NOT be hydrated');
-});
-
 test('U3: create_task stamps source=agent and agent_write_id on the row', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 8, 9, 12) });
     seedSignedInStorage();
@@ -978,7 +964,7 @@ test('U5: recordInboxResult stores last_error on failure', async () => {
     assert.equal(row!.applied_at, undefined, 'failure should not stamp applied_at');
 });
 
-test('U5: clearAppliedInbox removes applied rows but keeps pending', async () => {
+test('U5: clearAppliedInbox hides applied diagnostics but retains durable receipts', async () => {
     await resetDb();
     await agentBridge.mirrorInbox([
         { id: 'a', action: 'create_task', task_data: { title: 'A', type: 'task', urgency: 2, status: 'pending' }, created_at: 1 },
@@ -986,7 +972,8 @@ test('U5: clearAppliedInbox removes applied rows but keeps pending', async () =>
     ]);
     await agentBridge.recordInboxResult('a', true);
     await agentBridge.clearAppliedInbox();
-    const remaining = await db.agentInbox.toArray();
+    assert.ok((await db.agentInbox.get('a'))!.applied_at);
+    const remaining = await agentBridge.listInbox();
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0]!.id, 'b');
 });
@@ -1008,4 +995,105 @@ test('regression: 42 googleService tests still pass (verified separately via tes
     // The googleService.test.ts suite is part of the test:worklogs chain; this
     // test is a sentinel that the chain order is preserved.
     assert.ok(true);
+});
+
+test('health: failed acknowledgement and reload never replay a local mutation', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({ name: 'Receipt', isActive: true, color: 'slate', updatedAt: 1, createdAt: 1 } as Project);
+    const write = { id: 'ack-retry', action: 'create_worklog' as const, created_at: 1, worklog_data: { projectId, date: '2026-09-25', hours: 1 } };
+    let writes: import('./agentBridge.ts').AgentWrite[] = [write];
+    let attempts = 0;
+    const internal = agentBridge as unknown as { isInitialized: boolean; drive: unknown };
+    internal.isInitialized = false;
+    internal.drive = {
+        init: async () => true,
+        readJsonFile: async () => ({ fileId: 'pending', data: { writes } }),
+        writeJsonFile: async (_name: string, data: { writes: typeof writes }) => {
+            if (++attempts === 1) throw new Error('ack unavailable');
+            writes = data.writes;
+            return 'pending';
+        },
+    };
+    const poll = async () => {
+        await agentBridge.init();
+        const pending = await agentBridge.fetchPendingWrites();
+        await agentBridge.mirrorInbox(pending);
+        for (const item of pending) {
+            assert.equal((await agentBridge.applyWrite(item)).success, true);
+            await agentBridge.recordInboxResult(item.id, true);
+        }
+        await agentBridge.markApplied(pending.map(item => item.id));
+    };
+    await poll();
+    const receipt = await db.agentInbox.get(write.id);
+    await agentBridge.mirrorInbox([write]);
+    assert.equal((await db.agentInbox.get(write.id))!.applied_at, receipt!.applied_at);
+    internal.isInitialized = false;
+    db.close();
+    await db.open();
+    await poll();
+    assert.equal(await db.workLogs.count(), 1);
+    assert.equal(attempts, 2);
+    assert.ok(writes[0]!.applied_at);
+});
+
+test('health: concurrent application is atomic and payload conflicts fail closed', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({ name: 'Concurrent', isActive: true, color: 'slate', updatedAt: 1, createdAt: 1 } as Project);
+    const write = { id: 'concurrent-receipt', action: 'create_worklog' as const, created_at: 1, worklog_data: { projectId, date: '2026-09-25', hours: 1 } };
+    const results = await Promise.all([agentBridge.applyWrite(write), agentBridge.applyWrite(write)]);
+    assert.deepEqual(results[0], results[1]);
+    assert.equal(await db.workLogs.count(), 1);
+    const changed = await agentBridge.applyWrite({ ...write, worklog_data: { ...write.worklog_data, hours: 2 } });
+    assert.equal(changed.disposition, 'terminal');
+    assert.equal(changed.last_error, 'command id reused with different payload');
+    assert.equal((await db.workLogs.toArray())[0]!.hours, 1);
+});
+
+test('health: failed receipt persistence rolls back the domain mutation', async () => {
+    await resetDb();
+    const projectId = await db.projects.add({ name: 'Rollback', isActive: true, color: 'slate', updatedAt: 1, createdAt: 1 } as Project);
+    const write = { id: 'receipt-rollback', action: 'create_worklog' as const, created_at: 1, worklog_data: { projectId, date: '2026-09-25', hours: 1 } };
+    const fail = () => { throw new Error('receipt storage unavailable'); };
+    db.agentInbox.hook('creating', fail);
+    try {
+        assert.equal((await agentBridge.applyWrite(write)).disposition, 'retryable');
+        assert.equal(await db.workLogs.count(), 0);
+    } finally {
+        db.agentInbox.hook('creating').unsubscribe(fail);
+    }
+    assert.equal((await agentBridge.applyWrite(write)).success, true);
+    assert.equal(await db.workLogs.count(), 1);
+});
+
+test('health: failed task receipt rolls back its revision and Google effect before delivery', async () => {
+    await resetDb();
+    seedSignedInStorage();
+    setGoogleServiceState({ accessToken: 'tok', expiresAt: Date.now() + 60 * 60 * 1000, userEmail: 'user@example.com' });
+    const inserts = gapiMock.calendarInsertCalls.length;
+    const effects = await db.agentProtocolEffects.count();
+    const events = await db.agentProtocolEvents.count();
+    const fail = () => { throw new Error('receipt unavailable'); };
+    db.agentInbox.hook('creating', fail);
+    try {
+        const result = await agentBridge.applyWrite({ id: 'task-receipt-rollback', action: 'create_task', created_at: 1,
+            task_data: { title: 'Atomic task', type: 'task', date: '2026-09-25', startTime: '10:00', duration: 60 } });
+        assert.equal(result.disposition, 'retryable');
+        assert.equal(await db.tasks.count(), 0);
+        assert.equal(await db.agentProtocolEffects.count(), effects);
+        assert.equal(await db.agentProtocolEvents.count(), events);
+        assert.equal(gapiMock.calendarInsertCalls.length, inserts);
+    } finally {
+        db.agentInbox.hook('creating').unsubscribe(fail);
+    }
+});
+
+test('health: old applied diagnostics suppress replay after clearing and re-mirroring', async () => {
+    await resetDb();
+    const write = { id: 'old-receipt', action: 'create_project' as const, created_at: 1, project_data: { name: 'Do not recreate' } };
+    await db.agentInbox.put({ id: write.id, action: write.action, entity_type: 'project', payload: write, received_at: 1, applied_at: 2 });
+    await agentBridge.clearAppliedInbox();
+    await agentBridge.mirrorInbox([write]);
+    assert.equal((await agentBridge.applyWrite(write)).disposition, 'applied');
+    assert.equal(await db.projects.count(), 0);
 });
