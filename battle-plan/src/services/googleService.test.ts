@@ -389,7 +389,7 @@ test('lazy refresh: 401 from Calendar API — deleteFromCalendar returns sentine
     localStorage.setItem('google_user_email', 'user@example.com');
 
     installGapiMock({
-        calendarEventsDelete: async () => {
+        request: async () => {
             const err: unknown = new Error('Unauthorized');
             (err as { status?: number }).status = 401;
             throw err;
@@ -1299,9 +1299,11 @@ test('addToCalendar updates a timed event end from the current duration', async 
         };
     } | undefined;
     installGapiMock({
-        calendarEventsUpdate: async (args) => {
-            request = args as typeof request;
-            return { result: { id: 'evt-timed' } };
+        request: async (args) => {
+            if (args.method === 'GET') return { body: JSON.stringify({ etag: '"v1"' }) };
+            request = { eventId: 'evt-timed', resource: JSON.parse(args.body) };
+            assert.equal(args.method, 'PATCH');
+            return { body: '{}' };
         },
     });
     const svc = freshService();
@@ -1338,7 +1340,7 @@ test('durable Calendar creation reserves resource.id and preserves completed eve
         const request = args as { eventId?: string; resource: Record<string, unknown> };
         assert.equal(request.eventId, undefined);
         assert.equal(request.resource.id, 'bp012345');
-        assert.match(String(request.resource.description), /Private note/);
+        assert.doesNotMatch(String(request.resource.description), /Private note/);
         assert.deepEqual(request.resource.reminders, { useDefault: false, overrides: [] });
         return { result: { id: 'bp012345' } };
     } });
@@ -1356,7 +1358,7 @@ test('ambiguous Calendar insert retries the reserved ID with an ETag conditional
         calendarEventsInsert: async () => { throw { status: 409 }; },
         request: async (request) => {
             methods.push(request.method);
-            assert.match(request.path, /events\/bp012345$/);
+            assert.match(request.path, /events\/bp012345(?:\?|$)/);
             if (request.method === 'GET') return { status: 200, body: JSON.stringify({ id: 'bp012345', etag: '"v1"' }) };
             assert.equal(request.headers['If-Match'], '"v1"');
             assert.equal(JSON.parse(request.body).summary, 'Updated [BP]');
@@ -1366,7 +1368,7 @@ test('ambiguous Calendar insert retries the reserved ID with an ETag conditional
     assert.equal(await freshService().addToCalendar({
         title: 'Updated', date: '2026-09-20', reservedGoogleEventId: 'bp012345',
     }, { isCurrent: async () => true }), 'bp012345');
-    assert.deepEqual(methods, ['GET', 'PUT']);
+    assert.deepEqual(methods, ['GET', 'PATCH']);
 });
 
 test('Calendar lease loss after GET prevents writing and 412 is never blindly retried', async () => {
@@ -1665,4 +1667,121 @@ test('queued Google Tasks checks ownership after authentication and preserves fa
     await assert.rejects(freshService().updateGoogleTask('task-id', { status: 'completed' }, '@default',
         { isCurrent: async () => true }), (error: unknown) => (error as { status?: number }).status === 404);
     assert.equal(writes, 1);
+});
+
+test('Calendar PATCH preserves guests and Google fields, suppresses retries, and clears date representations', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let remote: { etag: string; summary: string; description: string; organizer: { self: boolean };
+        attendees: Array<{ email: string; responseStatus: string }>; conferenceData: { conferenceId: string }; location: string;
+        start: { date?: string | null; dateTime?: string | null; timeZone?: string | null };
+        end: { date?: string | null; dateTime?: string | null; timeZone?: string | null } } = { etag: '"v1"', summary: 'Old', description: 'Old private notes',
+        organizer: { self: true }, attendees: [{ email: 'guest@example.com', responseStatus: 'accepted' }],
+        conferenceData: { conferenceId: 'keep' }, location: 'Office',
+        start: { date: '2026-09-20' }, end: { date: '2026-09-21' } };
+    const originalGuests = structuredClone(remote.attendees);
+    const writes: Array<{ path: string; body: typeof remote }> = [];
+    installGapiMock({ request: async (args) => {
+        if (args.method === 'GET') return { body: JSON.stringify(remote) };
+        assert.equal(args.method, 'PATCH');
+        assert.equal(args.headers['If-Match'], remote.etag);
+        const patch = JSON.parse(args.body);
+        assert.equal(patch.attendees, undefined);
+        assert.equal(patch.conferenceData, undefined);
+        assert.equal(patch.location, undefined);
+        assert.doesNotMatch(args.body, /secret/);
+        writes.push({ path: args.path, body: patch });
+        remote = { ...remote, ...patch, etag: `"v${writes.length + 1}"` };
+        return { body: '{}' };
+    } });
+    const svc = freshService();
+    const task = { title: 'Public', description: 'Public text', internalNotes: 'secret', date: '2026-09-20',
+        startTime: '10:00', duration: 60, googleEventId: 'existing', status: 'pending', isAllDay: false };
+    await svc.addToCalendar(task);
+    assert.match(writes[0].path, /sendUpdates=all$/);
+    assert.equal(writes[0].body.start.date, null);
+    assert.deepEqual(remote.attendees, originalGuests);
+    assert.deepEqual(remote.conferenceData, { conferenceId: 'keep' });
+    assert.equal(remote.location, 'Office');
+    // Google can return the equivalent instant with a different offset.
+    remote.start.dateTime = new Date(remote.start.dateTime!).toISOString().replace('.000Z', '+00:00');
+    await svc.addToCalendar(task);
+    assert.equal(writes.length, 1, 'identical retry sends no PATCH or notification');
+    await svc.addToCalendar({ ...task, status: 'completed' });
+    assert.match(writes[1].path, /sendUpdates=none$/);
+    await svc.addToCalendar({ ...task, isAllDay: true });
+    assert.equal(writes[2].body.start.dateTime, null);
+    assert.equal(writes[2].body.start.timeZone, null);
+    assert.equal(writes[2].body.start.date, '2026-09-20');
+});
+
+test('Calendar delete notifies guests and treats a lost-response retry as complete', async () => {
+    clearStore();
+    seedSignedInStorage();
+    let removed = false;
+    let deletes = 0;
+    installGapiMock({ request: async (args) => {
+        if (args.method === 'GET') {
+            if (removed) throw { status: 410 };
+            return { body: JSON.stringify({ etag: '"v1"', attendees: [{ email: 'guest@example.com' }] }) };
+        }
+        assert.equal(args.method, 'DELETE');
+        assert.match(args.path, /sendUpdates=all$/);
+        removed = true;
+        deletes++;
+        throw new Error('Response lost');
+    } });
+    const svc = freshService();
+    await assert.rejects(svc.deleteFromCalendar('existing'), /Response lost/);
+    assert.equal(await svc.deleteFromCalendar('existing'), true);
+    assert.equal(deletes, 1);
+});
+
+test('Calendar link requires a current owned event and a safe server link', async () => {
+    clearStore();
+    seedSignedInStorage();
+    const svc = freshService();
+    let event: Record<string, unknown> = { organizer: { self: true }, htmlLink: 'https://calendar.google.com/calendar/event?eid=existing' };
+    let getCount = 0;
+    installGapiMock({ request: async ({ method }) => {
+        assert.equal(method, 'GET');
+        getCount++;
+        return { body: JSON.stringify(event) };
+    } });
+    assert.equal(await svc.getCalendarEventLink('existing'), event.htmlLink);
+    for (const htmlLink of ['http://calendar.google.com/calendar/event', 'https://calendar.google.com.evil.test/calendar/event',
+        'javascript:alert(1)', 'https://calendar.google.com/calendar-evil', 'https://user@calendar.google.com/calendar/event']) {
+        event = { organizer: { self: true }, htmlLink };
+        await assert.rejects(svc.getCalendarEventLink('existing'), /Invalid/);
+    }
+    event = { organizer: { self: false }, htmlLink: 'https://www.google.com/calendar/event?eid=existing' };
+    await assert.rejects(svc.getCalendarEventLink('existing'), /organizer/);
+    event = { status: 'cancelled' };
+    await assert.rejects(svc.getCalendarEventLink('existing'), /cancelled/);
+    const before = getCount;
+    await assert.rejects(svc.getCalendarEventLink('existing', { isCurrent: async () => false }), /ownership/);
+    assert.equal(getCount, before);
+    let checks = 0;
+    await assert.rejects(svc.getCalendarEventLink('existing', { isCurrent: async () => ++checks === 1 }), /ownership/);
+    installGapiMock({ request: async () => { throw { status: 404 }; } });
+    await assert.rejects(svc.getCalendarEventLink('missing'), (error: unknown) => (error as { status?: number }).status === 404);
+    installGapiMock({ request: async () => {
+        Object.assign(svc, { verifiedAccount: null });
+        return { body: JSON.stringify({ organizer: { self: true }, htmlLink: 'https://calendar.google.com/calendar/event' }) };
+    } });
+    await assert.rejects(svc.getCalendarEventLink('existing'), /ownership/);
+});
+
+test('Calendar refuses writes to cancelled events or a foreign organizer without a self flag', async () => {
+    clearStore();
+    seedSignedInStorage();
+    for (const event of [{ etag: '"v1"', status: 'cancelled' },
+        { etag: '"v1"', organizer: { email: 'other@example.com' } }]) {
+        installGapiMock({ request: async ({ method }) => {
+            assert.equal(method, 'GET', 'must not send a mutation');
+            return { body: JSON.stringify(event) };
+        } });
+        await assert.rejects(freshService().addToCalendar({ title: 'Public', date: '2026-09-20', googleEventId: 'existing' }),
+            /cancelled|organizer/);
+    }
 });

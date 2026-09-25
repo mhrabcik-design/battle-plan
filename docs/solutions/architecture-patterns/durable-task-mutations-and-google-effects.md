@@ -1,6 +1,7 @@
 ---
 title: Durable task changes need both local fencing and remote preconditions
 date: 2026-09-20
+last_updated: 2026-09-25
 category: architecture-patterns
 module: Agent Collaboration Protocol
 problem_type: architecture_pattern
@@ -38,7 +39,7 @@ Keep three separate boundaries:
    or Sync can bind previously unbound local work.
 3. **Remote conditional write:** reserve one Calendar identity before sending a
    create. Place it in the event resource's `id`. For update/delete, GET the ETag,
-   recheck ownership/account and send `If-Match`. Local fencing protects the
+   recheck ownership/account and send PATCH/DELETE with `If-Match`. Local fencing protects the
    acknowledgement; the server precondition protects a request already in flight.
 
 The implementation is in `battle-plan/src/services/taskMutations.ts`,
@@ -53,7 +54,7 @@ not create a new public domain revision.
 ## Why This Matters
 
 An expired local lease cannot recall a network request. For example, worker A
-sends a PUT and stalls; worker B recovers the queue, repeats that same effect,
+sends a PATCH and stalls; worker B recovers the queue, repeats that same effect,
 then sends the next edit. A's eventual write must fail the old ETag precondition,
 and its acknowledgement must fail the local fence. Neither protection substitutes
 for the other. A stable create identity separately prevents duplicate insertion
@@ -93,10 +94,33 @@ unchanged. Local effect ordering is not a global ordering protocol across device
 
 `battle-plan/src/services/externalEffectOutbox.test.ts` controls request completion
 order through the real Google adapter with a simulated HTTP server: create/edit/
-archive converge on one tombstone; an old in-flight PUT receives 412 after a
+archive converge on one tombstone; an old in-flight PATCH receives 412 after a
 successor updates the ETag. Mutation, suggestion and import tests inject failures
 after intermediate writes to prove whole-transaction rollback. A live authenticated
 Google smoke test still requires an authorized account.
+
+## Calendar invitations and field ownership
+
+The invitation change prepared on 2026-09-25 keeps guest entry and RSVP in Google
+Calendar. BattlePlan opens the existing event after its queued public content has
+been delivered; a Calendar template URL would create a second, unpaired event.
+
+This choice changes the meaning of a sync write: the event now contains data owned
+by Google and its guests. A full replacement from a local task cannot safely
+represent it. PATCH only the fields BattlePlan owns, preserving attendees, response
+statuses, location and conference data. Keep both local fencing and ETag checks;
+PATCH alone does not protect against stale concurrent writes.
+
+Exclude internal notes at the Google adapter boundary, not just at the invitation
+button. A durable outbox can replay an older payload after this release. Public
+changes and deletion notify existing attendees; reminder-only and no-op retries
+must not send repeated invitations. The adapter tests exercise these boundaries.
+
+Before inviting real guests, update all devices and reload old open app tabs.
+An old client still has the former replacement behavior. This release does not
+retroactively recall content previously sent by an older client. The local OAuth
+origins were not registered during verification, so the user chose to perform the
+authenticated invitation, reschedule and cancellation smoke test after deployment.
 
 ## Related
 

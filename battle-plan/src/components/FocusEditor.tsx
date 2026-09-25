@@ -1,4 +1,4 @@
-import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass, Sun } from 'lucide-react';
+import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass, Sun, Mail, Copy, ExternalLink } from 'lucide-react';
 import type { UnifiedTask, GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import React, { useState, useEffect, useRef } from 'react';
@@ -7,6 +7,7 @@ import { formatDuration, parseDuration } from '../utils/calendarUtils';
 import type { EditorSaveOutcome } from '../hooks/useTaskCommands';
 import { applySavedEditorStatus, getEditorCloseIntent, getEditorTaskSnapshot } from '../utils/editorInteraction';
 import { OverlaySurface } from './ui/OverlaySurface';
+import { buildTaskEmail } from '../utils/taskSharing';
 
 interface FocusEditorProps {
     editingTask: UnifiedTask;
@@ -19,6 +20,8 @@ interface FocusEditorProps {
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
     handleDeleteTask: (task: UnifiedTask) => Promise<boolean>;
     handleSyncToGoogle: (task: UnifiedTask) => void;
+    handleExport: (task: UnifiedTask) => void;
+    handlePrepareInvitation: (task: UnifiedTask) => Promise<string>;
     handleSaveEdit: () => Promise<EditorSaveOutcome>;
     handleToggleTask: (task: UnifiedTask) => Promise<UnifiedTask | null>;
     googleAuth: GoogleAuthStatus;
@@ -39,6 +42,8 @@ export function FocusEditor({
     activeVoiceUpdateIdRef,
     handleDeleteTask,
     handleSyncToGoogle,
+    handleExport,
+    handlePrepareInvitation,
     handleSaveEdit,
     handleToggleTask,
     googleAuth,
@@ -50,13 +55,22 @@ export function FocusEditor({
     const [isTogglingTask, setIsTogglingTask] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [isPreparingInvitation, setIsPreparingInvitation] = useState(false);
+    const [invitationLink, setInvitationLink] = useState<{ key: string; url: string } | null>(null);
+    const [shareNotice, setShareNotice] = useState('');
+    const [showShareText, setShowShareText] = useState(false);
     const [editorError, setEditorError] = useState<string | null>(null);
     const [initialTask, setInitialTask] = useState(editingTask);
     const mutationRef = useRef(false);
     const titleRef = useRef<HTMLInputElement>(null);
-    const isDirty = getEditorTaskSnapshot(initialTask) !== getEditorTaskSnapshot(editingTask);
-    const isBusy = isSaving || isDeleting || isTogglingTask;
+    const currentSnapshot = getEditorTaskSnapshot(editingTask);
+    const isDirty = getEditorTaskSnapshot(initialTask) !== currentSnapshot;
+    const isBusy = isSaving || isDeleting || isTogglingTask || isPreparingInvitation;
     const hasSavedIdentity = Boolean(editingTask.id || (editingTask.isGoogleTask && editingTask.googleId));
+    const shareDisabled = isBusy || isDirty || !hasSavedIdentity || isRecording;
+    const invitationKey = `${currentSnapshot}:${googleAuth.accessToken}`;
+    const shareText = showShareText ? buildTaskEmail(editingTask) : null;
+    const readyLink = !shareDisabled && hasUsableAuth(googleAuth) && invitationLink?.key === invitationKey ? invitationLink.url : null;
     const editorTitle = hasSavedIdentity ? 'Detail záznamu' : {
         task: 'Nový úkol', meeting: 'Nová schůzka', thought: 'Nová myšlenka', note: 'Nová poznámka',
     }[editingTask.type];
@@ -135,6 +149,35 @@ export function FocusEditor({
         } finally {
             mutationRef.current = false;
             setIsTogglingTask(false);
+        }
+    };
+
+    const copyShareText = async () => {
+        const { subject, body } = buildTaskEmail(editingTask);
+        try {
+            await navigator.clipboard.writeText(`${subject}\r\n\r\n${body}`);
+            setShareNotice('Obsah je zkopírovaný. Vložte jej do svého e-mailu.');
+        } catch {
+            setShowShareText(true);
+            setShareNotice('Kopírování není dostupné. Označte a zkopírujte text níže.');
+        }
+    };
+
+    const prepareInvitation = async () => {
+        if (mutationRef.current || shareDisabled) return;
+        mutationRef.current = true;
+        setIsPreparingInvitation(true);
+        setInvitationLink(null);
+        setShareNotice('');
+        setEditorError(null);
+        try {
+            const url = await handlePrepareInvitation(editingTask);
+            setInvitationLink({ key: invitationKey, url });
+        } catch (error) {
+            setEditorError(error instanceof Error ? error.message : 'Pozvání se nepodařilo připravit. Zkuste to znovu.');
+        } finally {
+            mutationRef.current = false;
+            setIsPreparingInvitation(false);
         }
     };
 
@@ -224,6 +267,23 @@ export function FocusEditor({
                                     placeholder="Na čem pracujeme?"
                                 />
                             </div>
+
+                            <section aria-label="Sdílení záznamu" className="space-y-3 rounded-2xl border border-slate-700 bg-slate-800/30 p-4">
+                                <div className="flex flex-wrap gap-2">
+                                    <button type="button" disabled={shareDisabled} onClick={() => handleExport(editingTask)} className="surface-action min-h-11 gap-2 px-3 text-sm text-slate-200 disabled:opacity-50"><Mail className="h-4 w-4" />Sdílet e-mailem</button>
+                                    <button type="button" disabled={shareDisabled} onClick={() => { void copyShareText(); }} className="surface-action min-h-11 gap-2 px-3 text-sm text-slate-200 disabled:opacity-50"><Copy className="h-4 w-4" />Kopírovat obsah</button>
+                                    {editingTask.type === 'meeting' && !editingTask.isGoogleTask && (
+                                        <button type="button" disabled={shareDisabled || !hasUsableAuth(googleAuth)} aria-busy={isPreparingInvitation} onClick={() => { void prepareInvitation(); }} className="surface-action min-h-11 gap-2 px-3 text-sm text-indigo-300 disabled:opacity-50"><Users className="h-4 w-4" />{isPreparingInvitation ? 'Připravuji schůzku…' : 'Pozvat přes Google Kalendář'}</button>
+                                    )}
+                                </div>
+                                <p className="text-xs leading-relaxed text-slate-400">{!hasSavedIdentity || isDirty ? 'Před sdílením nejprve uložte změny.' : 'E-mail se otevře ve vašem poštovním klientu. Interní zápis se nesdílí.'}</p>
+                                {editingTask.type === 'meeting' && (
+                                    <p className="text-xs leading-relaxed text-slate-400">{!hasUsableAuth(googleAuth) ? 'Pro pozvánky se přihlaste ke Googlu v Nastavení. ' : ''}Hosty přidáte a pozvánky odešlete v Google Kalendáři. Název, popis a termín upravujte zde; změny propojené schůzky i její smazání se oznámí případným hostům.</p>
+                                )}
+                                {readyLink && <div role="status"><a href={readyLink} target="_blank" rel="noopener noreferrer" className="surface-action min-h-11 gap-2 px-3 text-sm text-indigo-300"><ExternalLink className="h-4 w-4" />Otevřít Google Kalendář</a><p className="mt-2 text-xs text-slate-400">Schůzka je připravená. Pozvánky odešlete až po přidání hostů v Google Kalendáři.</p></div>}
+                                {shareNotice && <p role="status" className="text-xs text-slate-300">{shareNotice}</p>}
+                                {shareText && !shareDisabled && <textarea aria-label="Obsah ke zkopírování" readOnly rows={8} onFocus={event => event.currentTarget.select()} value={`${shareText.subject}\r\n\r\n${shareText.body}`} className="w-full rounded-xl border border-slate-600 bg-slate-900 p-3 text-sm text-slate-200" />}
+                            </section>
 
                             <div className="space-y-4">
                                 <label htmlFor="task-description" className="text-xs font-bold text-slate-400 ml-1">Popis a souvislosti</label>

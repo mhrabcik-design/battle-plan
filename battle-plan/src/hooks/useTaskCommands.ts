@@ -9,6 +9,8 @@ import { getSchedule, saveWeeklySchedule } from '../services/weeklySchedule.ts';
 import { ensureTaskDeadline } from '../services/taskNormalization.ts';
 import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations, taskMutationTables, type TaskEffectRequest } from '../services/taskMutations.ts';
 import { drainGoogleExternalEffects } from '../services/externalEffectOutbox.ts';
+import { buildTaskEmail } from '../utils/taskSharing.ts';
+import { prepareCalendarInvitation } from '../services/calendarInvitation.ts';
 
 const SYNC_PENDING_MSG = 'Změna je uložená lokálně, ale synchronizace s Googlem zatím není dokončená.';
 
@@ -188,7 +190,10 @@ export function useTaskCommands({
   }, [lastScheduleChange, persistRescheduleTask]);
 
   const handleDeleteTask = useCallback(async (task: UnifiedTask) => {
-    if (!confirm('Opravdu smazat tento záznam?')) return false;
+    const message = task.type === 'meeting' && (task.googleEventId || task.reservedGoogleEventId)
+      ? 'Smazat schůzku? Zruší se také událost v Google Kalendáři a případným hostům přijde oznámení.'
+      : 'Opravdu smazat tento záznam?';
+    if (!confirm(message)) return false;
 
     if (task.isGoogleTask && task.googleId) {
       if (!hasUsableAuth(googleAuth)) {
@@ -288,11 +293,7 @@ export function useTaskCommands({
   }, [setIsProcessing]);
 
   const handleExport = useCallback((task: UnifiedTask) => {
-    const subTasksText = (task.subTasks || []).map(st => `${st.completed ? '✅' : '☐'} ${st.title}`).join('\n');
-    const body = `=== ${task.title} ===\nTermín: ${task.deadline || task.date || 'Neurčeno'} | Urgence: ${task.urgency}/3\nPokrok: ${task.progress || 0}%\n--------------------------------------\nPOPIS:\n${task.description || 'Bez popisu'}\n\n${subTasksText ? `PŘEHLED PODÚKOLŮ:\n${subTasksText}\n` : ''}INTERNÍ ZÁPIS:\n${task.internalNotes || 'Bez dodatečného zápisu'}\n\n--\nOdesláno z aplikace Bitevní Plán`.trim();
-    const subject = `${task.title} [BP]`;
-    const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailtoUrl;
+    window.location.href = buildTaskEmail(task).mailto;
   }, []);
 
   return {
@@ -306,5 +307,6 @@ export function useTaskCommands({
     handleSaveEdit,
     handleSyncToGoogle,
     handleExport,
+    handlePrepareInvitation: prepareCalendarInvitation,
   };
 }

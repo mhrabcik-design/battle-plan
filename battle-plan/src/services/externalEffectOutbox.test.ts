@@ -429,7 +429,7 @@ async function googleHarness(options: {
             return { result: { id: resource.id } };
         } } },
         request: async ({ path, method, headers, body }: { path: string; method: string; headers: Record<string, string>; body: string }) => {
-            const id = decodeURIComponent(path.split('/').at(-1)!);
+            const id = decodeURIComponent(path.split('?')[0].split('/').at(-1)!);
             const event = remote.get(id);
             if (method === 'GET') {
                 if (!event) throw { status: 404 };
@@ -439,7 +439,7 @@ async function googleHarness(options: {
             await options.beforeWrite?.();
             if (remote.get(id)?.etag !== headers['If-Match']) { conflicts++; throw { status: 412 }; }
             remote.set(id, method === 'DELETE' ? { etag: `"${++version}"`, status: 'cancelled' }
-                : { ...JSON.parse(body), etag: `"${++version}"` });
+                : { ...remote.get(id), ...JSON.parse(body), etag: `"${++version}"` });
             return { status: method === 'DELETE' ? 204 : 200, body: JSON.stringify({ id }) };
         },
     };
@@ -540,7 +540,7 @@ test('real conditional write already in flight cannot undo successor updates aft
     await executionFinished.promise;
     assert.equal(google.conflicts, 1, 'Google rejects the late stale ETag');
     assert.equal(google.remote.get(task.reservedGoogleEventId!)?.summary, 'Latest [BP]');
-    assert.match(google.remote.get(task.reservedGoogleEventId!)?.description ?? '', /Latest private notes/);
+    assert.doesNotMatch(google.remote.get(task.reservedGoogleEventId!)?.description ?? '', /Latest private notes/);
     assert.equal((await db.tasks.get(task.id!))?.title, 'Latest');
 });
 

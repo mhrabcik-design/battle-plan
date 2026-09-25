@@ -526,6 +526,7 @@ const syncVisualState = deriveSyncVisualState({
     handleSaveEdit,
     handleSyncToGoogle,
     handleExport,
+    handlePrepareInvitation,
   } = useTaskCommands({
     googleAuth,
     activeTaskList,
@@ -784,6 +785,8 @@ const syncVisualState = deriveSyncVisualState({
             {viewMode === 'week' && <div className="flex justify-end">{undoScheduleButton}</div>}
           </div>
 
+          {viewMode === 'week' && <p className="px-4 py-2 text-xs text-slate-400">Přesun propojené schůzky aktualizuje Google Kalendář a upozorní případné hosty.</p>}
+
           {hasUsableAuth && showOnboarding && <OnboardingCard onDismiss={handleDismissOnboarding} />}
 
           {viewMode === 'battle' && (
@@ -987,6 +990,8 @@ const syncVisualState = deriveSyncVisualState({
                 activeVoiceUpdateIdRef={activeVoiceUpdateIdRef}
                 handleDeleteTask={handleDeleteTask}
                 handleSyncToGoogle={handleSyncToGoogle}
+                handleExport={handleExport}
+                handlePrepareInvitation={handlePrepareInvitation}
                 handleSaveEdit={handleSaveEdit}
                 handleToggleTask={handleToggleTask}
                 googleAuth={googleAuth}
