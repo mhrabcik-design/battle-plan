@@ -693,20 +693,68 @@ class GoogleService {
         }
     }
 
-    private async calendarConditionalWrite(eventId: string, method: 'PUT' | 'DELETE', event: unknown, guard: CalendarWriteGuard) {
+    private async assertCalendarAccess(accountId: string | null, guard?: CalendarWriteGuard) {
+        if (!accountId || this.getAccountId() !== accountId || (guard && !await guard.isCurrent())
+            || this.getAccountId() !== accountId) throw new GoogleCalendarError('Calendar effect ownership lost');
+    }
+
+    private async calendarConditionalWrite(eventId: string, method: 'PATCH' | 'DELETE', event: any, guard?: CalendarWriteGuard) {
+        const accountId = this.getAccountId();
+        await this.assertCalendarAccess(accountId, guard);
         const path = `/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`;
         const response = await window.gapi.client.request({ path, method: 'GET', headers: {}, body: '' });
-        const current = JSON.parse(response.body || '{}') as { etag?: string; status?: string };
-        if (current.status === 'cancelled' && method === 'DELETE') return eventId;
+        const current = JSON.parse(response.body || '{}');
+        await this.assertCalendarAccess(accountId, guard);
+        if (current.status === 'cancelled') {
+            if (method === 'DELETE') return eventId;
+            throw new GoogleCalendarError('Calendar event was cancelled', 410);
+        }
+        if (current.organizer && current.organizer.self !== true) throw new GoogleCalendarError('Calendar event belongs to another organizer', 403);
         if (!current.etag) throw new GoogleCalendarError('Calendar resource has no ETag');
-        if (!await guard.isCurrent()) throw new GoogleCalendarError('Calendar effect ownership lost');
+        // Google normalizes dateTime offsets on reads; compare instants.
+        const time = (value: any) => value?.date || (value?.dateTime ? new Date(value.dateTime).toISOString() : null);
+        const publicChanged = method === 'PATCH' && (current.summary !== event.summary
+            || (current.description || '') !== event.description
+            || time(current.start) !== time(event.start) || time(current.end) !== time(event.end));
+        const reminders = (value: any) => JSON.stringify({ useDefault: value?.useDefault ?? false,
+            overrides: (value?.overrides || []).map((item: any) => `${item.method}:${item.minutes}`).sort() });
+        if (method === 'PATCH' && !publicChanged && reminders(current.reminders) === reminders(event.reminders)) return eventId;
+        // Explicit nulls clear the opposite all-day/timed representation.
+        const body = method === 'DELETE' ? '' : JSON.stringify({ ...event,
+            start: { date: null, dateTime: null, timeZone: null, ...event.start },
+            end: { date: null, dateTime: null, timeZone: null, ...event.end },
+        });
+        const notify = current.attendees?.length > 0 && (method === 'DELETE' || publicChanged);
+        await this.assertCalendarAccess(accountId, guard);
         // A late request cannot overwrite a successor that changed this ETag.
         // 412 must return to the queue, where ownership and ordering are checked anew.
         await window.gapi.client.request({
-            path, method, headers: { 'If-Match': current.etag, 'Content-Type': 'application/json' },
-            body: method === 'DELETE' ? '' : JSON.stringify(event),
+            path: `${path}?sendUpdates=${notify ? 'all' : 'none'}`, method,
+            headers: { 'If-Match': current.etag, 'Content-Type': 'application/json' }, body,
         });
         return eventId;
+    }
+
+    async getCalendarEventLink(eventId: string, guard?: CalendarWriteGuard): Promise<string> {
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') throw new AuthUnavailableError('Google sign-in required');
+        const accountId = this.getAccountId();
+        await this.assertCalendarAccess(accountId, guard);
+        const response = await window.gapi.client.request({
+            path: `/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
+            method: 'GET', headers: {}, body: '',
+        });
+        await this.assertCalendarAccess(accountId, guard);
+        const event = JSON.parse(response.body || '{}');
+        if (event.status === 'cancelled') throw new GoogleCalendarError('Calendar event was cancelled', 410);
+        if (event.organizer?.self !== true) throw new GoogleCalendarError('Calendar event belongs to another organizer', 403);
+        let link: URL;
+        try { link = new URL(event.htmlLink); } catch { throw new GoogleCalendarError('Invalid Google Calendar link'); }
+        if (link.protocol !== 'https:' || link.username || link.password || link.port
+            || !((link.hostname === 'calendar.google.com' && link.pathname.startsWith('/calendar/'))
+                || (link.hostname === 'www.google.com' && link.pathname.startsWith('/calendar/')))) {
+            throw new GoogleCalendarError('Invalid Google Calendar link');
+        }
+        return link.href;
     }
 
     async addToCalendar(task: any, guard?: CalendarWriteGuard) {
@@ -739,7 +787,7 @@ class GoogleService {
             // All-day event vs timed event mají jinou strukturu
             const event: any = {
                 'summary': `${task.title} [BP]`,
-                'description': `${task.description}\n\nInterní poznámky:\n${task.internalNotes || ''}`,
+                'description': task.description || '',
             };
 
             if (isAllDay) {
@@ -762,25 +810,23 @@ class GoogleService {
                 'overrides': overrides
             };
 
-            const method = task.googleEventId ? 'update' : 'insert';
-
             const params: any = {
                 'calendarId': 'primary',
                 'resource': event,
             };
-            if (task.googleEventId) params.eventId = task.googleEventId;
-            if (task.googleEventId && guard) {
-                return await this.calendarConditionalWrite(task.googleEventId, 'PUT', event, guard);
+            if (task.googleEventId) {
+                return await this.calendarConditionalWrite(task.googleEventId, 'PATCH', event, guard);
             }
-            if (!task.googleEventId && task.reservedGoogleEventId) event.id = task.reservedGoogleEventId;
+            if (task.reservedGoogleEventId) event.id = task.reservedGoogleEventId;
             if (guard && !await guard.isCurrent()) throw new GoogleCalendarError('Calendar effect ownership lost');
             try {
-                const response = await window.gapi.client.calendar.events[method](params);
+                const response = await window.gapi.client.calendar.events.insert(params);
                 return response.result.id;
             } catch (error) {
                 // The first insert may have succeeded before its response was lost.
-                if (method === 'insert' && task.reservedGoogleEventId && guard && googleErrorStatus(error) === 409) {
-                    return await this.calendarConditionalWrite(task.reservedGoogleEventId, 'PUT', event, guard);
+                if (task.reservedGoogleEventId && googleErrorStatus(error) === 409) {
+                    delete event.id;
+                    return await this.calendarConditionalWrite(task.reservedGoogleEventId, 'PATCH', event, guard);
                 }
                 throw error;
             }
@@ -799,14 +845,7 @@ class GoogleService {
     async deleteFromCalendar(eventId: string, guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
         try {
-            if (guard) {
-                await this.calendarConditionalWrite(eventId, 'DELETE', undefined, guard);
-                return true;
-            }
-            await window.gapi.client.calendar.events.delete({
-                'calendarId': 'primary',
-                'eventId': eventId
-            });
+            await this.calendarConditionalWrite(eventId, 'DELETE', undefined, guard);
             return true;
         } catch (e: unknown) {
             if (googleErrorStatus(e) === 404 || googleErrorStatus(e) === 410) return true;

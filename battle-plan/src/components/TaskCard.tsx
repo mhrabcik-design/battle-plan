@@ -84,7 +84,7 @@ export function TaskCard({
                         </div>
                     )}
                 </div>
-                <button aria-label={`Exportovat ${task.title}`} onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="surface-action h-11 w-11 shrink-0 bg-slate-800/60 text-slate-400 hover:border-indigo-500/40 hover:text-white"><Mail className="h-4 w-4" /></button>
+                <button type="button" aria-label={`Sdílet e-mailem: ${task.title}`} onClick={(e) => { e.stopPropagation(); handleExport(task); }} className="surface-action min-h-11 shrink-0 gap-2 bg-slate-800/60 px-3 text-xs text-slate-400 hover:border-indigo-500/40 hover:text-white"><Mail className="h-4 w-4" />Sdílet e-mailem</button>
             </div>
 
             <div className="mb-3">
