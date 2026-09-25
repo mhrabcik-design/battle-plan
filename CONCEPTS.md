@@ -17,9 +17,9 @@ A record of completed work on a project, distinct from a task or meeting because
 Each WorkLog has a portable sync identity that remains stable between devices. Content-equivalent WorkLogs remain separate records unless a person explicitly confirms that they are copies to merge.
 
 ### WorkLog Deletion Tombstone
-A durable synchronized record that reserves the portable identity of a user-confirmed duplicate WorkLog so the removed copy cannot return from another device.
+A durable synchronized record that reserves the portable identity of a deleted WorkLog so the removed record cannot return from another device.
 
-Only confirmed exact-copy repair creates this record. A matching stale copy is suppressed, while contradictory deletion identity fails closed instead of choosing a winner.
+Explicit deletion creates a `user-deleted` record; confirmed exact-copy repair creates a `confirmed-duplicate` record with the survivor identity and fingerprint. A matching stale copy is suppressed, while contradictory deletion identity fails closed instead of choosing a winner. Matching content alone never authorizes deletion.
 
 ### Person-Hours
 The reportable labor total for crew work: the number of people multiplied by the hours per person.

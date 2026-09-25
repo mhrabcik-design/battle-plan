@@ -17,6 +17,43 @@ const vite = await createServer({ configFile: false, root: process.cwd(), optimi
 after(async () => vite.close());
 const { createAgentBridgePoller } = await vite.ssrLoadModule('/src/hooks/useAgentBridgePolling.ts') as { createAgentBridgePoller: typeof CreatePoller };
 
+test('real bridge retries failed acknowledgement after reload and diagnostics clear without duplicating work', async () => {
+    const { agentBridge } = await vite.ssrLoadModule('/src/services/agentBridge.ts') as typeof import('../services/agentBridge.ts');
+    const { db } = await vite.ssrLoadModule('/src/db.ts') as typeof import('../db.ts');
+    await db.agentInbox.clear();
+    await db.workLogs.clear();
+    await db.projects.clear();
+    const projectId = await db.projects.add({ name: 'Polling', color: 'slate', isActive: true, createdAt: 1, updatedAt: 1 });
+    let writes: AgentWrite[] = [{ id: 'poll-ack-retry', action: 'create_worklog', created_at: 1, worklog_data: { projectId, date: '2026-09-25', hours: 2 } }];
+    let acknowledgements = 0;
+    const internal = agentBridge as unknown as { drive: unknown; isInitialized: boolean };
+    internal.isInitialized = false;
+    internal.drive = {
+        init: async () => true,
+        readJsonFile: async () => ({ fileId: 'legacy-inbox', data: { writes } }),
+        writeJsonFile: async (_name: string, data: { writes: AgentWrite[] }) => {
+            if (++acknowledgements === 1) throw new Error('simulated Drive outage');
+            writes = data.writes;
+            return 'legacy-inbox';
+        },
+    };
+    const first = createAgentBridgePoller(agentBridge, () => undefined);
+    await first.poll();
+    first.stop();
+    assert.equal(await db.workLogs.count(), 1);
+    await agentBridge.clearAppliedInbox();
+    assert.equal((await agentBridge.listInbox()).length, 0);
+    db.close();
+    await db.open();
+    internal.isInitialized = false;
+    const reloaded = createAgentBridgePoller(agentBridge, () => undefined);
+    await reloaded.poll();
+    reloaded.stop();
+    assert.equal(await db.workLogs.count(), 1);
+    assert.equal(acknowledgements, 2);
+    assert.ok(writes[0]!.applied_at);
+});
+
 const write: AgentWrite = { id: 'write-1', action: 'create_task', created_at: 1, task_data: { title: 'Once' } };
 function fakeBridge() {
     const applied: string[] = [];

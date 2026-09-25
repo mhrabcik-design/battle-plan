@@ -16,6 +16,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'prompt',
+      injectRegister: false, // PwaUpdatePrompt owns registration and per-tab reload consent.
       includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
       manifest: {
         name: 'Battle Plan Voice AI',

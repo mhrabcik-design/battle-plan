@@ -10,8 +10,8 @@ Tento soubor obsahuje jen otevřenou práci. Po dokončení se položka odstran�
 
 ## 2. Vývojová kvalita
 
-- [ ] Prověřit 13 nálezů z `npm audit` (1 low, 2 moderate, 10 high), určit jejich dosažitelnost v produkčním buildu a aktualizovat závislosti bez automatického `audit fix`.
-- [ ] Pokračovat v dělení hlavního produkčního bundle pod doporučených 500 kB; sekundární obrazovky už mají samostatné chunky a dvojí statický/dynamický import `googleService` byl odstraněn.
+- [ ] Pravidelně ověřovat `npm audit` proti aktuálnímu lockfilu, posoudit dosažitelnost nálezů a aktualizovat závislosti kontrolovaně. Počet nálezů uvádět s datem a konkrétním lockfilem, nikoli jako trvalý stav roadmapy.
+- [ ] Pokračovat v dělení hlavního produkčního bundle pod doporučených 500 kB; sekundární obrazovky už mají samostatné chunky, ale `googleService` a `driveJsonStore` mají stále statické i dynamické importy, které brání zamýšlenému oddělení těchto modulů.
 - [ ] Doplnit characterization testy pro skutečný WorkLogs merge/sync tok dříve, než se budou sjednocovat jeho vrstvy nebo kontrakty.
 - [ ] Zajistit idempotenci agent pollingu při souběhu intervalu, focus a visibility událostí; oddělit in-flight guard od trvalého `processedIds` acknowledgementu.
 - [ ] Sjednotit výchozí Gemini model a audio JSON transport až po doplnění síťových testů pro retry, 429 a nevalidní odpovědi.
@@ -30,7 +30,6 @@ Tento soubor obsahuje jen otevřenou práci. Po dokončení se položka odstran�
 - [ ] Přidat read scope a načítání událostí Google Calendar.
 - [ ] Detekovat kolize před uložením schůzky.
 - [ ] Nabídnout volné sloty bez automatického přepsání uživatelova záměru.
-- [ ] Navrhnout trvalý outbox a retry pro změny Google Tasks a Calendar, které selžou po lokálním uložení.
 
 ## 5. Produktivita
 

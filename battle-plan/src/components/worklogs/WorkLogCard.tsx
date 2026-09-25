@@ -19,6 +19,7 @@ import {
     type WorkLogProjectSelection,
 } from '../../services/workLogPersistence';
 import { getErrorMessage } from '../../utils/errors';
+import { deleteWorkLog } from '../../services/workLogDeletion';
 import { PROJECT_COLOR_DOT } from '../../utils/projectColors';
 import {
     resolveWorkLogProjectDisplay,
@@ -104,8 +105,13 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
 
     const handleDelete = async () => {
         if (log.id == null) return;
-        await db.workLogs.delete(log.id);
-        onDeleted?.(log.id);
+        setError(null);
+        try {
+            await deleteWorkLog(log.id);
+            onDeleted?.(log.id);
+        } catch (error) {
+            setError(`Záznam se nepodařilo smazat: ${getErrorMessage(error)}`);
+        }
     };
 
     const handleSave = async () => {
@@ -333,6 +339,7 @@ export function WorkLogCard({ log, projectIndex, onDeleted, onUpdated }: WorkLog
                 </motion.div>
             )}
             </AnimatePresence>
+            {!editing && error && <div role="alert" className="mt-2 text-xs text-red-400">{error}</div>}
         </motion.article>
     );
 }

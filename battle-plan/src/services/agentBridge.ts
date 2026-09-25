@@ -16,6 +16,7 @@ import {
   type WorkLogEditableChanges,
   updateWorkLogWithProjectSelection,
 } from './workLogPersistence.ts';
+import { deleteWorkLog } from './workLogDeletion.ts';
 import { createWorkLogSyncId } from '../utils/workLogSyncIdentity.ts';
 import { hasUsableAuth } from '../types.ts';
 import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations, taskMutationTables, type TaskDraft, type TaskEffectRequest } from './taskMutations.ts';
@@ -105,21 +106,43 @@ function projectResultToApplyWrite(result: ProjectCatalogResult): ApplyWriteResu
   }
 }
 
+interface LegacyReceipt extends AgentInboxRow {
+  execution_result?: ApplyWriteResult;
+  diagnosticsHidden?: boolean;
+}
+
+function commandIdentity(write: AgentWrite): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object') return Object.fromEntries(
+      Object.entries(value).filter(([, item]) => item !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]),
+    );
+    return value;
+  };
+  const payload = { ...write };
+  delete payload.applied_at;
+  return JSON.stringify(canonical(payload));
+}
+
+function replayResult(existing: LegacyReceipt | undefined, write: AgentWrite): ApplyWriteResult | undefined {
+  if (!existing) return undefined;
+  if (commandIdentity(existing.payload as AgentWrite) !== commandIdentity(write)) {
+    return terminalWrite('command id reused with different payload');
+  }
+  if (existing.execution_result) return existing.execution_result;
+  if (existing.applied_at) return appliedWrite({ newId: existing.entity_id, last_error: existing.last_error });
+  return undefined;
+}
+
 class AgentBridge {
   private fileId: string | null = null;
-  private processedIds: Set<string> = new Set();
   private isInitialized = false;
   private readonly drive = new DriveJsonStore();
 
   async init(options: { createFolder?: boolean } = {}): Promise<void> {
     if (this.isInitialized) return;
     this.isInitialized = await this.drive.init({ createFolder: options.createFolder ?? true });
-    // Hydrate the processedIds fast-path cache from the durable Dexie mirror so
-    // a reload survives a prior session that already applied some writes.
-    // (The inbox file's applied_at is the primary filter; this cache avoids
-    // an extra db.agentInbox read per id in fetchPendingWrites.)
-    const applied = await db.agentInbox.where('applied_at').above(0).primaryKeys();
-    for (const id of applied) this.processedIds.add(String(id));
   }
 
   async fetchPendingWrites(): Promise<AgentWrite[]> {
@@ -130,7 +153,7 @@ class AgentBridge {
       if (!loaded) return [];
       this.fileId = loaded.fileId;
       const writes: AgentWrite[] = (loaded.data.writes ?? []).filter(
-        (w: AgentWrite) => !w.applied_at && !this.processedIds.has(w.id)
+        (w: AgentWrite) => !w.applied_at
       );
       return writes;
     } catch (e) {
@@ -139,34 +162,82 @@ class AgentBridge {
     }
   }
 
-  async applyWrite(write: AgentWrite): Promise<ApplyWriteResult> {
+  async applyWrite(input: AgentWrite): Promise<ApplyWriteResult> {
+    // Snapshot before waiting for another tab. Network delivery follows commit.
+    const write = structuredClone(input);
     try {
-      if (
-        write.action === 'create_task' ||
-        write.action === 'update_task' ||
-        write.action === 'delete_task' ||
-        write.action === 'complete_task'
-      ) {
-        return await this.applyTaskAction(write);
-      }
-      if (write.action === 'create_worklog' || write.action === 'update_worklog' || write.action === 'delete_worklog') {
-        return await this.applyWorklogAction(write);
-      }
-      if (write.action === 'create_project' || write.action === 'update_project' || write.action === 'delete_project') {
-        return await this.applyProjectAction(write);
-      }
-      if (write.action === 'create_settings' || write.action === 'update_settings' || write.action === 'delete_settings') {
-        return await this.applySettingsAction(write);
-      }
-      return terminalWrite(`unsupported action: ${write.action}`);
+      const effects: string[] = [];
+      const result = await db.transaction('rw', [
+        ...taskMutationTables(db), db.agentInbox, db.projects, db.workLogs,
+        db.settings, db.workLogDeletionTombstones,
+      ], async () => {
+        const existing = await db.agentInbox.get(write.id) as LegacyReceipt | undefined;
+        const replay = replayResult(existing, write);
+        if (replay) return replay;
+        const outcome = await this.executeWrite(write, effects);
+        const row: LegacyReceipt = {
+          id: write.id, action: write.action, entity_type: this.inferEntityType(write.action),
+          payload: write, received_at: existing?.received_at ?? Date.now(),
+          entity_id: outcome.newId, last_error: outcome.last_error,
+          ...(shouldAcknowledgeApplyWrite(outcome)
+            ? { applied_at: Date.now(), execution_result: outcome } : {}),
+        };
+        await db.agentInbox.put(row);
+        return outcome;
+      });
+      await this.deliverTaskEffects(effects);
+      return result;
     } catch (e) {
+      // A nested Dexie validation failure aborts its parent transaction. Record
+      // the terminal result only after rollback, preserving any winning receipt.
+      if (e instanceof ProjectUnavailableError || (e instanceof Error && e.message === 'worklog-not-found')) {
+        try {
+          return await db.transaction('rw', db.agentInbox, async () => {
+            const existing = await db.agentInbox.get(write.id) as LegacyReceipt | undefined;
+            const replay = replayResult(existing, write);
+            if (replay) return replay;
+            const outcome = terminalWrite(e.message);
+            const row: LegacyReceipt = {
+              id: write.id, action: write.action, entity_type: this.inferEntityType(write.action),
+              payload: write, received_at: existing?.received_at ?? Date.now(),
+              applied_at: Date.now(), last_error: outcome.last_error, execution_result: outcome,
+            };
+            await db.agentInbox.put(row);
+            return outcome;
+          });
+        } catch (receiptError) {
+          return retryableWrite(receiptError instanceof Error ? receiptError.message : String(receiptError));
+        }
+      }
       console.error('AgentBridge: applyWrite failed', e);
       return retryableWrite(e instanceof Error ? e.message : String(e));
     }
   }
 
+  private async executeWrite(write: AgentWrite, effects: string[]): Promise<ApplyWriteResult> {
+    if (
+      write.action === 'create_task' ||
+      write.action === 'update_task' ||
+      write.action === 'delete_task' ||
+      write.action === 'complete_task'
+    ) {
+      return await this.applyTaskAction(write, effects);
+    }
+    if (write.action === 'create_worklog' || write.action === 'update_worklog' || write.action === 'delete_worklog') {
+      return await this.applyWorklogAction(write);
+    }
+    if (write.action === 'create_project' || write.action === 'update_project' || write.action === 'delete_project') {
+      return await this.applyProjectAction(write);
+    }
+    if (write.action === 'create_settings' || write.action === 'update_settings' || write.action === 'delete_settings') {
+      return await this.applySettingsAction(write);
+    }
+    return terminalWrite(`unsupported action: ${write.action}`);
+  }
+
   private async applyTaskAction(
-    write: AgentWrite
+    write: AgentWrite,
+    effectsToDeliver: string[],
   ): Promise<ApplyWriteResult> {
     const data = (write.task_data ?? {}) as Partial<Task> & { id?: number };
     const context = newTaskMutationContext('hermes', undefined, googleService.getAccountId() ?? undefined);
@@ -178,7 +249,7 @@ class AgentBridge {
         effects: calendarEffectsForLocalTask(task, 'upsert', hasUsableAuth(googleService.getAuthStatus()) && Boolean(context.googleAccountId)),
       });
       if (result.status !== 'applied') return terminalWrite(`task mutation ${result.status}`);
-      await this.deliverTaskEffects(result.effectIds);
+      effectsToDeliver.push(...result.effectIds);
       return appliedWrite({ newId: result.task.id, last_error: norm.last_error });
     }
 
@@ -205,7 +276,7 @@ class AgentBridge {
     });
     if (!mutation) return terminalWrite('task not found');
     if (mutation.result.status !== 'applied') return terminalWrite(`task mutation ${mutation.result.status}`);
-    await this.deliverTaskEffects(mutation.result.effectIds);
+    effectsToDeliver.push(...mutation.result.effectIds);
     return appliedWrite({ last_error: mutation.last_error });
   }
 
@@ -248,15 +319,7 @@ class AgentBridge {
         updatedAt: now,
         createdAt: now,
       };
-      let saved: WorkLog;
-      try {
-        saved = await addWorkLogWithActiveProject(draft);
-      } catch (error) {
-        if (error instanceof ProjectUnavailableError) {
-          return terminalWrite(error.message);
-        }
-        throw error;
-      }
+      const saved = await addWorkLogWithActiveProject(draft);
       return appliedWrite({ newId: saved.id });
     }
 
@@ -293,24 +356,17 @@ class AgentBridge {
         ? { id: data.projectId!, name: data.projectName! }
         : null;
 
-      try {
-        await updateWorkLogWithProjectSelection({
-          id: data.id,
-          selectedProject,
-          changes,
-        });
-      } catch (error) {
-        if (error instanceof ProjectUnavailableError || (error instanceof Error && error.message === 'worklog-not-found')) {
-          return terminalWrite(error.message);
-        }
-        throw error;
-      }
+      await updateWorkLogWithProjectSelection({
+        id: data.id,
+        selectedProject,
+        changes,
+      });
       return appliedWrite();
     }
 
-    // delete_worklog: hard delete (worklogs are not soft-deleted in this app).
+    // Keep the portable deletion journal atomic with the command receipt.
     if (!data.id) return terminalWrite('worklog id missing');
-    await db.workLogs.delete(data.id);
+    await deleteWorkLog(data.id);
     return appliedWrite();
   }
 
@@ -407,8 +463,6 @@ class AgentBridge {
       const updatedData = { ...data, writes };
       await this.drive.writeJsonFile(PENDING_FILE, updatedData, this.fileId);
 
-      // Přidej do processedIds pro případ, že by se soubor stáhl znovu
-      for (const id of writeIds) this.processedIds.add(id);
     } catch (e) {
       console.error('AgentBridge: markApplied failed', e);
     }
@@ -417,21 +471,16 @@ class AgentBridge {
   // Mirror the inbox into db.agentInbox so the diagnostics surface can read
   // pending writes via useLiveQuery. U5. Idempotent on re-read.
   async mirrorInbox(writes: AgentWrite[]): Promise<void> {
-    const now = Date.now();
-    for (const w of writes) {
-      const existing = await db.agentInbox.get(w.id);
-      const row: AgentInboxRow = {
-        id: w.id,
-        action: w.action,
-        entity_type: this.inferEntityType(w.action),
-        entity_id: existing?.entity_id,
-        payload: w,
-        received_at: existing?.received_at ?? now,
-        applied_at: w.applied_at,
-        last_error: existing?.last_error,
-      };
-      await db.agentInbox.put(row);
-    }
+    await db.transaction('rw', db.agentInbox, async () => {
+      for (const w of writes) {
+        // Preserve the original payload and any atomically committed receipt.
+        if (await db.agentInbox.get(w.id)) continue;
+        await db.agentInbox.put({
+          id: w.id, action: w.action, entity_type: this.inferEntityType(w.action),
+          payload: w, received_at: Date.now(), applied_at: w.applied_at,
+        });
+      }
+    });
   }
 
   // Record forces TypeScript to flag a missing entry when a new action is
@@ -450,17 +499,26 @@ class AgentBridge {
   // Mark a single inbox row as applied (or failed). U5. Called by useAgentBridgePolling
   // after applyWrite runs.
   async recordInboxResult(id: string, applied: boolean, lastError?: string): Promise<void> {
-    const row = await db.agentInbox.get(id);
-    if (!row) return;
-    await db.agentInbox.put({
-      ...row,
-      applied_at: applied ? Date.now() : row.applied_at,
-      last_error: lastError,
+    await db.transaction('rw', db.agentInbox, async () => {
+      const row = await db.agentInbox.get(id);
+      if (!row || row.applied_at) return;
+      await db.agentInbox.put({
+        ...row,
+        applied_at: applied ? Date.now() : row.applied_at,
+        last_error: lastError,
+      });
     });
   }
 
+  async listInbox(): Promise<AgentInboxRow[]> {
+    return db.agentInbox.filter((row: LegacyReceipt) => !row.diagnosticsHidden).toArray();
+  }
+
   async clearAppliedInbox(): Promise<void> {
-    await db.agentInbox.where('applied_at').above(0).delete();
+    await db.agentInbox.where('applied_at').above(0).modify((row: LegacyReceipt) => {
+      // Clearing diagnostics must never clear the execution receipt.
+      row.diagnosticsHidden = true;
+    });
   }
 
   get initialized(): boolean { return this.isInitialized; }

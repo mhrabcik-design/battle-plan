@@ -1,6 +1,7 @@
 ---
 title: Durable suggestion decision registry across Hermes cycles and devices
 date: 2026-08-12
+last_updated: 2026-09-25
 category: architecture-patterns
 module: Hermes Suggestions
 problem_type: architecture_pattern
@@ -60,9 +61,11 @@ The UI displays "Možná duplicita" with explicit "Je to stejné" and "Je to nov
 
 ### Converge Drive journals before removing duplicate files
 
-The decision registry is synchronized as `agent-suggestion-decisions.json`. The synchronizer reads every same-named Drive file discovered by the bounded Drive listing, validates and merges those snapshots, then writes one deterministic canonical file with an ETag (`battle-plan/src/services/suggestionRegistrySync.ts:190`). A missing ETag fails closed because an unconditional overwrite would be unsafe.
+The decision registry is synchronized as `agent-suggestion-decisions.json`. As verified on 2026-09-25, `suggestionRegistrySync.ts` reads and validates every discovered same-name snapshot, merges it locally, and publishes a new immutable snapshot with `writeJsonFile(..., null, { createOnly: true })`. It does not require an ETag, overwrite a canonical registry file, or trash older registry snapshots. This supersedes the earlier mutable ETag-based description.
 
-After writing, it rereads and merges every discovered candidate. Duplicate files are trashed only after the canonical file is verified to contain every pending local decision. The same rule protects the replies journal (`battle-plan/src/services/suggestionsSync.ts:229`). Drive discovery returns up to 1,000 matching files in stable ID order, and cleanup targets one exact file ID (`battle-plan/src/services/driveJsonStore.ts:472`, `battle-plan/src/services/driveJsonStore.ts:507`).
+After publication it rereads all discovered snapshots, verifies that every pending decision ID is present, merges the validated snapshots, and only then marks those decisions published. Conflicting immutable decision content still fails closed. Keeping old snapshots preserves concurrent writers' data.
+
+The legacy replies mirror is a separate contract: `suggestionsSync.addReply` still performs a conditional canonical update with an ETag and trashes duplicate reply files only after reread verification. Do not infer reply-mirror success from authoritative registry success; these outcomes are reported separately. The immutable registry change does not establish that the legacy reply flow has been migrated.
 
 ### Commit the domain effect and producer response together
 
@@ -101,7 +104,7 @@ Keep regression coverage for these invariants:
 - fuzzy matches require explicit same/new confirmation;
 - task conversion, the decision, and the protocol response roll back together;
 - concurrent first registry and reply files converge without losing either device's data;
-- registry synchronization rejects malformed journals, reused decision IDs with conflicting immutable payloads, and ETag-less updates; the page does not expose proposal actions while that registry is unavailable.
+- registry synchronization rejects malformed journals and reused decision IDs with conflicting immutable payloads, verifies pending decisions before marking publication, and accepts create-only publication without ETags; the page does not expose proposal actions while that registry is unavailable.
 
 Representative tests live in `battle-plan/src/services/suggestionRegistry.test.ts`, `battle-plan/src/services/suggestionRegistrySync.test.ts`, and `battle-plan/src/services/suggestionsSync.test.ts`.
 

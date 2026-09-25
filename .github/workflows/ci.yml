@@ -35,6 +35,8 @@ jobs:
         run: npm run check:theme
       - name: Test
         run: npm test
+      - name: Agent protocol conformance
+        run: npm run test:agent-protocol
       - name: Build
         run: npm run build
         env:
