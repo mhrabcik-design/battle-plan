@@ -26,7 +26,7 @@ The implementation in this branch is locally verified and pending merge.
 ## Guidance
 
 Observe the same domain that the backup publishes. The task snapshot reader in
-`battle-plan/src/utils/taskBackupRevision.ts` reads tasks and settings in one
+`battle-plan/src/utils/taskBackupRevision.ts` reads tasks and allowlisted portable settings in one
 transaction. Its revision includes every serialized field, even when a writer
 did not advance `updatedAt`. Do not replace it with visible rows, row counts, or
 a maximum timestamp without proving every backup-relevant mutation is covered.
@@ -49,11 +49,11 @@ not revoke an earlier successful hydration.
 
 ## Why This Matters
 
-These rules prevent local lifecycle races, but they do not make task snapshots
-safe for simultaneous writes from separate devices. Task backup still replaces
-one complete remote snapshot. The coordinator is shared within one JavaScript
-application instance, not across browser tabs or devices. Treating a local lock
-as remote concurrency control would recreate a more serious data-loss risk.
+These rules prevent local lifecycle races; the coordinator is shared within one
+JavaScript application instance, not across browser tabs or devices. As of
+2026-09-25, remote concurrency is handled separately by
+[immutable task snapshots](../integration-issues/tasks-immutable-drive-snapshots.md).
+Treating a local lock as remote concurrency control would recreate a data-loss risk.
 
 Do not copy the WorkLogs publication format into Tasks casually. The existing
 immutable-snapshot design also needs domain-specific identity, deletion,

@@ -9,6 +9,8 @@ execution: code
 
 # Integrate Hermes U4 with current BattlePlan - Plan
 
+> Supersession note (2026-09-25): this plan preserves the original U4 intent. Calendar field ownership changed with invitations (#65): current writes use conditional PATCH/DELETE, preserve Calendar-owned guest fields, and exclude internal notes even when replaying old queued effects. KTD6's internal-notes requirement is historical. See [current guidance](../solutions/architecture-patterns/durable-task-mutations-and-google-effects.md#calendar-invitations-and-field-ownership).
+
 ## Goal Capsule
 
 - **Objective:** Task edits survive temporary Google failures and reach the linked Google item without losing newer edits or creating duplicate calendar events.

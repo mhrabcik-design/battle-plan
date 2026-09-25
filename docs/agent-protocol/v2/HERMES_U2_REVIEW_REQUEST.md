@@ -1,5 +1,7 @@
 # Hermes U2 immutable Drive transport review request
 
+> Supersession note (2026-09-25): the 32-fixture result below belongs to this historical review baseline. The current source-independent runner reports 33 fixture assertions; use [CONFORMANCE.md](CONFORMANCE.md) and the current runner when validating the current checkout.
+
 Review exactly this BattlePlan producer commit:
 
 `edf0212e4a52ff4d51339a58b1493bb541b9f4d0`

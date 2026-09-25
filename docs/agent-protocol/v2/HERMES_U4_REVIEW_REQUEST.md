@@ -4,6 +4,8 @@ This implementation adapts the historic Hermes U4 proposal to the application
 based on main v4.3.73. It does not enable signed v2 command execution.
 The implementation contract is [the integration plan](../../plans/2026-09-20-integrate-hermes-u4-plan.md).
 
+> Supersession note (2026-09-25): this is the historical U4 review receipt. The Calendar invitation change (#65) replaces conditional PUT with PATCH while retaining ETag/fencing, and excludes internal notes at the Google adapter boundary, including replayed older outbox payloads. Public description and scheduling duration still synchronize; Calendar-owned guest/RSVP fields are preserved. The original scope and validation below describe the U4 review at that time. See [current Calendar field ownership](../../solutions/architecture-patterns/durable-task-mutations-and-google-effects.md#calendar-invitations-and-field-ownership).
+
 ## Scope and evidence
 
 | Unit | Implemented boundary | Verification |

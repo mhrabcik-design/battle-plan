@@ -17,6 +17,13 @@ tags: [worklogs, drive-sync, dexie, portable-identity, duplicate-repair, tombsto
 
 # Cross-device WorkLog sync duplicates
 
+> Update 2026-09-25: this document records the original duplicate-repair design.
+> [Ordinary deletion](ordinary-worklog-deletion-tombstones.md) now also creates
+> tombstones with reason `user-deleted`. Current publication uses
+> [immutable snapshots](../integration-issues/worklogs-immutable-drive-snapshots.md),
+> superseding the mutable ETag write details below. Exact-copy repair still
+> requires explicit confirmation; content equality never authorizes deletion.
+
 ## Problem
 
 A single historical WorkLog could become several rows after the same legacy database was opened and synchronized on multiple devices. The calendar then counted every copy, for example showing four records and 120 hours instead of one record and 30 hours.
