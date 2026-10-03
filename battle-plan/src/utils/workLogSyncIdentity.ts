@@ -150,23 +150,65 @@ export function findExactWorkLogDuplicateGroups(
     ));
 }
 
-export function mergeWorkLogSnapshots<T extends WorkLogIdentityFields>(
+/** Normalize one snapshot before combining snapshots or looking up local rows.
+ * Occurrence suffixes preserve identical rows captured in the same snapshot.
+ * Existing portable identities are never reassigned by content similarity.
+ */
+export function normalizeLegacyWorkLogIdentities(workLogs: readonly WorkLog[]): WorkLog[] {
+    const used = new Set(workLogs.flatMap(row => row.syncId ? [row.syncId] : []));
+    const occurrences = new Map<string, number>();
+    return workLogs.map(row => {
+        if (row.syncId) return row;
+        const base = createLegacyWorkLogSyncId(row);
+        let occurrence = (occurrences.get(base) ?? 0) + 1;
+        let syncId = occurrence === 1 ? base : `${base}-${occurrence}`;
+        while (used.has(syncId)) {
+            occurrence++;
+            syncId = `${base}-${occurrence}`;
+        }
+        occurrences.set(base, occurrence);
+        used.add(syncId);
+        return { ...row, syncId };
+    });
+}
+
+function stableComparable(value: unknown, omittedKeys: ReadonlySet<string>): unknown {
+    if (Array.isArray(value)) {
+        return value.map((item) => stableComparable(item, omittedKeys));
+    }
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+            .filter(([key, item]) => !omittedKeys.has(key) && item !== undefined)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => [key, stableComparable(item, omittedKeys)]),
+    );
+}
+
+export const comparableWorkLog = (workLog: WorkLog): string => JSON.stringify(stableComparable(
+    workLog,
+    new Set(['id', 'projectId', 'publicId']),
+));
+
+export function mergeWorkLogSnapshots<T extends WorkLog>(
     localWorkLogs: T[],
     cloudWorkLogs: T[],
 ): T[] {
     const mergedByKey = new Map<string, T>();
-
-    for (const workLog of localWorkLogs) {
-        mergedByKey.set(getWorkLogSyncKey(workLog), workLog);
-    }
-
-    for (const workLog of cloudWorkLogs) {
+    const conflicts = new Set<string>();
+    for (const workLog of [...localWorkLogs, ...cloudWorkLogs]) {
         const key = getWorkLogSyncKey(workLog);
-        const local = mergedByKey.get(key);
-        if (!local || getSyncTimestamp(workLog) > getSyncTimestamp(local)) {
+        const previous = mergedByKey.get(key);
+        if (!previous || getSyncTimestamp(workLog) > getSyncTimestamp(previous)) {
             mergedByKey.set(key, workLog);
+            conflicts.delete(key);
+        } else if (getSyncTimestamp(workLog) === getSyncTimestamp(previous)
+            && comparableWorkLog(workLog) !== comparableWorkLog(previous)) {
+            conflicts.add(key);
         }
     }
-
+    // A newer unambiguous version can supersede an older conflict regardless
+    // of Drive listing order. Never choose between conflicting newest edits.
+    if (conflicts.size) throw new Error('Konflikt stejně nových verzí WorkLog v zálohách.');
     return Array.from(mergedByKey.values());
 }

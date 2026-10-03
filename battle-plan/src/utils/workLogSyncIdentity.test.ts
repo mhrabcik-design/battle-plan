@@ -63,3 +63,21 @@ test('legacy sync key falls back to stable creation metadata', () => {
         'legacy|voice-1|123|2026-07-01|plaza|martin',
     );
 });
+
+test('equal-version WorkLog copies ignore device-local identifiers but reject different work', () => {
+    const first = baseWorkLog({ syncId: 'same', id: 1, projectId: 1, publicId: 'worklog_a' });
+    const copy = { ...first, id: 20, projectId: 30, publicId: 'worklog_b' };
+    assert.equal(mergeWorkLogSnapshots([first], [copy]).length, 1);
+    for (const rows of [[first, { ...copy, hours: 3 }], [{ ...copy, hours: 3 }, first]]) {
+        assert.throws(() => mergeWorkLogSnapshots([], rows), /conflict|konflikt/i);
+    }
+});
+
+test('a newer WorkLog version resolves an older conflict regardless of snapshot order', () => {
+    const first = baseWorkLog({ syncId: 'same', updatedAt: 10, hours: 1 });
+    const conflict = { ...first, hours: 2 };
+    const latest = { ...first, updatedAt: 20, hours: 3 };
+    for (const rows of [[first, conflict, latest], [latest, conflict, first], [conflict, latest, first]]) {
+        assert.deepEqual(mergeWorkLogSnapshots([], rows), [latest]);
+    }
+});
