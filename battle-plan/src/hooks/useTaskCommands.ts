@@ -2,9 +2,10 @@ import { useCallback, useRef, useState } from 'react';
 import { db, type Task } from '../db.ts';
 import { googleService } from '../services/googleService.ts';
 import { applySemanticResult } from '../services/semanticEngine.ts';
-import type { GoogleAuthStatus, GoogleTaskRaw, UnifiedTask } from '../types.ts';
+import type { GoogleAuthStatus, UnifiedTask } from '../types.ts';
 import { hasUsableAuth, isAuthUnavailable } from '../types.ts';
-import type { WeeklySchedulePatch } from '../utils/calendarUtils.ts';
+import { normalizeClockTime, type WeeklySchedulePatch } from '../utils/calendarUtils.ts';
+import { reconcileTaskChecklist } from '../utils/taskChecklist.ts';
 import { getSchedule, saveWeeklySchedule } from '../services/weeklySchedule.ts';
 import { ensureTaskDeadline } from '../services/taskNormalization.ts';
 import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations, taskMutationTables, type TaskEffectRequest } from '../services/taskMutations.ts';
@@ -30,10 +31,9 @@ const uiMutationContext = () => newTaskMutationContext('ui', undefined, googleSe
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
-  activeTaskList: string;
   editingTask: UnifiedTask | null;
   setEditingTask: (updater: UnifiedTask | null | ((prev: UnifiedTask | null) => UnifiedTask | null)) => void;
-  setGoogleTasksRaw: (tasks: GoogleTaskRaw[]) => void;
+  refreshGoogleTasks: () => Promise<void>;
   setIsProcessing: (isProcessing: boolean) => void;
 }
 
@@ -44,10 +44,9 @@ export type EditorSaveOutcome =
 
 export function useTaskCommands({
   googleAuth,
-  activeTaskList,
   editingTask,
   setEditingTask,
-  setGoogleTasksRaw,
+  refreshGoogleTasks,
   setIsProcessing,
 }: UseTaskCommandsArgs) {
   const [lastScheduleChange, setLastScheduleChange] = useState<{ before: UnifiedTask; after: UnifiedTask } | null>(null);
@@ -62,10 +61,6 @@ export function useTaskCommands({
       return isAuthUnavailable(googleService.getAuthState());
   };
   const AUTH_UNAVAILABLE_MSG = 'Relace vypršela, obnovte prosím autorizaci v Nastavení';
-  const refreshGoogleTasks = useCallback(async () => {
-    const tasks = await googleService.getTasks(activeTaskList);
-    setGoogleTasksRaw(tasks);
-  }, [activeTaskList, setGoogleTasksRaw]);
 
   const applyAiResult = useCallback(async (result: Partial<Task>, updateId: number | null) => {
     const semanticOutput = await applySemanticResult(result, updateId, googleAuth);
@@ -85,11 +80,9 @@ export function useTaskCommands({
       if (!current || current.isDeleted || (task.publicId && task.publicId !== current.publicId)
         || !current.subTasks?.some(subtask => subtask.id === subTaskId)) return null;
       const subTasks = current.subTasks.map(st => st.id === subTaskId ? { ...st, completed: !st.completed } : st);
-      const progress = Math.round(subTasks.filter(st => st.completed).length / subTasks.length * 100);
-      const totalDuration = current.totalDuration || current.duration || 0;
       return taskMutations.updateTask({
         localId: current.id, publicId: current.publicId, context: uiMutationContext(),
-        changes: { subTasks, progress, totalDuration, duration: Math.round(totalDuration * (1 - progress / 100)) },
+        changes: { subTasks, ...reconcileTaskChecklist({ ...current, subTasks }, current) },
         effects: calendarEffectsForLocalTask(current, 'upsert'),
       });
     });
@@ -227,7 +220,12 @@ export function useTaskCommands({
       if (!editingTask) return { status: 'failed', message: 'Editor už není otevřený.' };
       const title = editingTask.title.trim();
       if (!title) return { status: 'failed', message: 'Doplňte název záznamu.' };
-      const taskToSave = ensureTaskDeadline({ ...editingTask, title });
+      const rawTime = editingTask.startTime?.trim();
+      const startTime = rawTime ? normalizeClockTime(rawTime) : undefined;
+      if (!editingTask.isAllDay && rawTime && startTime === null) {
+        return { status: 'failed', message: 'Zadejte platný čas ve formátu HH:mm (00:00–23:59).' };
+      }
+      const taskToSave = ensureTaskDeadline({ ...editingTask, title, startTime: editingTask.isAllDay ? undefined : startTime ?? undefined });
       if (editingTask.isGoogleTask) {
         if (!editingTask.googleId || !hasUsableAuth(googleAuth)) {
           return { status: 'failed', message: AUTH_UNAVAILABLE_MSG };
@@ -252,13 +250,13 @@ export function useTaskCommands({
             const current = await db.tasks.get(taskData.id);
             if (!current || current.isDeleted || (taskData.publicId && taskData.publicId !== current.publicId)) return null;
             return taskMutations.updateTask({
-              localId: current.id, publicId: current.publicId, changes: taskData,
+              localId: current.id, publicId: current.publicId, changes: { ...taskData, ...reconcileTaskChecklist(taskData, current) },
               expectedRevision: taskData.protocolRevision?.revision_id ?? null, context,
               effects: calendarEffectsForLocalTask({ ...current, type: taskData.type }, 'upsert', allowUnlinkedCalendar),
             });
           }
           return taskMutations.createTask({
-            task: { ...taskData, source: 'user' }, context,
+            task: { ...taskData, ...reconcileTaskChecklist(taskData), source: 'user' }, context,
             effects: calendarEffectsForLocalTask(taskData, 'upsert', allowUnlinkedCalendar),
           });
         });

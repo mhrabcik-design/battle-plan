@@ -1785,3 +1785,44 @@ test('Calendar refuses writes to cancelled events or a foreign organizer without
             /cancelled|organizer/);
     }
 });
+for (const method of ['getTasks', 'getTaskLists'] as const) {
+    for (const status of [401, 403]) {
+        test(`${method}: late ${status} cannot invalidate a replacement session`, async () => {
+            clearStore(); seedSignedInStorage();
+            const started = deferred<void>();
+            const release = deferred<void>();
+            const failLater = async () => { started.resolve(); await release.promise; throw { status }; };
+            installGapiMock({ tasksList: failLater, tasklistsList: failLater });
+            const svc = freshService();
+            const pending = svc[method]();
+            await started.promise;
+            await consent(svc, 'replacement-token');
+            release.resolve();
+            assert.deepEqual(await pending, []);
+            assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
+            assert.equal(svc.getAuthStatus().accessToken, 'replacement-token');
+            installGapiMock({ tasksList: async () => ({ result: { items: [{ id: 'new-task' }] } }) });
+            assert.deepEqual(await svc.getTasks(), [{ id: 'new-task' }], 'old scope failure must not disable new Tasks access');
+        });
+    }
+    test(`${method}: late success cannot return old-account data or request another page`, async () => {
+        clearStore(); seedSignedInStorage();
+        const started = deferred<void>();
+        const release = deferred<void>();
+        let requests = 0;
+        const respondLater = async () => {
+            requests++;
+            if (requests > 1) return { result: { items: [{ id: 'mixed-account-task' }] } };
+            started.resolve(); await release.promise;
+            return { result: { items: [{ id: 'old-task' }], nextPageToken: 'old-page-2' } };
+        };
+        installGapiMock({ tasksList: respondLater, tasklistsList: respondLater });
+        const svc = freshService();
+        const pending = svc[method]();
+        await started.promise;
+        await consent(svc, 'replacement-token');
+        release.resolve();
+        assert.deepEqual(await pending, []);
+        assert.equal(requests, 1);
+    });
+}
