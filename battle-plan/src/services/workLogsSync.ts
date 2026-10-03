@@ -5,7 +5,7 @@ import {
     type Project,
 } from '../db';
 import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
-import { comparableWorkLog, getSyncTimestamp, getWorkLogSyncKey, mergeWorkLogSnapshots, normalizeLegacyWorkLogIdentities } from '../utils/workLogSyncIdentity';
+import { comparableWorkLog, getSyncTimestamp, getWorkLogSyncKey, mergeWorkLogSnapshots, normalizeLegacyWorkLogIdentities, normalizeLegacyWorkLogSnapshots } from '../utils/workLogSyncIdentity';
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 import { normalizeProjectName } from './projectCatalog';
 import { getErrorMessage } from '../utils/errors';
@@ -244,7 +244,7 @@ export class WorkLogsSync {
         return result.data;
     }
 
-    async loadAllDetailed(): Promise<WorkLogsLoadResult> {
+    async loadAllDetailed(localTombstones: WorkLogDeletionTombstone[] = []): Promise<WorkLogsLoadResult> {
         if (!this.isInitialized) {
             return { kind: 'store-unavailable', status: this.drive.lastStatus, data: emptyWorkLogsLoadData() };
         }
@@ -256,7 +256,7 @@ export class WorkLogsSync {
             ]);
             if (tombstoneResult.kind === 'store-unavailable') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
             if (tombstoneResult.kind === 'error') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
-            let remoteTombstones: WorkLogDeletionTombstone[] = [];
+            let remoteTombstones = mergeWorkLogDeletionTombstones(localTombstones);
             let tombstoneTimestamp = 0;
             if (tombstoneResult.kind === 'loaded') {
                 for (const file of tombstoneResult.files) {
@@ -288,7 +288,7 @@ export class WorkLogsSync {
             const deletedSyncIds = new Set(tombstones.map(row => row.syncId));
             const workLogs = mergeWorkLogSnapshots(
                 [],
-                result.files.flatMap((file) => normalizeLegacyWorkLogIdentities(file.data.workLogs ?? []))
+                normalizeLegacyWorkLogSnapshots(result.files.map(file => file.data.workLogs ?? []))
                     .filter(row => !deletedSyncIds.has(row.syncId!)),
             );
             const projects = result.files.flatMap((file) => file.data.projects ?? []);
@@ -418,7 +418,7 @@ export class WorkLogsSync {
         );
         return {
             hasWorkLogsSnapshot: workLogsFiles.length > 0,
-            workLogs: workLogsFiles.flatMap((file) => normalizeLegacyWorkLogIdentities(file.data.workLogs ?? [])),
+            workLogs: normalizeLegacyWorkLogSnapshots(workLogsFiles.map(file => file.data.workLogs ?? [])),
             projects: workLogsFiles.flatMap((file) => file.data.projects ?? []),
             journalTombstones,
         };
@@ -622,7 +622,8 @@ async function performMergeCloudToLocal(
             identityIndex = buildProjectIdentityIndex(localProjects);
         }
         const localWorkLogsByCompositeKey = new Map<string, WorkLog>();
-        for (const workLog of await db.workLogs.toArray()) {
+        const localWorkLogs = await db.workLogs.toArray();
+        for (const workLog of localWorkLogs) {
             localWorkLogsByCompositeKey.set(getWorkLogSyncKey(workLog), workLog);
         }
 
@@ -630,7 +631,7 @@ async function performMergeCloudToLocal(
         // Cloud project IDs are device-local. Resolve each imported row through
         // its normalized project snapshot before persisting it locally.
         let needsOrphanReconciliation = false;
-        for (const cw of normalizeLegacyWorkLogIdentities(cloudWorkLogs)) {
+        for (const cw of normalizeLegacyWorkLogIdentities(cloudWorkLogs, localWorkLogs)) {
             if (cw.syncId && deletedSyncIds.has(cw.syncId)) continue;
             const key = getWorkLogSyncKey(cw);
             const identity = resolveProjectIdentityFromIndex(identityIndex, cw.projectName);
@@ -714,7 +715,8 @@ async function performMergeLocalToCloudDetailed(
             };
         }
     }
-    const cloudResult = await workLogsSync.loadAllDetailed();
+    const localTombstones = await db.workLogDeletionTombstones.toArray();
+    const cloudResult = await workLogsSync.loadAllDetailed(localTombstones);
     if (cloudResult.kind === 'store-unavailable') {
         return {
             kind: 'store-unavailable',

@@ -1,7 +1,7 @@
 ---
 title: Cross-device WorkLog sync duplicates
 date: 2026-08-11
-last_updated: 2026-08-12
+last_updated: 2026-10-03
 category: database-issues
 module: WorkLogs
 problem_type: database_issue
@@ -46,6 +46,23 @@ A single historical WorkLog could become several rows after the same legacy data
 
 Legacy identity backfill now derives a synchronous deterministic ID from the stable WorkLog content. When several legitimate legacy rows have identical content in one database, a deterministic occurrence suffix keeps their identities distinct. The backfill stays synchronous so the IndexedDB upgrade transaction cannot close while awaiting external asynchronous hashing.
 
+### Legacy snapshots arriving after the database upgrade
+
+Pending local repair, verified on 2026-10-03: the database upgrade alone does not protect an already-upgraded device from an old Drive snapshot that still lacks `syncId`. Import previously looked up a legacy key and then persisted a newly assigned portable key, so replay could fail to find its own previous import. A populated `publicId` did not repair that mismatch; it belongs to a different identity contract.
+
+Normalize missing portable identities at every inbound boundary with `normalizeLegacyWorkLogIdentities` in `battle-plan/src/utils/workLogSyncIdentity.ts`, including direct cloud-to-local import. For multiple Drive files, count occurrences within each file before flattening its rows. Use the full set of snapshots to anchor legacy versions that share a `publicId`: an unambiguous existing `syncId` wins; otherwise the oldest available version supplies the deterministic identity, with a stable tie break. Conflicting assigned identities fail closed. Direct import also uses existing local rows as identity anchors. Otherwise a repeated snapshot can be mistaken for another legitimate occurrence and receive a fresh suffix. Preserve multiplicity within one snapshot and leave existing portable identities untouched. This prevents new replay duplicates; it cannot safely infer which older randomly identified rows are accidental copies.
+
+```ts
+const rows = normalizeLegacyWorkLogSnapshots(
+    files.map(file => file.data.workLogs ?? []));
+```
+
+Deletion identity must be applied before content-conflict reduction. The preliminary pull before upload must include local tombstones too, otherwise a local deletion cannot get past conflicting stale cloud versions to publish its journal. A tombstoned row is not a competing live edit, even when stale files disagree about its old contents. For remaining records, different contents at the same newest effective timestamp abort the download; a strictly newer unambiguous version can supersede an older conflict regardless of file order. The same portable-identity and content comparison rules are used by publication verification. Device-local `id`, `projectId`, and `publicId` values do not establish different work content.
+
+Regression evidence in `battle-plan/src/services/workLogsSync.test.ts` covers repeated legacy import with and without `publicId`, identical legitimate occurrences, stale files after deletion, and conflicting latest versions. `battle-plan/src/utils/workLogSyncIdentity.test.ts` covers order-independent resolution by a newer version.
+
+### Confirmed repair of pre-existing randomized copies
+
 Existing rows that already received different random identities are handled as repair candidates, not automatic deletions:
 
 1. The WorkLogs page finds groups with the same canonical project and persisted work content.
@@ -83,6 +100,8 @@ The contract remains intentionally narrow: only user-confirmed exact-copy repair
 - Never create shared logical identity with a random value inside a per-device migration.
 - Keep identity backfills synchronous inside IndexedDB upgrade callbacks.
 - Test legacy upgrades on two independent databases and compare the resulting portable IDs.
+- Also replay legacy remote snapshots into an already-upgraded database. A migration-only test does not exercise the import identity boundary.
+- Normalize each historical snapshot before unioning files; distinguish repeated transport snapshots from repeated records inside one snapshot.
 - Preserve two intentionally identical WorkLogs in migration and sync regression tests.
 - Treat content equality as a repair candidate. Require explicit confirmation before destructive cleanup when provenance is ambiguous.
 - Revalidate the preview in the same transaction that performs deletion.

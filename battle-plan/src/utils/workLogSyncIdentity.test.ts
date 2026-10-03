@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { WorkLog } from '../db.ts';
-import { getWorkLogSyncKey, mergeWorkLogSnapshots } from './workLogSyncIdentity.ts';
+import { createLegacyWorkLogSyncId, getWorkLogSyncKey, mergeWorkLogSnapshots, normalizeLegacyWorkLogSnapshots } from './workLogSyncIdentity.ts';
 
 const baseWorkLog = (overrides: Partial<WorkLog>): WorkLog => ({
     date: '2026-07-01',
@@ -79,5 +79,37 @@ test('a newer WorkLog version resolves an older conflict regardless of snapshot 
     const latest = { ...first, updatedAt: 20, hours: 3 };
     for (const rows of [[first, conflict, latest], [latest, conflict, first], [conflict, latest, first]]) {
         assert.deepEqual(mergeWorkLogSnapshots([], rows), [latest]);
+    }
+});
+
+test('legacy versions use an order-independent original identity and reject tied changes', () => {
+    const old = baseWorkLog({ publicId: 'worklog_legacy', updatedAt: 10, hours: 1 });
+    const changed = { ...old, updatedAt: 20, hours: 2 };
+    for (const snapshots of [[[old], [changed]], [[changed], [old]]]) {
+        const [winner] = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots(snapshots));
+        assert.equal(winner.hours, 2);
+        assert.equal(winner.syncId, createLegacyWorkLogSyncId(old));
+    }
+    const tied = { ...old, hours: 2 };
+    for (const snapshots of [[[old], [tied]], [[tied], [old]]]) {
+        assert.throws(() => mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots(snapshots)), /konflikt/i);
+    }
+});
+
+test('published portable identity anchors legacy copies without joining conflicting identities', () => {
+    const old = baseWorkLog({ publicId: 'worklog_legacy', updatedAt: 10, hours: 1 });
+    const published = { ...old, syncId: 'already-published', updatedAt: 20, hours: 2 };
+    for (const snapshots of [[[old], [published]], [[published], [old]]]) {
+        assert.deepEqual(mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots(snapshots)), [published]);
+    }
+    assert.throws(() => normalizeLegacyWorkLogSnapshots([[published], [{ ...published, syncId: 'different' }]]), /konflikt/i);
+});
+
+test('legacy rows with and without a public identity remain separate occurrences in one snapshot', () => {
+    const anonymous = baseWorkLog({});
+    const identified = { ...anonymous, publicId: 'worklog_identified' };
+    for (const rows of [[anonymous, identified], [identified, anonymous]]) {
+        const result = normalizeLegacyWorkLogSnapshots([rows, rows]);
+        assert.equal(mergeWorkLogSnapshots([], result).length, 2);
     }
 });

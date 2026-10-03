@@ -154,11 +154,48 @@ export function findExactWorkLogDuplicateGroups(
  * Occurrence suffixes preserve identical rows captured in the same snapshot.
  * Existing portable identities are never reassigned by content similarity.
  */
-export function normalizeLegacyWorkLogIdentities(workLogs: readonly WorkLog[]): WorkLog[] {
-    const used = new Set(workLogs.flatMap(row => row.syncId ? [row.syncId] : []));
+function legacyPublicIdentities(rows: readonly WorkLog[]): Map<string, string> {
+    const groups = new Map<string, { explicit: Set<string>; oldest: WorkLog }>();
+    for (const row of rows) {
+        if (!row.publicId) continue;
+        let group = groups.get(row.publicId);
+        if (!group) {
+            group = { explicit: new Set(), oldest: row };
+            groups.set(row.publicId, group);
+        }
+        if (row.syncId) group.explicit.add(row.syncId);
+        const order = getSyncTimestamp(row) - getSyncTimestamp(group.oldest);
+        if (order < 0 || (order === 0 && createLegacyWorkLogSyncId(row) < createLegacyWorkLogSyncId(group.oldest))) group.oldest = row;
+    }
+    const identities = new Map<string, string>();
+    for (const [publicId, group] of groups) {
+        // A public ID can anchor missing identities, never join conflicting
+        // portable identities that have already been assigned.
+        if (group.explicit.size > 1) throw new Error('Konflikt syncId pro historické WorkLog publicId.');
+        identities.set(publicId, group.explicit.values().next().value ?? createLegacyWorkLogSyncId(group.oldest));
+    }
+    return identities;
+}
+
+export function normalizeLegacyWorkLogIdentities(workLogs: readonly WorkLog[], knownRows: readonly WorkLog[] = []): WorkLog[] {
+    return normalizeLegacySnapshot(workLogs, legacyPublicIdentities([...knownRows, ...workLogs]));
+}
+
+export function normalizeLegacyWorkLogSnapshots(snapshots: readonly (readonly WorkLog[])[]): WorkLog[] {
+    const identities = legacyPublicIdentities(snapshots.flat());
+    return snapshots.flatMap(rows => normalizeLegacySnapshot(rows, identities));
+}
+
+function normalizeLegacySnapshot(workLogs: readonly WorkLog[], identities: ReadonlyMap<string, string>): WorkLog[] {
+    const used = new Set(workLogs.flatMap(row => {
+        const identity = row.syncId ?? (row.publicId ? identities.get(row.publicId) : undefined);
+        return identity ? [identity] : [];
+    }));
     const occurrences = new Map<string, number>();
     return workLogs.map(row => {
         if (row.syncId) return row;
+        const knownIdentity = row.publicId ? identities.get(row.publicId) : undefined;
+        if (knownIdentity) return { ...row, syncId: knownIdentity };
         const base = createLegacyWorkLogSyncId(row);
         let occurrence = (occurrences.get(base) ?? 0) + 1;
         let syncId = occurrence === 1 ? base : `${base}-${occurrence}`;
