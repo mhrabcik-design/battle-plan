@@ -127,7 +127,8 @@ test('different legacy public identities preserve identical work across versions
         assert.equal(result.reduce((total, row) => total + row.hours, 0), 4);
         assert.equal(new Set(result.map(row => row.syncId)).size, 2);
         const changed = { ...first, hours: 3, updatedAt: 20 };
-        for (const snapshots of [[rows, [changed, second]], [[changed, second], rows]]) {
+        const newerRows = rows.map(row => row.publicId === first.publicId ? changed : row);
+        for (const snapshots of [[rows, newerRows], [newerRows, rows]]) {
             const versions = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots(snapshots));
             assert.equal(versions.length, 2);
             assert.equal(versions.reduce((total, row) => total + row.hours, 0), 5);
@@ -162,4 +163,19 @@ test('mixed legacy occurrence order remains compatible with earlier tombstones',
     const result = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots([[base, identified]]));
     assert.equal(result.find(row => row.publicId)!.syncId, `${originalId}-2`);
     assert.deepEqual(result.filter(row => row.syncId !== originalId).map(row => row.publicId), ['worklog_second']);
+});
+
+test('a later stale-device upload cannot reassign the original deleted legacy version', () => {
+    const old = baseWorkLog({ publicId: 'worklog_stale_upload', hours: 1, updatedAt: 10 });
+    const edited = { ...old, hours: 3, updatedAt: 20 };
+    const files = [{ workLogs: [edited], last_updated: 25 }, { workLogs: [old], last_updated: 30 }];
+    const deletedId = createLegacyWorkLogSyncId(old);
+    const restored = normalizeWorkLogFiles(files).filter(row => row.syncId !== deletedId);
+    assert.deepEqual(mergeWorkLogSnapshots([], restored), []);
+});
+
+test('ambiguous historical occurrence reordering stops import instead of guessing deletion identity', () => {
+    const first = baseWorkLog({ publicId: 'first', updatedAt: 10 });
+    const second = { ...first, publicId: 'second' };
+    assert.throws(() => normalizeLegacyWorkLogSnapshots([[first, second], [second, first]]), /konflikt/i);
 });
