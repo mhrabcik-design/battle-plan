@@ -155,24 +155,12 @@ export function findExactWorkLogDuplicateGroups(
  * Existing portable identities are never reassigned by content similarity.
  */
 function legacyPublicIdentities(rows: readonly WorkLog[]): Map<string, string> {
-    const groups = new Map<string, { explicit: Set<string>; oldest: WorkLog }>();
-    for (const row of rows) {
-        if (!row.publicId) continue;
-        let group = groups.get(row.publicId);
-        if (!group) {
-            group = { explicit: new Set(), oldest: row };
-            groups.set(row.publicId, group);
-        }
-        if (row.syncId) group.explicit.add(row.syncId);
-        const order = getSyncTimestamp(row) - getSyncTimestamp(group.oldest);
-        if (order < 0 || (order === 0 && createLegacyWorkLogSyncId(row) < createLegacyWorkLogSyncId(group.oldest))) group.oldest = row;
-    }
     const identities = new Map<string, string>();
-    for (const [publicId, group] of groups) {
-        // A public ID can anchor missing identities, never join conflicting
-        // portable identities that have already been assigned.
-        if (group.explicit.size > 1) throw new Error('Konflikt syncId pro historické WorkLog publicId.');
-        identities.set(publicId, group.explicit.values().next().value ?? createLegacyWorkLogSyncId(group.oldest));
+    for (const row of rows) {
+        if (!row.publicId || !row.syncId) continue;
+        const previous = identities.get(row.publicId);
+        if (previous && previous !== row.syncId) throw new Error('Konflikt syncId pro historické WorkLog publicId.');
+        identities.set(row.publicId, row.syncId);
     }
     return identities;
 }
@@ -181,12 +169,15 @@ export function normalizeLegacyWorkLogIdentities(workLogs: readonly WorkLog[], k
     return normalizeLegacySnapshot(workLogs, legacyPublicIdentities([...knownRows, ...workLogs]));
 }
 
-export function normalizeLegacyWorkLogSnapshots(snapshots: readonly (readonly WorkLog[])[]): WorkLog[] {
-    const identities = legacyPublicIdentities(snapshots.flat());
-    return snapshots.flatMap(rows => normalizeLegacySnapshot(rows, identities));
+export function normalizeLegacyWorkLogSnapshots(snapshots: readonly { workLogs?: readonly WorkLog[]; last_updated?: number }[]): WorkLog[] {
+    // Historical occurrence suffixes followed row order. Anchor them in the
+    // earliest snapshot so newer file order cannot reassign a tombstoned ID.
+    const ordered = [...snapshots].sort((left, right) => (left.last_updated ?? 0) - (right.last_updated ?? 0));
+    const identities = legacyPublicIdentities(ordered.flatMap(snapshot => snapshot.workLogs ?? []));
+    return ordered.flatMap(snapshot => normalizeLegacySnapshot(snapshot.workLogs ?? [], identities));
 }
 
-function normalizeLegacySnapshot(workLogs: readonly WorkLog[], identities: ReadonlyMap<string, string>): WorkLog[] {
+function normalizeLegacySnapshot(workLogs: readonly WorkLog[], identities: Map<string, string>): WorkLog[] {
     const used = new Set(workLogs.flatMap(row => {
         const identity = row.syncId ?? (row.publicId ? identities.get(row.publicId) : undefined);
         return identity ? [identity] : [];
@@ -205,6 +196,7 @@ function normalizeLegacySnapshot(workLogs: readonly WorkLog[], identities: Reado
         }
         occurrences.set(base, occurrence);
         used.add(syncId);
+        if (row.publicId) identities.set(row.publicId, syncId);
         return { ...row, syncId };
     });
 }

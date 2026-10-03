@@ -288,7 +288,7 @@ export class WorkLogsSync {
             const deletedSyncIds = new Set(tombstones.map(row => row.syncId));
             const workLogs = mergeWorkLogSnapshots(
                 [],
-                normalizeLegacyWorkLogSnapshots(result.files.map(file => file.data.workLogs ?? []))
+                normalizeLegacyWorkLogSnapshots(result.files.map(file => file.data))
                     .filter(row => !deletedSyncIds.has(row.syncId!)),
             );
             const projects = result.files.flatMap((file) => file.data.projects ?? []);
@@ -418,7 +418,7 @@ export class WorkLogsSync {
         );
         return {
             hasWorkLogsSnapshot: workLogsFiles.length > 0,
-            workLogs: normalizeLegacyWorkLogSnapshots(workLogsFiles.map(file => file.data.workLogs ?? [])),
+            workLogs: normalizeLegacyWorkLogSnapshots(workLogsFiles.map(file => file.data)),
             projects: workLogsFiles.flatMap((file) => file.data.projects ?? []),
             journalTombstones,
         };

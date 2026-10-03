@@ -1,7 +1,7 @@
 ---
 title: Cross-device WorkLog sync duplicates
 date: 2026-08-11
-last_updated: 2026-10-03
+last_updated: 2026-10-04
 category: database-issues
 module: WorkLogs
 problem_type: database_issue
@@ -50,11 +50,11 @@ Legacy identity backfill now derives a synchronous deterministic ID from the sta
 
 Pending local repair, verified on 2026-10-03: the database upgrade alone does not protect an already-upgraded device from an old Drive snapshot that still lacks `syncId`. Import previously looked up a legacy key and then persisted a newly assigned portable key, so replay could fail to find its own previous import. A populated `publicId` did not repair that mismatch; it belongs to a different identity contract.
 
-Normalize missing portable identities at every inbound boundary with `normalizeLegacyWorkLogIdentities` in `battle-plan/src/utils/workLogSyncIdentity.ts`, including direct cloud-to-local import. For multiple Drive files, count occurrences within each file before flattening its rows. Use the full set of snapshots to anchor legacy versions that share a `publicId`: an unambiguous existing `syncId` wins; otherwise the oldest available version supplies the deterministic identity, with a stable tie break. Conflicting assigned identities fail closed. Direct import also uses existing local rows as identity anchors. Otherwise a repeated snapshot can be mistaken for another legitimate occurrence and receive a fresh suffix. Preserve multiplicity within one snapshot and leave existing portable identities untouched. This prevents new replay duplicates; it cannot safely infer which older randomly identified rows are accidental copies.
+Normalize missing portable identities at every inbound boundary with `normalizeLegacyWorkLogIdentities` in `battle-plan/src/utils/workLogSyncIdentity.ts`, including direct cloud-to-local import. For multiple Drive files, count occurrences within each file before flattening its rows. Use the full set of snapshots to anchor legacy versions that share a `publicId`: an unambiguous existing `syncId` wins; otherwise the earliest available snapshot supplies identities in its original row order, retaining historical occurrence suffixes for both identified and anonymous rows. Conflicting assigned identities fail closed. Direct import also uses existing local rows as identity anchors. Otherwise a repeated snapshot can be mistaken for another legitimate occurrence and receive a fresh suffix. Preserve multiplicity within one snapshot and leave existing portable identities untouched. This prevents new replay duplicates; it cannot safely infer which older randomly identified rows are accidental copies.
 
 ```ts
 const rows = normalizeLegacyWorkLogSnapshots(
-    files.map(file => file.data.workLogs ?? []));
+    files.map(file => file.data));
 ```
 
 Deletion identity must be applied before content-conflict reduction. The preliminary pull before upload must include local tombstones too, otherwise a local deletion cannot get past conflicting stale cloud versions to publish its journal. A tombstoned row is not a competing live edit, even when stale files disagree about its old contents. For remaining records, different contents at the same newest effective timestamp abort the download; a strictly newer unambiguous version can supersede an older conflict regardless of file order. The same portable-identity and content comparison rules are used by publication verification. Device-local `id`, `projectId`, and `publicId` values do not establish different work content.

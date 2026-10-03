@@ -2,7 +2,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { WorkLog } from '../db.ts';
-import { createLegacyWorkLogSyncId, getWorkLogSyncKey, mergeWorkLogSnapshots, normalizeLegacyWorkLogSnapshots } from './workLogSyncIdentity.ts';
+import { createLegacyWorkLogSyncId, getWorkLogSyncKey, mergeWorkLogSnapshots, normalizeLegacyWorkLogSnapshots as normalizeWorkLogFiles } from './workLogSyncIdentity.ts';
+
+const normalizeLegacyWorkLogSnapshots = (snapshots: WorkLog[][]) => normalizeWorkLogFiles(
+    snapshots.map(workLogs => ({ workLogs, last_updated: Math.max(...workLogs.map(row => row.updatedAt ?? row.createdAt ?? 0)) })),
+);
 
 const baseWorkLog = (overrides: Partial<WorkLog>): WorkLog => ({
     date: '2026-07-01',
@@ -112,4 +116,50 @@ test('legacy rows with and without a public identity remain separate occurrences
         const result = normalizeLegacyWorkLogSnapshots([rows, rows]);
         assert.equal(mergeWorkLogSnapshots([], result).length, 2);
     }
+});
+
+test('different legacy public identities preserve identical work across versions and file order', () => {
+    const first = baseWorkLog({ publicId: 'worklog_first', hours: 2, updatedAt: 10 });
+    const second = { ...first, publicId: 'worklog_second' };
+    for (const rows of [[first, second], [second, first]]) {
+        const result = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots([rows, rows]));
+        assert.equal(result.length, 2);
+        assert.equal(result.reduce((total, row) => total + row.hours, 0), 4);
+        assert.equal(new Set(result.map(row => row.syncId)).size, 2);
+        const changed = { ...first, hours: 3, updatedAt: 20 };
+        for (const snapshots of [[rows, [changed, second]], [[changed, second], rows]]) {
+            const versions = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots(snapshots));
+            assert.equal(versions.length, 2);
+            assert.equal(versions.reduce((total, row) => total + row.hours, 0), 5);
+            for (const row of versions) assert.equal(row.syncId, result.find(original => original.publicId === row.publicId)!.syncId);
+        }
+    }
+});
+
+test('legacy occurrence identities remain compatible with existing deletion tombstones', () => {
+    const base = baseWorkLog({ hours: 2, updatedAt: 10 });
+    const rows = [{ ...base, id: 1, publicId: 'worklog_z' }, { ...base, id: 2, publicId: 'worklog_a' }];
+    const originalId = createLegacyWorkLogSyncId(base);
+    const result = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots([rows]));
+    assert.equal(result.find(row => row.publicId === 'worklog_z')!.syncId, originalId);
+    const afterDeletion = result.filter(row => row.syncId !== `${originalId}-2`);
+    assert.deepEqual(afterDeletion.map(row => row.publicId), ['worklog_z']);
+});
+
+test('an anonymous explicit identity is reserved before assigning a legacy public identity', () => {
+    const base = baseWorkLog({ hours: 2, updatedAt: 10 });
+    const explicit = { ...base, syncId: createLegacyWorkLogSyncId(base) };
+    const legacy = { ...base, publicId: 'worklog_known' };
+    const result = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots([[explicit, legacy]]));
+    assert.equal(result.length, 2);
+    assert.equal(result.reduce((sum, row) => sum + row.hours, 0), 4);
+});
+
+test('mixed legacy occurrence order remains compatible with earlier tombstones', () => {
+    const base = baseWorkLog({ hours: 2, updatedAt: 10 });
+    const identified = { ...base, publicId: 'worklog_second' };
+    const originalId = createLegacyWorkLogSyncId(base);
+    const result = mergeWorkLogSnapshots([], normalizeLegacyWorkLogSnapshots([[base, identified]]));
+    assert.equal(result.find(row => row.publicId)!.syncId, `${originalId}-2`);
+    assert.deepEqual(result.filter(row => row.syncId !== originalId).map(row => row.publicId), ['worklog_second']);
 });
