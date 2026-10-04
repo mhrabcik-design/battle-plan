@@ -557,10 +557,13 @@ class GoogleService {
     async getTaskLists() {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return [];
         if (!this.googleTasksScopeAvailable) return [];
+        const generation = this.authGeneration;
         try {
             const response = await window.gapi.client.tasks.tasklists.list();
+            if (generation !== this.authGeneration) return [];
             return response.result.items || [];
         } catch (e: unknown) {
+            if (generation !== this.authGeneration) return [];
             if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
                 return [];
@@ -578,6 +581,7 @@ class GoogleService {
     async getTasks(taskListId: string = '@default') {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return [];
         if (!this.googleTasksScopeAvailable) return [];
+        const generation = this.authGeneration;
         try {
             const tasks: GoogleTaskRaw[] = [];
             let pageToken: string | undefined;
@@ -591,12 +595,14 @@ class GoogleService {
                 if (pageToken) request.pageToken = pageToken;
 
                 const response = await window.gapi.client.tasks.tasks.list(request);
+                if (generation !== this.authGeneration) return [];
                 tasks.push(...(response.result.items || []));
                 pageToken = response.result.nextPageToken;
             } while (pageToken);
 
             return tasks;
         } catch (e: unknown) {
+            if (generation !== this.authGeneration) return [];
             if (isUnauthenticatedError(e)) {
                 this.markAuthUnavailable();
                 return [];

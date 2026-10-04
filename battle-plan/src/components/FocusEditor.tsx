@@ -3,7 +3,7 @@ import type { UnifiedTask, GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import React, { useState, useEffect, useRef } from 'react';
 import type { Task } from '../db';
-import { formatDuration, parseDuration } from '../utils/calendarUtils';
+import { formatDuration, normalizeClockTime, parseDuration } from '../utils/calendarUtils';
 import type { EditorSaveOutcome } from '../hooks/useTaskCommands';
 import { applySavedEditorStatus, getEditorCloseIntent, getEditorTaskSnapshot } from '../utils/editorInteraction';
 import { OverlaySurface } from './ui/OverlaySurface';
@@ -66,6 +66,7 @@ export function FocusEditor({
     const currentSnapshot = getEditorTaskSnapshot(editingTask);
     const isDirty = getEditorTaskSnapshot(initialTask) !== currentSnapshot;
     const isBusy = isSaving || isDeleting || isTogglingTask || isPreparingInvitation;
+    const invalidStartTime = !editingTask.isAllDay && Boolean(editingTask.startTime?.trim()) && normalizeClockTime(editingTask.startTime ?? '') === null;
     const hasSavedIdentity = Boolean(editingTask.id || (editingTask.isGoogleTask && editingTask.googleId));
     const shareDisabled = isBusy || isDirty || !hasSavedIdentity || isRecording;
     const invitationKey = `${currentSnapshot}:${googleAuth.accessToken}`;
@@ -351,9 +352,12 @@ export function FocusEditor({
                                             )}
                                         </div>
                                         <div className="space-y-2">
-                                            <label className="text-sm font-black text-slate-500 uppercase">Čas (24h)</label>
+                                            <label htmlFor="task-time" className="text-sm font-black text-slate-500 uppercase">Čas (24h)</label>
                                             <input
                                                 type="text"
+                                                id="task-time"
+                                                aria-invalid={invalidStartTime}
+                                                aria-describedby={invalidStartTime ? 'task-time-error' : undefined}
                                                 placeholder="13:00"
                                                 maxLength={5}
                                                 disabled={editingTask.isAllDay}
@@ -361,21 +365,16 @@ export function FocusEditor({
                                                 onChange={(e) => {
                                                     let val = e.target.value.replace(/[^\d:]/g, '');
                                                     if (val.length === 2 && !val.includes(':') && val.length > (editingTask.startTime?.length || 0)) {
-                                                        const hours = parseInt(val);
-                                                        if (hours > 23) val = '23';
                                                         val += ':';
-                                                    }
-                                                    if (val.length === 5) {
-                                                        const parts = val.split(':');
-                                                        const mins = parseInt(parts[1]);
-                                                        if (mins > 59) val = parts[0] + ':59';
                                                     }
                                                     setEditingTask({ ...editingTask, startTime: val, updatedAt: Date.now() });
                                                 }}
-                                                className={`w-full bg-slate-800 border rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed ${editingTask.startTime && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(editingTask.startTime) ? 'border-red-500/50' : 'border-slate-700'}`}
+                                                className={`w-full bg-slate-800 border rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed ${invalidStartTime ? 'border-red-500/50' : 'border-slate-700'}`}
                                             />
                                         </div>
                                     </div>
+
+                                    {invalidStartTime && <p id="task-time-error" className="text-xs text-red-400">Zadejte čas ve formátu HH:mm (00:00–23:59).</p>}
 
                                     {/* ALL-DAY TOGGLE + DURATION INPUT */}
                                     <DurationAllDayEditor

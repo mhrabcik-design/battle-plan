@@ -9,6 +9,7 @@ import { useExternalEffectOutbox } from './hooks/useExternalEffectOutbox';
 import { useSuggestionsBadge } from './hooks/useSuggestionsBadge';
 import { useAgentBridgePolling } from './hooks/useAgentBridgePolling';
 import { useTaskCommands } from './hooks/useTaskCommands';
+import { useGoogleTasks } from './hooks/useGoogleTasks';
 import { useGlobalVoiceProcessing } from './hooks/useGlobalVoiceProcessing';
 import {
   useAgentProtocolDeviceIdentity,
@@ -19,7 +20,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { AVAILABLE_GEMINI_MODELS, DEFAULT_GEMINI_MODEL, geminiService } from './services/geminiService';
 import { googleService } from './services/googleService';
 import { mergeLocalToCloudDetailed } from './services/workLogsSync';
-import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList, GoogleTaskRaw } from './types';
+import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList } from './types';
 import { hasUsableAuth as checkUsableAuth } from './types';
 import { Sidebar } from './components/Sidebar';
 import { syncIconFor } from './components/syncIcon';
@@ -105,7 +106,7 @@ function App() {
   const [uiScale, setUiScale] = useState<number>(Number(localStorage.getItem('ui_scale')) || 16);
   const [googleTaskLists, setGoogleTaskLists] = useState<GoogleTaskList[]>([]);
   const [activeTaskList, setActiveTaskList] = useState<string>('@default');
-  const [googleTasksRaw, setGoogleTasksRaw] = useState<GoogleTaskRaw[]>([]);
+  const { tasks: googleTasksRaw, listId: loadedGoogleTaskList, refreshGoogleTasks } = useGoogleTasks(googleAuth, viewMode, activeTaskList);
   const [showCompletedTasks, setShowCompletedTasks] = useState(false);
   const [showCompletedMeetings, setShowCompletedMeetings] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -352,10 +353,10 @@ const syncVisualState = deriveSyncVisualState({
       createdAt: new Date(gt.updated).getTime(),
       isGoogleTask: true,
       googleId: gt.id,
-      googleListId: activeTaskList,
+      googleListId: loadedGoogleTaskList,
       updatedAt: new Date(gt.updated).getTime()
     }));
-  }, [googleTasksRaw, hasUsableAuth, viewMode, activeTaskList]);
+  }, [googleTasksRaw, hasUsableAuth, viewMode, loadedGoogleTaskList]);
 
   const tasks: UnifiedTask[] = useMemo(() => {
     const combined = [...localTasks, ...googleTasksMapped].filter(task => viewMode !== 'battle' || task.status === 'pending');
@@ -391,11 +392,6 @@ const syncVisualState = deriveSyncVisualState({
   useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog });
   useAgentBridgePolling({ googleAuth, addLog });
 
-  useEffect(() => {
-    if (hasUsableAuth && (viewMode === 'tasks' || viewMode === 'week')) {
-      googleService.getTasks(activeTaskList).then(setGoogleTasksRaw);
-    }
-  }, [hasUsableAuth, viewMode, activeTaskList]);
 
   const workLogsDataRevision = useLiveQuery(async () => {
     const [allWorkLogs, allProjects, allWorkLogTombstones] = await Promise.all([
@@ -528,10 +524,9 @@ const syncVisualState = deriveSyncVisualState({
     handlePrepareInvitation,
   } = useTaskCommands({
     googleAuth,
-    activeTaskList,
     editingTask,
     setEditingTask,
-    setGoogleTasksRaw,
+    refreshGoogleTasks,
     setIsProcessing: setIsTaskCommandProcessing,
   });
 

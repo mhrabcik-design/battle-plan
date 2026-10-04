@@ -975,6 +975,8 @@ test('WorkLogs Drive sync serializes overlapping backup triggers', async () => {
     const originalLoad = sync.loadAllDetailed;
     const originalSaveDetailed = sync.saveAllDetailed;
     let releaseFirstRead: (() => void) | undefined;
+    let signalFirstRead: () => void;
+    const firstReadStarted = new Promise<void>(resolve => { signalFirstRead = resolve; });
     let activeReads = 0;
     let maxActiveReads = 0;
     try {
@@ -983,7 +985,7 @@ test('WorkLogs Drive sync serializes overlapping backup triggers', async () => {
             activeReads += 1;
             maxActiveReads = Math.max(maxActiveReads, activeReads);
             if (!releaseFirstRead) {
-                await new Promise<void>((resolve) => { releaseFirstRead = resolve; });
+                await new Promise<void>((resolve) => { releaseFirstRead = resolve; signalFirstRead(); });
             }
             activeReads -= 1;
             return {
@@ -994,7 +996,7 @@ test('WorkLogs Drive sync serializes overlapping backup triggers', async () => {
         sync.saveAllDetailed = async () => ({ kind: 'published', timestamp: 21 });
 
         const first = mergeLocalToCloud();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await firstReadStarted;
         const second = mergeLocalToCloud();
         releaseFirstRead?.();
         assert.deepEqual(await Promise.all([first, second]), [true, true]);
@@ -1096,4 +1098,214 @@ test('unverified ordinary deletion journal never allows the worklog snapshot to 
     assert.equal(result.kind, 'verification-failed');
     assert.equal(store.writes.length, 3);
     assert.ok(store.writes.every(write => write.name === 'work_log_deletion_tombstones.json'));
+});
+
+test('legacy WorkLog imports replay with stable identities, including stored public IDs', async () => {
+    for (const publicId of [undefined, 'worklog_legacy_public']) {
+        await resetDb();
+        const legacy = {
+            id: 41, ...(publicId ? { publicId } : {}), date: '2026-08-01', projectId: 42,
+            projectName: 'Legacy project', people: 'Martin', hours: 2,
+            source: 'manual' as const, createdAt: 10, updatedAt: 20,
+        };
+        await mergeCloudToLocal([structuredClone(legacy)], []);
+        const [first] = await db.workLogs.toArray();
+        assert.ok(first?.syncId);
+        await mergeCloudToLocal([structuredClone(legacy)], []);
+        assert.equal(await db.workLogs.count(), 1);
+        assert.equal((await db.workLogs.toArray())[0]?.hours, 2);
+        assert.equal((await db.workLogs.toArray())[0]?.syncId, first.syncId);
+
+        // Reopen a fresh database to model another device's first import.
+        await db.delete();
+        await db.open();
+        await mergeCloudToLocal([structuredClone(legacy)], []);
+        assert.equal((await db.workLogs.toArray())[0]?.syncId, first.syncId);
+    }
+});
+
+test('legacy snapshots preserve two identical occurrences across snapshot and database replay', async () => {
+    await resetDb();
+    const legacy = {
+        date: '2026-08-01', projectId: 1, projectName: 'Legacy project', people: 'Martin',
+        hours: 2, source: 'manual' as const, createdAt: 10, updatedAt: 20,
+    };
+    const store = new FakeImmutableWorkLogsStore();
+    for (const fileId of ['legacy-a', 'legacy-b']) {
+        store.workLogFiles.push({ fileId, data: {
+            last_updated: 20, workLogs: [{ ...legacy, id: 1 }, { ...legacy, id: 2 }], projects: [],
+        } });
+    }
+    const sync = new WorkLogsSync(store);
+    await sync.init();
+    const loaded = await sync.loadAllDetailed() as { kind: string; data: { workLogs: import('../db.ts').WorkLog[] } };
+    assert.equal(loaded.kind, 'loaded');
+    assert.equal(loaded.data.workLogs.length, 2);
+    assert.equal(new Set(loaded.data.workLogs.map(row => row.syncId)).size, 2);
+    await mergeCloudToLocal(loaded.data.workLogs, []);
+    await mergeCloudToLocal(loaded.data.workLogs, []);
+    assert.equal(await db.workLogs.count(), 2);
+    assert.equal((await db.workLogs.toArray()).reduce((sum, row) => sum + row.hours, 0), 4);
+});
+
+test('deleting a normalized legacy WorkLog survives replay of its unidentified snapshot', async () => {
+    await resetDb();
+    const legacy = {
+        date: '2026-08-01', projectId: 1, projectName: 'Legacy project', people: 'Martin',
+        hours: 2, source: 'manual' as const, createdAt: 10, updatedAt: 20,
+    };
+    await mergeCloudToLocal([structuredClone(legacy)], []);
+    const [stored] = await db.workLogs.toArray();
+    const { deleteWorkLog } = await vite.ssrLoadModule('/src/services/workLogDeletion.ts');
+    await deleteWorkLog(stored!.id!);
+    await mergeCloudToLocal([structuredClone(legacy)], []);
+    assert.equal(await db.workLogs.count(), 0);
+    assert.equal(await db.workLogDeletionTombstones.count(), 1);
+});
+
+test('conflicting newest WorkLogs downloads fail in either order before local merge or publication', async () => {
+    await resetDb();
+    const base = {
+        syncId: 'download-conflict', date: '2026-08-01', projectId: 1, projectName: 'Plaza',
+        people: 'Martin', hours: 2, source: 'manual' as const, createdAt: 10, updatedAt: 20,
+    };
+    const store = new FakeImmutableWorkLogsStore();
+    store.workLogFiles.push(
+        { fileId: 'a', data: { last_updated: 20, workLogs: [base], projects: [] } },
+        { fileId: 'b', data: { last_updated: 20, workLogs: [{ ...base, hours: 5 }], projects: [] } },
+    );
+    const reader = new WorkLogsSync(store);
+    await reader.init();
+    const sync = workLogsSync as {
+        isInitialized: boolean;
+        loadAllDetailed: () => Promise<unknown>;
+        saveAllDetailed: (payload: unknown) => Promise<unknown>;
+    };
+    const original = { initialized: sync.isInitialized, load: sync.loadAllDetailed, save: sync.saveAllDetailed };
+    const originalConsoleError = console.error;
+    let publications = 0;
+    console.error = () => undefined;
+    try {
+        sync.isInitialized = true;
+        sync.loadAllDetailed = () => reader.loadAllDetailed();
+        sync.saveAllDetailed = async () => { publications++; return { kind: 'published', timestamp: 30 }; };
+        for (let order = 0; order < 2; order++) {
+            const result = await reader.loadAllDetailed() as { kind: string; message?: string };
+            assert.equal(result.kind, 'error');
+            assert.match(result.message ?? '', /conflict|konflikt/i);
+            assert.equal((await mergeLocalToCloudDetailed()).kind, 'read-unavailable');
+            assert.equal(await db.workLogs.count(), 0);
+            assert.equal(await db.projects.count(), 0);
+            assert.equal(publications, 0);
+            store.workLogFiles.reverse();
+        }
+    } finally {
+        console.error = originalConsoleError;
+        sync.isInitialized = original.initialized;
+        sync.loadAllDetailed = original.load;
+        sync.saveAllDetailed = original.save;
+    }
+});
+
+test('a published deletion suppresses conflicting stale WorkLog versions before download merge', async () => {
+    const base = {
+        syncId: 'deleted-conflict', date: '2026-08-01', projectId: 1, projectName: 'Plaza',
+        people: 'Martin', hours: 2, source: 'manual' as const, createdAt: 10, updatedAt: 20,
+    };
+    const store = new FakeImmutableWorkLogsStore();
+    store.workLogFiles.push(
+        { fileId: 'a', data: { last_updated: 20, workLogs: [base], projects: [] } },
+        { fileId: 'b', data: { last_updated: 20, workLogs: [{ ...base, hours: 5 }], projects: [] } },
+    );
+    const tombstone = { syncId: base.syncId, reason: 'user-deleted', deletedAt: 30 };
+    store.tombstoneFiles.push({ fileId: 'deletion', data: { last_updated: 30, tombstones: [tombstone] } });
+    const sync = new WorkLogsSync(store);
+    await sync.init();
+    const originalConsoleError = console.error;
+    console.error = () => undefined;
+    try {
+        const result = await sync.loadAllDetailed() as { kind: string; data: { workLogs: unknown[]; workLogDeletionTombstones: unknown[] } };
+        assert.equal(result.kind, 'loaded');
+        assert.deepEqual(result.data.workLogs, []);
+        assert.deepEqual(result.data.workLogDeletionTombstones, [tombstone]);
+    } finally {
+        console.error = originalConsoleError;
+    }
+});
+
+test('a local deletion can publish past conflicting stale remote copies', async () => {
+    await resetDb();
+    const row = { syncId: 'local-deletion-conflict', date: '2026-10-03', projectId: 1, projectName: 'Test', people: 'Martin', hours: 1, source: 'manual' as const, createdAt: 10, updatedAt: 20 };
+    const store = new FakeImmutableWorkLogsStore();
+    store.workLogFiles.push(
+        { fileId: 'a', data: { last_updated: 20, workLogs: [row], projects: [] } },
+        { fileId: 'b', data: { last_updated: 20, workLogs: [{ ...row, hours: 2 }], projects: [] } },
+    );
+    await db.workLogDeletionTombstones.put({ syncId: row.syncId, reason: 'user-deleted', deletedAt: 30 });
+    const reader = new WorkLogsSync(store);
+    await reader.init();
+    const singleton = workLogsSync as { isInitialized: boolean; loadAllDetailed: () => Promise<unknown>; saveAllDetailed: (...args: unknown[]) => Promise<unknown> };
+    const original = { isInitialized: singleton.isInitialized, loadAllDetailed: singleton.loadAllDetailed, saveAllDetailed: singleton.saveAllDetailed };
+    try {
+        singleton.isInitialized = true;
+        singleton.loadAllDetailed = reader.loadAllDetailed.bind(reader);
+        singleton.saveAllDetailed = reader.saveAllDetailed.bind(reader);
+        assert.equal((await mergeLocalToCloudDetailed()).kind, 'published');
+        assert.equal(await db.workLogs.count(), 0);
+        assert.equal(store.writes[0]?.name, 'work_log_deletion_tombstones.json');
+        const loaded = await reader.loadAllDetailed() as { kind: string; data: { workLogs: unknown[] } };
+        assert.equal(loaded.kind, 'loaded');
+        assert.deepEqual(loaded.data.workLogs, []);
+    } finally { Object.assign(singleton, original); }
+});
+
+test('legacy public identity keeps only the newest remote version before first import', async () => {
+    await resetDb();
+    const row = { publicId: 'worklog_legacy_version', date: '2026-10-03', projectId: 1, projectName: 'Test', people: 'Martin', hours: 1, source: 'manual' as const, createdAt: 10, updatedAt: 10 };
+    const store = new FakeImmutableWorkLogsStore();
+    store.workLogFiles.push(
+        { fileId: 'old', data: { last_updated: 10, workLogs: [row], projects: [] } },
+        { fileId: 'new', data: { last_updated: 20, workLogs: [{ ...row, hours: 2, updatedAt: 20 }], projects: [] } },
+    );
+    const reader = new WorkLogsSync(store);
+    await reader.init();
+    const loaded = await reader.loadAllDetailed() as { kind: string; data: { workLogs: import('../db.ts').WorkLog[] } };
+    assert.equal(loaded.kind, 'loaded');
+    assert.equal(loaded.data.workLogs.length, 1);
+    assert.equal(loaded.data.workLogs[0].hours, 2);
+    await mergeCloudToLocal(loaded.data.workLogs, []);
+    assert.equal(await db.workLogs.count(), 1);
+});
+
+test('a newer legacy public version updates its prior local import without reassigning identity', async () => {
+    await resetDb();
+    const row = { publicId: 'worklog_legacy_update', date: '2026-10-03', projectId: 1, projectName: 'Test', people: 'Martin', hours: 1, source: 'manual' as const, createdAt: 10, updatedAt: 10 };
+    await mergeCloudToLocal([row], []);
+    const [original] = await db.workLogs.toArray();
+    await mergeCloudToLocal([{ ...row, hours: 2, updatedAt: 20 }], []);
+    const [updated] = await db.workLogs.toArray();
+    assert.equal(await db.workLogs.count(), 1);
+    assert.equal(updated.hours, 2);
+    assert.equal(updated.syncId, original.syncId);
+    assert.equal(updated.publicId, original.publicId);
+});
+
+test('a tombstone for the original legacy version suppresses its later remote edit', async () => {
+    await resetDb();
+    const row = { publicId: 'worklog_legacy_deleted_version', date: '2026-10-03', projectId: 1, projectName: 'Test', people: 'Martin', hours: 1, source: 'manual' as const, createdAt: 10, updatedAt: 10 };
+    await mergeCloudToLocal([row], []);
+    const [original] = await db.workLogs.toArray();
+    const store = new FakeImmutableWorkLogsStore();
+    store.workLogFiles.push(
+        { fileId: 'new', data: { last_updated: 20, workLogs: [{ ...row, hours: 2, updatedAt: 20 }], projects: [] } },
+        { fileId: 'old', data: { last_updated: 10, workLogs: [row], projects: [] } },
+    );
+    store.tombstoneFiles.push({ fileId: 'deleted', data: { last_updated: 30, tombstones: [{ syncId: original.syncId, reason: 'user-deleted', deletedAt: 30 }] } });
+    const reader = new WorkLogsSync(store);
+    await reader.init();
+    const loaded = await reader.loadAllDetailed() as { kind: string; data: { workLogs: import('../db.ts').WorkLog[]; workLogDeletionTombstones: WorkLogDeletionTombstone[] } };
+    assert.equal(loaded.kind, 'loaded');
+    assert.deepEqual(loaded.data.workLogs, []);
+    await mergeCloudToLocal(loaded.data.workLogs, [], loaded.data.workLogDeletionTombstones);
+    assert.equal(await db.workLogs.count(), 0);
 });

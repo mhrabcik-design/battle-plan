@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     canResizeWeeklyTask,
+    formatTimeLeft,
+    getDeadlineColor,
+    getAvailableWorkingMinutes,
+    parseDuration,
     getWeeklyResizePatch,
     getWeeklyEdgeDirection,
     getWeeklyEdgeDirectionAtPoint,
@@ -211,4 +215,52 @@ test('weekly movement omits duration while no-op comparison detects an explicit 
         duration: 90,
     }), false);
     assert.equal(isWeeklyScheduleNoop(meeting, getWeeklyResizePatch(meeting, 11 * 60)!), true);
+});
+
+
+test('civil deadlines keep the local date across timezones and daylight saving transitions', () => {
+    const previous = process.env.TZ;
+    try {
+        for (const zone of ['UTC', 'Europe/Prague', 'America/New_York']) {
+            process.env.TZ = zone;
+            for (const date of ['2026-10-03', '2026-03-08', '2026-03-29', '2026-10-25', '2026-11-01']) {
+                const now = new Date(`${date}T10:00:00`);
+                assert.equal(formatTimeLeft(now, date, '15:00'), '5h 0m', `${zone} ${date}`);
+                assert.equal(getAvailableWorkingMinutes(now, date, '15:00'), 300, `${zone} ${date}`);
+                assert.equal(getDeadlineColor(now, date, '15:00'), 'text-amber-400', `${zone} ${date}`);
+            }
+        }
+    } finally {
+        if (previous === undefined) delete process.env.TZ;
+        else process.env.TZ = previous;
+    }
+});
+
+test('invalid deadline dates and times have neutral output', () => {
+    const now = new Date(2026, 9, 3, 10);
+    for (const [date, time] of [['2026-10-03', '1'], ['2026-10-03', '25:00'], ['2026-10-03', '12:99'], ['2026-02-30', '15:00'], ['not-a-date', '15:00']]) {
+        assert.equal(formatTimeLeft(now, date, time), '');
+        assert.equal(getDeadlineColor(now, date, time), 'text-slate-500');
+        assert.equal(getAvailableWorkingMinutes(now, date, time), 0);
+    }
+});
+
+test('moving blocks longer than the viewport preserves duration and valid semantic times', () => {
+    const target = { date: '2026-10-03', lane: 'timed' as const, blockTopMinutes: 9 * 60 };
+    for (const type of ['meeting', 'task'] as const) {
+        const original = task({ type, duration: 1500, startTime: '09:00' });
+        const patch = getWeeklyReschedulePatch(original, target);
+        assert.equal(patch.startTime, type === 'meeting' ? '07:00' : '20:00');
+        assert.equal({ ...original, ...patch }.duration, 1500);
+    }
+    assert.equal(snapWeeklyMinute(9 * 60, 1500), 7 * 60);
+});
+
+test('duration parsing consumes the complete supported input', () => {
+    for (const [input, minutes] of [['2h 30m', 150], ['2:30', 150], ['2,5h', 150], ['90m', 90], ['90', 90]] as const) {
+        assert.equal(parseDuration(input), minutes, input);
+    }
+    for (const input of ['-2h', '1.5m', '2h later', 'x90m', '2h 3h', '0', '0h', '0:00', 'NaN']) {
+        assert.equal(parseDuration(input), null, input);
+    }
 });

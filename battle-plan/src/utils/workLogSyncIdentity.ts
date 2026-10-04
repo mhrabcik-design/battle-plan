@@ -150,23 +150,114 @@ export function findExactWorkLogDuplicateGroups(
     ));
 }
 
-export function mergeWorkLogSnapshots<T extends WorkLogIdentityFields>(
+/** Preserve each snapshot's original occurrence IDs before resolving versions. */
+function normalizeLegacySnapshot(workLogs: readonly WorkLog[]): WorkLog[] {
+    const used = new Set(workLogs.flatMap(row => row.syncId ? [row.syncId] : []));
+    const occurrences = new Map<string, number>();
+    return workLogs.map(row => {
+        if (row.syncId) return row;
+        const base = createLegacyWorkLogSyncId(row);
+        let occurrence = (occurrences.get(base) ?? 0) + 1;
+        let syncId = occurrence === 1 ? base : `${base}-${occurrence}`;
+        while (used.has(syncId)) syncId = `${base}-${++occurrence}`;
+        occurrences.set(base, occurrence);
+        used.add(syncId);
+        return { ...row, syncId };
+    });
+}
+
+function resolveLegacySnapshots(snapshots: readonly (readonly WorkLog[])[]): WorkLog[][] {
+    const candidates = snapshots.map(normalizeLegacySnapshot);
+    const explicit = new Map<string, string>();
+    for (const row of snapshots.flat()) {
+        if (!row.publicId || !row.syncId) continue;
+        const previous = explicit.get(row.publicId);
+        if (previous && previous !== row.syncId) throw new Error('Konflikt syncId pro historické WorkLog publicId.');
+        explicit.set(row.publicId, row.syncId);
+    }
+    const oldest = new Map<string, { timestamp: number; ids: Set<string> }>();
+    for (const row of candidates.flat()) {
+        if (!row.publicId || explicit.has(row.publicId)) continue;
+        const timestamp = getSyncTimestamp(row);
+        const previous = oldest.get(row.publicId);
+        if (!previous || timestamp < previous.timestamp) {
+            oldest.set(row.publicId, { timestamp, ids: new Set([row.syncId!]) });
+        } else if (timestamp === previous.timestamp) previous.ids.add(row.syncId!);
+    }
+    const identities = new Map(explicit);
+    const used = new Set(snapshots.flat().flatMap(row => row.syncId ? [row.syncId] : []));
+    // An unchanged row can shift occurrence when another row is edited. Resolve
+    // only unique remaining candidates; never guess between symmetric histories.
+    while (oldest.size) {
+        let resolved = false;
+        for (const [publicId, evidence] of oldest) {
+            const available = [...evidence.ids].filter(id => !used.has(id));
+            if (!available.length) throw new Error('Konflikt historických identit WorkLog.');
+            if (available.length !== 1) continue;
+            identities.set(publicId, available[0]);
+            used.add(available[0]);
+            oldest.delete(publicId);
+            resolved = true;
+        }
+        if (!resolved) throw new Error('Konflikt historických identit WorkLog.');
+    }
+    return candidates.map(rows => {
+        const originalByResolvedId = new Map<string, string>();
+        return rows.map(row => {
+            const syncId = (row.publicId && identities.get(row.publicId)) || row.syncId!;
+            const previous = originalByResolvedId.get(syncId);
+            if (previous && previous !== row.syncId) throw new Error('Konflikt historických identit WorkLog.');
+            originalByResolvedId.set(syncId, row.syncId!);
+            return syncId === row.syncId ? row : { ...row, syncId };
+        });
+    });
+}
+
+export function normalizeLegacyWorkLogIdentities(workLogs: readonly WorkLog[], knownRows: readonly WorkLog[] = []): WorkLog[] {
+    return resolveLegacySnapshots([knownRows, workLogs])[1];
+}
+
+export function normalizeLegacyWorkLogSnapshots(snapshots: readonly { workLogs?: readonly WorkLog[] }[]): WorkLog[] {
+    return resolveLegacySnapshots(snapshots.map(snapshot => snapshot.workLogs ?? [])).flat();
+}
+
+function stableComparable(value: unknown, omittedKeys: ReadonlySet<string>): unknown {
+    if (Array.isArray(value)) {
+        return value.map((item) => stableComparable(item, omittedKeys));
+    }
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+            .filter(([key, item]) => !omittedKeys.has(key) && item !== undefined)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => [key, stableComparable(item, omittedKeys)]),
+    );
+}
+
+export const comparableWorkLog = (workLog: WorkLog): string => JSON.stringify(stableComparable(
+    workLog,
+    new Set(['id', 'projectId', 'publicId']),
+));
+
+export function mergeWorkLogSnapshots<T extends WorkLog>(
     localWorkLogs: T[],
     cloudWorkLogs: T[],
 ): T[] {
     const mergedByKey = new Map<string, T>();
-
-    for (const workLog of localWorkLogs) {
-        mergedByKey.set(getWorkLogSyncKey(workLog), workLog);
-    }
-
-    for (const workLog of cloudWorkLogs) {
+    const conflicts = new Set<string>();
+    for (const workLog of [...localWorkLogs, ...cloudWorkLogs]) {
         const key = getWorkLogSyncKey(workLog);
-        const local = mergedByKey.get(key);
-        if (!local || getSyncTimestamp(workLog) > getSyncTimestamp(local)) {
+        const previous = mergedByKey.get(key);
+        if (!previous || getSyncTimestamp(workLog) > getSyncTimestamp(previous)) {
             mergedByKey.set(key, workLog);
+            conflicts.delete(key);
+        } else if (getSyncTimestamp(workLog) === getSyncTimestamp(previous)
+            && comparableWorkLog(workLog) !== comparableWorkLog(previous)) {
+            conflicts.add(key);
         }
     }
-
+    // A newer unambiguous version can supersede an older conflict regardless
+    // of Drive listing order. Never choose between conflicting newest edits.
+    if (conflicts.size) throw new Error('Konflikt stejně nových verzí WorkLog v zálohách.');
     return Array.from(mergedByKey.values());
 }

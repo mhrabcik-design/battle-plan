@@ -5,7 +5,7 @@ import {
     type Project,
 } from '../db';
 import { WORKLOGS_FILENAME } from './workLogsDriveMetadata';
-import { getSyncTimestamp, getWorkLogSyncKey, mergeWorkLogSnapshots } from '../utils/workLogSyncIdentity';
+import { comparableWorkLog, getSyncTimestamp, getWorkLogSyncKey, mergeWorkLogSnapshots, normalizeLegacyWorkLogIdentities, normalizeLegacyWorkLogSnapshots } from '../utils/workLogSyncIdentity';
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 import { normalizeProjectName } from './projectCatalog';
 import { getErrorMessage } from '../utils/errors';
@@ -138,24 +138,6 @@ function mergeWorkLogDeletionTombstones(
     return [...bySyncId.values()].sort((left, right) => left.syncId.localeCompare(right.syncId));
 }
 
-function stableComparable(value: unknown, omittedKeys: ReadonlySet<string>): unknown {
-    if (Array.isArray(value)) {
-        return value.map((item) => stableComparable(item, omittedKeys));
-    }
-    if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>)
-            .filter(([key, item]) => !omittedKeys.has(key) && item !== undefined)
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([key, item]) => [key, stableComparable(item, omittedKeys)]),
-    );
-}
-
-const comparableWorkLog = (workLog: WorkLog): string => JSON.stringify(stableComparable(
-    workLog,
-    new Set(['id', 'projectId', 'publicId']),
-));
-
 const comparableProject = (project: Project): string => JSON.stringify({
     name: normalizeProjectName(project.name),
     aliases: normalizeProjectAliases(project.name, project.aliases).map(normalizeProjectName),
@@ -262,7 +244,7 @@ export class WorkLogsSync {
         return result.data;
     }
 
-    async loadAllDetailed(): Promise<WorkLogsLoadResult> {
+    async loadAllDetailed(localTombstones: WorkLogDeletionTombstone[] = []): Promise<WorkLogsLoadResult> {
         if (!this.isInitialized) {
             return { kind: 'store-unavailable', status: this.drive.lastStatus, data: emptyWorkLogsLoadData() };
         }
@@ -274,7 +256,7 @@ export class WorkLogsSync {
             ]);
             if (tombstoneResult.kind === 'store-unavailable') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
             if (tombstoneResult.kind === 'error') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
-            let remoteTombstones: WorkLogDeletionTombstone[] = [];
+            let remoteTombstones = mergeWorkLogDeletionTombstones(localTombstones);
             let tombstoneTimestamp = 0;
             if (tombstoneResult.kind === 'loaded') {
                 for (const file of tombstoneResult.files) {
@@ -299,15 +281,17 @@ export class WorkLogsSync {
             if (result.kind === 'error') return { ...result, data: emptyWorkLogsLoadData() };
             const [canonical] = result.files;
             if (!canonical) return { kind: 'missing-file', data: emptyWorkLogsLoadData() };
-            const workLogs = mergeWorkLogSnapshots(
-                [],
-                result.files.flatMap((file) => file.data.workLogs ?? []),
-            );
-            const projects = result.files.flatMap((file) => file.data.projects ?? []);
             const tombstones = mergeWorkLogDeletionTombstones(
                 remoteTombstones,
                 ...result.files.map((file) => file.data.workLogDeletionTombstones ?? []),
             );
+            const deletedSyncIds = new Set(tombstones.map(row => row.syncId));
+            const workLogs = mergeWorkLogSnapshots(
+                [],
+                normalizeLegacyWorkLogSnapshots(result.files.map(file => file.data))
+                    .filter(row => !deletedSyncIds.has(row.syncId!)),
+            );
+            const projects = result.files.flatMap((file) => file.data.projects ?? []);
             const timestamp = result.files.reduce(
                 (latest, file) => Math.max(latest, file.data.last_updated ?? 0),
                 tombstoneTimestamp,
@@ -434,7 +418,7 @@ export class WorkLogsSync {
         );
         return {
             hasWorkLogsSnapshot: workLogsFiles.length > 0,
-            workLogs: workLogsFiles.flatMap((file) => file.data.workLogs ?? []),
+            workLogs: normalizeLegacyWorkLogSnapshots(workLogsFiles.map(file => file.data)),
             projects: workLogsFiles.flatMap((file) => file.data.projects ?? []),
             journalTombstones,
         };
@@ -638,7 +622,8 @@ async function performMergeCloudToLocal(
             identityIndex = buildProjectIdentityIndex(localProjects);
         }
         const localWorkLogsByCompositeKey = new Map<string, WorkLog>();
-        for (const workLog of await db.workLogs.toArray()) {
+        const localWorkLogs = await db.workLogs.toArray();
+        for (const workLog of localWorkLogs) {
             localWorkLogsByCompositeKey.set(getWorkLogSyncKey(workLog), workLog);
         }
 
@@ -646,7 +631,7 @@ async function performMergeCloudToLocal(
         // Cloud project IDs are device-local. Resolve each imported row through
         // its normalized project snapshot before persisting it locally.
         let needsOrphanReconciliation = false;
-        for (const cw of cloudWorkLogs) {
+        for (const cw of normalizeLegacyWorkLogIdentities(cloudWorkLogs, localWorkLogs)) {
             if (cw.syncId && deletedSyncIds.has(cw.syncId)) continue;
             const key = getWorkLogSyncKey(cw);
             const identity = resolveProjectIdentityFromIndex(identityIndex, cw.projectName);
@@ -730,7 +715,8 @@ async function performMergeLocalToCloudDetailed(
             };
         }
     }
-    const cloudResult = await workLogsSync.loadAllDetailed();
+    const localTombstones = await db.workLogDeletionTombstones.toArray();
+    const cloudResult = await workLogsSync.loadAllDetailed(localTombstones);
     if (cloudResult.kind === 'store-unavailable') {
         return {
             kind: 'store-unavailable',

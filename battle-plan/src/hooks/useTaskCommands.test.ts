@@ -33,8 +33,8 @@ function commandsFor(editingTask: UnifiedTask | null, googleAuth: GoogleAuthStat
     function Probe() {
         // eslint-disable-next-line react-hooks/globals -- Synchronous SSR test capture; no UI reads this variable.
         commands = useTaskCommands({
-            googleAuth, activeTaskList: '@default', editingTask,
-            setEditingTask: () => {}, setGoogleTasksRaw: () => {}, setIsProcessing: () => {},
+            googleAuth, editingTask,
+            setEditingTask: () => {}, refreshGoogleTasks: async () => {}, setIsProcessing: () => {},
         });
         return null;
     }
@@ -260,4 +260,94 @@ test('editing a linked meeting while signed out commits its change and durable C
     assert.equal(effects[0].kind, 'calendar');
     assert.equal(effects[0].operation, 'upsert');
     assert.notEqual(effects[0].state, 'succeeded');
+});
+
+
+test('editor checklist saves match card toggles and retain the original estimate', async () => {
+    const original = draft({ duration: 120, totalDuration: 120, progress: 0,
+        subTasks: [{ id: 'one', title: 'First', completed: false }, { id: 'two', title: 'Second', completed: false }] });
+    const editorId = await db.tasks.add(structuredClone(original));
+    const cardId = await db.tasks.add(structuredClone(original));
+    const opened = (await db.tasks.get(editorId))!;
+    const changed = { ...opened, subTasks: opened.subTasks!.map(step => ({ ...step, completed: step.id === 'one' })) };
+    assert.equal((await commandsFor(changed).handleSaveEdit()).status, 'success');
+    await commandsFor(null).toggleSubtask((await db.tasks.get(cardId))!, 'one');
+    const editor = (await db.tasks.get(editorId))!;
+    const card = (await db.tasks.get(cardId))!;
+    assert.deepEqual([editor.progress, editor.duration, editor.totalDuration], [50, 60, 120]);
+    assert.deepEqual([card.progress, card.duration, card.totalDuration], [50, 60, 120]);
+});
+
+test('editor checklist additions, completion and removal preserve the total estimate', async () => {
+    const id = await db.tasks.add(draft({ duration: 0, totalDuration: 120, progress: 100,
+        subTasks: [{ id: 'one', title: 'First', completed: true }] }));
+    let current = (await db.tasks.get(id))!;
+    await commandsFor({ ...current, subTasks: [...current.subTasks!, { id: 'two', title: 'Second', completed: false }] }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [50, 60, 120]);
+    await commandsFor({ ...current, subTasks: current.subTasks!.map(step => ({ ...step, completed: true })) }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [100, 0, 120]);
+    await commandsFor({ ...current, subTasks: current.subTasks!.slice(1) }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [100, 0, 120]);
+    await commandsFor({ ...current, subTasks: [] }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [0, 120, 120]);
+});
+
+test('an explicit remaining estimate survives save and subsequent checklist changes', async () => {
+    const id = await db.tasks.add(draft({ duration: 60, totalDuration: 120, progress: 50,
+        subTasks: [{ id: 'one', title: 'First', completed: true }, { id: 'two', title: 'Second', completed: false }] }));
+    let current = (await db.tasks.get(id))!;
+    await commandsFor({ ...current, duration: 90 }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [50, 90, 180]);
+    await commandsFor(null).toggleSubtask(current, 'one');
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [0, 180, 180]);
+    await commandsFor({ ...current, duration: undefined }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.equal(current.duration, undefined);
+    assert.equal(current.totalDuration, undefined);
+});
+
+test('renaming without checklist changes preserves manual progress and unknown estimates', async () => {
+    for (const subTasks of [undefined, [{ id: 'one', title: 'First', completed: false }]]) {
+        const id = await db.tasks.add(draft({ progress: 40, subTasks }));
+        const current = (await db.tasks.get(id))!;
+        await commandsFor({ ...current, title: 'Renamed' }).handleSaveEdit();
+        const saved = (await db.tasks.get(id))!;
+        assert.equal(saved.progress, 40);
+        assert.equal(saved.duration, undefined);
+        assert.equal(saved.totalDuration, undefined);
+    }
+});
+
+test('invalid editor times fail without task or outbox writes while valid times normalize', async () => {
+    for (const startTime of ['1', '13:', '25:00', '12:99']) {
+        const result = await commandsFor(draft({ startTime, isAllDay: false })).handleSaveEdit();
+        assert.equal(result.status, 'failed', startTime);
+        if (result.status === 'failed') assert.match(result.message, /čas/i);
+        assert.equal(await db.tasks.count(), 0);
+        assert.equal(await db.agentProtocolEvents.count(), 0);
+        assert.equal(await db.agentProtocolEffects.count(), 0);
+    }
+    await commandsFor(draft({ startTime: '9:05', isAllDay: false })).handleSaveEdit();
+    await commandsFor(draft({ startTime: '', isAllDay: false })).handleSaveEdit();
+    const rows = await db.tasks.toArray();
+    assert.equal(rows[0].startTime, '09:05');
+    assert.equal(rows[1].startTime, undefined);
+});
+
+
+test('manual duration on a task without a checklist becomes the estimate for later steps', async () => {
+    const id = await db.tasks.add(draft({ duration: 120, totalDuration: 120, progress: 40 }));
+    let current = (await db.tasks.get(id))!;
+    await commandsFor({ ...current, duration: 90 }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [40, 90, 90]);
+    await commandsFor({ ...current, subTasks: [{ id: 'one', title: 'First', completed: true }, { id: 'two', title: 'Second', completed: false }] }).handleSaveEdit();
+    current = (await db.tasks.get(id))!;
+    assert.deepEqual([current.progress, current.duration, current.totalDuration], [50, 45, 90]);
 });

@@ -1,11 +1,24 @@
 import type { UnifiedTask } from '../types';
 
+export const normalizeClockTime = (value: string): string | null => {
+    const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+    return match ? `${match[1].padStart(2, '0')}:${match[2]}` : null;
+};
+
+const localDeadline = (dateValue?: string, timeValue?: string): Date | null => {
+    const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue ?? '');
+    const time = normalizeClockTime(timeValue || '15:00');
+    if (!date || !time) return null;
+    const [, year, month, day] = date.map(Number);
+    const [hours, minutes] = time.split(':').map(Number);
+    const result = new Date(year, month - 1, day, hours, minutes);
+    return result.getFullYear() === year && result.getMonth() === month - 1 && result.getDate() === day
+        ? result : null;
+};
+
 export const formatTimeLeft = (currentTime: Date, targetDateStr?: string, targetTimeStr?: string) => {
-    if (!targetDateStr) return "";
-    const end = new Date(targetDateStr);
-    if (isNaN(end.getTime())) return "";
-    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
-    end.setHours(h, m, 0, 0);
+    const end = localDeadline(targetDateStr, targetTimeStr);
+    if (!end) return "";
 
     const diffMs = end.getTime() - currentTime.getTime();
     if (diffMs < 0) return "po termínu";
@@ -21,11 +34,8 @@ export const formatTimeLeft = (currentTime: Date, targetDateStr?: string, target
 };
 
 export const getDeadlineColor = (currentTime: Date, targetDateStr?: string, targetTimeStr?: string) => {
-    if (!targetDateStr) return "text-slate-500";
-    const end = new Date(targetDateStr);
-    if (isNaN(end.getTime())) return "text-slate-500";
-    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
-    end.setHours(h, m, 0, 0);
+    const end = localDeadline(targetDateStr, targetTimeStr);
+    if (!end) return "text-slate-500";
 
     const diffMs = end.getTime() - currentTime.getTime();
     if (diffMs < 0) return "text-red-500";
@@ -35,11 +45,8 @@ export const getDeadlineColor = (currentTime: Date, targetDateStr?: string, targ
 };
 
 export const getAvailableWorkingMinutes = (currentTime: Date, targetDateStr?: string, targetTimeStr?: string) => {
-    if (!targetDateStr) return 0;
-    const end = new Date(targetDateStr);
-    if (isNaN(end.getTime())) return 0;
-    const [h, m] = (targetTimeStr || "15:00").split(':').map(Number);
-    end.setHours(h, m, 0, 0);
+    const end = localDeadline(targetDateStr, targetTimeStr);
+    if (!end) return 0;
 
     let totalMinutes = 0;
     let current = new Date(currentTime);
@@ -188,7 +195,7 @@ export const snapWeeklyMinute = (minutes: number, duration = 0): number => {
     const snapped = Math.round(minutes / WEEKLY_CALENDAR_SNAP_MINUTES) * WEEKLY_CALENDAR_SNAP_MINUTES;
     return Math.min(
         Math.max(snapped, WEEKLY_CALENDAR_START_MINUTES),
-        WEEKLY_CALENDAR_END_MINUTES - Math.max(0, duration),
+        Math.max(WEEKLY_CALENDAR_START_MINUTES, WEEKLY_CALENDAR_END_MINUTES - Math.max(0, duration)),
     );
 };
 
@@ -204,7 +211,7 @@ export const getWeeklyReschedulePatch = (task: UnifiedTask, target: WeeklyDropTa
 
     const { duration } = getWeeklyVisualBlock(task);
     const blockTop = snapWeeklyMinute(target.blockTopMinutes ?? WEEKLY_CALENDAR_START_MINUTES, duration);
-    const semanticTime = task.type === 'task' ? blockTop + duration : blockTop;
+    const semanticTime = task.type === 'task' ? Math.min(WEEKLY_CALENDAR_END_MINUTES, blockTop + duration) : blockTop;
 
     return {
         date: target.date,
@@ -297,31 +304,19 @@ export const parseDuration = (input: string): number | null => {
         const h = parseInt(colonMatch[1], 10);
         const m = parseInt(colonMatch[2], 10);
         if (m >= 60) return null;
-        return h * 60 + m;
+        return h * 60 + m > 0 ? h * 60 + m : null;
     }
 
-    // "2h 30m", "2h", "30m", "2,5h"
-    let total = 0;
-    let matched = false;
-    const hMatch = s.match(/(\d+(?:[.,]\d+)?)\s*h/);
-    if (hMatch) {
-        const h = parseFloat(hMatch[1].replace(',', '.'));
-        total += Math.round(h * 60);
-        matched = true;
-    }
-    const mMatch = s.match(/(\d+)\s*m/);
-    if (mMatch) {
-        total += parseInt(mMatch[1], 10);
-        matched = true;
-    }
-    if (matched) return total > 0 ? total : null;
-
-    // "90" = 90 minut
-    const plainMatch = s.match(/^\d+$/);
-    if (plainMatch) {
-        const n = parseInt(s, 10);
-        return n > 0 ? n : null;
+    // Match the entire supported expression; never salvage a valid substring.
+    const units = /^(?:(\d+(?:[.,]\d+)?)\s*h)?\s*(?:(\d+)\s*m)?$/.exec(s);
+    if (units && (units[1] || units[2])) {
+        const total = Math.round(Number((units[1] ?? '0').replace(',', '.')) * 60) + Number(units[2] ?? 0);
+        return Number.isFinite(total) && total > 0 ? total : null;
     }
 
+    if (/^\d+$/.test(s)) {
+        const minutes = Number(s);
+        return Number.isFinite(minutes) && minutes > 0 ? minutes : null;
+    }
     return null;
 };
