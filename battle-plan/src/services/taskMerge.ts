@@ -1,4 +1,5 @@
 import { db, type Task } from '../db.ts';
+import { normalizeLegacyBackupTask } from './taskBackupCompatibility.ts';
 import { taskBackupRevision } from '../utils/taskBackupRevision.ts';
 import { newTaskMutationContext, taskMutations, taskMutationTables } from './taskMutations.ts';
 
@@ -14,7 +15,9 @@ async function portableTask(task: Task): Promise<Task> {
 export async function mergeTasksFromDrive(tasks: Task[]): Promise<boolean> {
     // Hash before entering IndexedDB: awaiting WebCrypto inside a transaction
     // lets the browser close that transaction before the following write.
-    const portableTasks = await Promise.all(structuredClone(tasks).map(portableTask));
+    // Normalize only after hashing: older imports used the original type/urgency.
+    const portableTasks = (await Promise.all(structuredClone(tasks).map(portableTask)))
+        .map(normalizeLegacyBackupTask);
     let changed = false;
     await db.transaction('rw', taskMutationTables(db), async () => {
         for (const cloudTask of portableTasks) {

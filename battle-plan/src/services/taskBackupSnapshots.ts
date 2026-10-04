@@ -2,11 +2,12 @@ import type { Task, Setting } from '../db.ts';
 import type { TaskDriveBackupPayload } from './taskDriveBackup.ts';
 import { filterTaskBackupSettings } from '../utils/taskBackupSettings.ts';
 import { canonicalBackupJson } from '../utils/canonicalBackupJson.ts';
+import { normalizeLegacyBackupTask } from './taskBackupCompatibility.ts';
 
 function version(task: Task): number { return task.updatedAt || task.createdAt || 0; }
 
 function content(task: Task): string {
-    const copy: Partial<Task> = { ...task };
+    const copy: Partial<Task> = { ...normalizeLegacyBackupTask(task) };
     delete copy.id;
     delete copy.publicId;
     delete copy.protocolRevision;
@@ -37,19 +38,26 @@ export function mergeTaskBackupSnapshots(snapshots: readonly TaskDriveBackupPayl
             throw new Error('Neplatný formát zálohy úkolů.');
         }
         timestamp = Math.max(timestamp, snapshot.timestamp ?? 0);
-        for (const task of snapshot.data.tasks ?? []) {
-            if (!task || typeof task.title !== 'string'
-                || (task.createdAt !== undefined && (!Number.isFinite(task.createdAt) || task.createdAt < 0))
-                || (task.updatedAt !== undefined && (!Number.isFinite(task.updatedAt) || task.updatedAt < 0))
-                || !['task', 'meeting', 'note', 'thought'].includes(task.type)
-                || !['pending', 'completed', 'cancelled'].includes(task.status)
-                || ![1, 2, 3].includes(task.urgency)
-                || (task.isDeleted !== undefined && typeof task.isDeleted !== 'boolean')
-                || (task.publicId !== undefined && (typeof task.publicId !== 'string' || !task.publicId))
-                || (task.suggestionOccurrenceKey !== undefined && (typeof task.suggestionOccurrenceKey !== 'string' || !task.suggestionOccurrenceKey))
-                || (task.suggestionSubjectId !== undefined && (typeof task.suggestionSubjectId !== 'string' || !task.suggestionSubjectId))) {
-                throw new Error('Neplatný úkol v záloze.');
+        for (const [index, task] of (snapshot.data.tasks ?? []).entries()) {
+            if (!task || typeof task !== 'object' || Array.isArray(task)) {
+                throw new Error(`Neplatný úkol v záloze: položka ${index + 1}, pole záznam.`);
             }
+            const compatible = normalizeLegacyBackupTask(task);
+            let invalidField: string | null = null;
+            if (typeof task.title !== 'string') invalidField = 'title';
+            else if (task.createdAt !== undefined && (!Number.isFinite(task.createdAt) || task.createdAt < 0)) invalidField = 'createdAt';
+            else if (task.updatedAt !== undefined && (!Number.isFinite(task.updatedAt) || task.updatedAt < 0)) invalidField = 'updatedAt';
+            else if (!['task', 'meeting', 'note', 'thought'].includes(compatible.type)) invalidField = 'type';
+            else if (!['pending', 'completed', 'cancelled'].includes(task.status)) invalidField = 'status';
+            else if (![1, 2, 3].includes(compatible.urgency)) invalidField = 'urgency';
+            else if (task.isDeleted !== undefined && typeof task.isDeleted !== 'boolean') invalidField = 'isDeleted';
+            else if (task.publicId !== undefined && (typeof task.publicId !== 'string' || !task.publicId)) invalidField = 'publicId';
+            else if (task.suggestionOccurrenceKey !== undefined && (typeof task.suggestionOccurrenceKey !== 'string' || !task.suggestionOccurrenceKey)) invalidField = 'suggestionOccurrenceKey';
+            else if (task.suggestionSubjectId !== undefined && (typeof task.suggestionSubjectId !== 'string' || !task.suggestionSubjectId)) invalidField = 'suggestionSubjectId';
+            if (invalidField) {
+                throw new Error(`Neplatný úkol v záloze: položka ${index + 1}, pole ${invalidField}.`);
+            }
+            // Keep raw legacy fields until taskMerge hashes the original identity.
             const keys = [
                 task.publicId ? `public:${task.publicId}` : '',
                 task.suggestionOccurrenceKey ? `occurrence:${task.suggestionOccurrenceKey}` : '',

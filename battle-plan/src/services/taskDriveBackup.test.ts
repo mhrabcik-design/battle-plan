@@ -6,6 +6,7 @@ import type { TaskDriveBackupPayload } from './taskDriveBackup.ts';
 import { mergeTaskBackupSnapshots } from './taskBackupSnapshots.ts';
 import { db } from '../db.ts';
 import { mergeTasksFromDrive } from './taskMerge.ts';
+import { canonicalBackupJson } from '../utils/canonicalBackupJson.ts';
 
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null } });
 const { TaskDriveBackup } = await import('./taskDriveBackup.ts');
@@ -225,4 +226,91 @@ test('occurrence reducer output imports once on either device while preserving l
         assert.equal(rows[0].isDeleted, true);
         assert.doesNotThrow(() => mergeTaskBackupSnapshots([...publications, snapshot(rows, 4)]));
     }
+});
+
+test('legacy suggestion categories and five-level priorities load without discarding other tasks', async () => {
+    const rows = [
+        task('followup-high', { type: 'followup' as Task['type'], urgency: 5 as Task['urgency'] }),
+        task('followup', { type: 'followup' as Task['type'] }),
+        task('reminder-high', { type: 'reminder' as Task['type'], urgency: 5 as Task['urgency'] }),
+        task('old-high', { urgency: 4 as Task['urgency'] }),
+        task('current'),
+    ];
+    const original = structuredClone(rows);
+    const store = memoryStore();
+    store.files.push({ id: 'legacy', name: 'battle_plan_data.json', payload: { ...snapshot(rows), version: '1.2' } });
+    const backup = new TaskDriveBackup(store.drive);
+    const result = await backup.loadDetailed();
+    assert.equal(result.kind, 'loaded');
+    if (result.kind !== 'loaded') return;
+    assert.equal(result.payload.data?.tasks?.length, rows.length);
+    await db.tasks.clear();
+    await mergeTasksFromDrive(result.payload.data!.tasks!);
+    const imported = await db.tasks.toArray();
+    assert.ok(imported.every(row => row.type === 'task'));
+    assert.equal(imported.find(row => row.publicId === 'followup-high')?.urgency, 3);
+    assert.equal(imported.find(row => row.publicId === 'old-high')?.urgency, 3);
+    assert.ok(await backup.save({ tasks: imported }));
+    assert.equal((await backup.load())?.data?.tasks?.length, rows.length);
+    assert.deepEqual(rows, original);
+    assert.deepEqual(store.files[0].payload.data?.tasks, original);
+});
+
+test('legacy normalization preserves the original anonymous import identity and replay count', async () => {
+    const legacy = task('unused', { id: 7, publicId: undefined, type: 'reminder' as Task['type'], urgency: 5 as Task['urgency'] });
+    const revision = canonicalBackupJson([[legacy], []]);
+    const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(revision)));
+    const publicId = 'task_legacy_' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    const merged = mergeTaskBackupSnapshots([snapshot([legacy])]).data!.tasks!;
+    await db.tasks.clear();
+    await mergeTasksFromDrive(merged);
+    const imported = (await db.tasks.toArray())[0];
+    assert.equal(imported.publicId, publicId);
+    assert.equal(imported.type, 'task');
+    assert.equal(imported.urgency, 3);
+    assert.equal(await mergeTasksFromDrive(merged), false);
+    assert.equal(await db.tasks.count(), 1);
+    // A device that imported the unnormalized row previously must not get a second task.
+    await db.tasks.clear();
+    await db.tasks.add({ ...legacy, publicId });
+    assert.equal(await mergeTasksFromDrive(merged), false);
+    assert.equal(await db.tasks.count(), 1);
+});
+
+test('legacy compatibility preserves newer edits and tombstones in both listing orders', () => {
+    const old = task('a', { type: 'followup' as Task['type'], urgency: 5 as Task['urgency'] });
+    const latest = task('a', { updatedAt: 20, isDeleted: true });
+    for (const rows of [[old, latest], [latest, old]]) {
+        assert.deepEqual(mergeTaskBackupSnapshots([snapshot(rows)]).data?.tasks, [latest]);
+    }
+});
+
+test('legacy compatibility still rejects unknown types and malformed fields without leaking task text', () => {
+    for (const patch of [
+        { urgency: 0 }, { urgency: 6 }, { urgency: '5' }, { urgency: NaN },
+        { type: 'unknown' }, { status: 'done' }, { title: null }, { publicId: '' }, { updatedAt: -1 },
+    ]) {
+        const invalid = { ...task('private-id', { title: 'Private title' }), ...patch } as Task;
+        assert.throws(() => mergeTaskBackupSnapshots([snapshot([task('good'), invalid])]), error => {
+            assert.ok(error instanceof Error);
+            assert.match(error.message, /položka 2, pole/);
+            assert.ok(!error.message.includes('Private title'));
+            assert.ok(!error.message.includes('private-id'));
+            return true;
+        });
+    }
+});
+test('different anonymous legacy records stay distinct even when compatibility maps them alike', async () => {
+    const first = task('unused', { publicId: undefined, type: 'followup' as Task['type'], urgency: 5 as Task['urgency'] });
+    const second = { ...first, type: 'reminder' as Task['type'] };
+    const merged = mergeTaskBackupSnapshots([snapshot([first, second])]).data!.tasks!;
+    assert.equal(merged.length, 2);
+    await db.tasks.clear();
+    await mergeTasksFromDrive(merged);
+    const rows = await db.tasks.toArray();
+    assert.equal(rows.length, 2);
+    assert.notEqual(rows[0].publicId, rows[1].publicId);
+    assert.ok(rows.every(row => row.type === 'task' && row.urgency === 3));
+    assert.equal(await mergeTasksFromDrive(mergeTaskBackupSnapshots([snapshot(merged), snapshot(rows, 2)]).data!.tasks!), false);
+    assert.equal(await db.tasks.count(), 2);
 });
