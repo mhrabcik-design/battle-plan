@@ -33,3 +33,13 @@ Regresní testy pokrývají souběžné publikace ze starých lokálních pohled
 Staré verze aplikace nový název nečtou; pro obousměrnou synchronizaci musí být všechna používaná zařízení aktualizovaná. Nový klient nadále umí načíst staré publikace. Snapshoty se kumulují; bezpečná kompaktace vyžaduje vlastní protokol a není součástí této opravy. Stejně časované konfliktní editace se hlásí jako chyba, neřeší se svévolným výběrem vítěze. Síťové chování skutečného Drive musí ověřit integrační zkouška s účtem.
 
 Související: [Neměnné snapshoty WorkLogs](worklogs-immutable-drive-snapshots.md).
+
+## Kompatibilita historických hodnot (2026-10-04)
+
+Ve starší záloze verze 1.2 se dochovaly priority 4/5 a typy `followup`/`reminder`. Původní model podporoval pět priorit, ale přechod na tři úrovně neprovedl migraci uložených dat. Dvě uvedené kategorie návrhů se při běžném převodu Suggestions na úkol mapují na `task`; přesný původ historických záznamů s těmito typy není doložený. Striktní validátor z PR #66 tak odmítl celý soubor kvůli několika starším záznamům.
+
+Úzká kompatibilita uzná pouze tyto doložené tvary: `followup`/`reminder` → `task`, číselné priority 4/5 → 3. Ostatní neplatné typy a hodnoty zůstávají chybou. Diagnostika uvádí pořadí položky a název pole, nikdy soukromý obsah úkolu.
+
+Reducer zachovává původní pole i klíč anonymního záznamu; normalizuje pouze porovnání obsahu. `taskMerge` nejprve vypočítá původní `task_legacy_SHA256` a teprve potom normalizuje import. Opačné pořadí by změnilo identitu a vytvořilo kopii na zařízení, které stejný záznam importovalo dříve. Stejně starý lokální záznam se podle stávajícího importního kontraktu nemění; kompatibilita odblokuje čtení a zápis záloh bez přepisování lokálních novějších změn či historie na Drive.
+
+Regrese pokrývají načtení a následnou publikaci, identitu starého importu, samostatné anonymní záznamy, opakování importu, novější smazání a odmítnutí skutečně neplatných polí. Anonymizovaná kopie skutečné zálohy slouží jen k lokálnímu ověření; soukromá data ani její identifikátory nejsou součástí testů nebo repozitáře.
