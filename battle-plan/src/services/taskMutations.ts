@@ -307,6 +307,7 @@ export class TaskMutationService {
 
     async updateTask(input: ExistingTaskReference & {
         changes: Partial<Task>;
+        clearCalendarSchedule?: boolean;
         context: TaskMutationContext;
         effects?: TaskEffectRequest[];
         command?: TaskMutationCommandContext;
@@ -437,6 +438,7 @@ export class TaskMutationService {
         operation: 'update' | 'complete' | 'archive',
         input: ExistingTaskReference & {
             context: TaskMutationContext;
+            clearCalendarSchedule?: boolean;
             effects?: TaskEffectRequest[];
             command?: TaskMutationCommandContext;
         },
@@ -446,6 +448,7 @@ export class TaskMutationService {
             publicId: input.publicId,
             localId: input.localId,
             expectedRevision: input.expectedRevision,
+            clearCalendarSchedule: input.clearCalendarSchedule === true,
             context: structuredClone(input.context),
             effects: structuredClone(input.effects ?? []),
             command: snapshotCommandContext(input.command),
@@ -472,7 +475,9 @@ export class TaskMutationService {
             };
             const scheduleChanged = (['date', 'deadline', 'startTime', 'isAllDay'] as const)
                 .some(field => field in safeChanges && safeChanges[field] !== existing[field]);
-            if ((scheduleChanged || safeChanges.calendarScheduleExplicit === true)
+            if (request.clearCalendarSchedule || scheduleChanged && safeChanges.calendarScheduleExplicit === false) {
+                task.calendarScheduleExplicit = false;
+            } else if ((scheduleChanged || safeChanges.calendarScheduleExplicit === true)
                 && (validCalendarDate(task.deadline) || validCalendarDate(task.date))) task.calendarScheduleExplicit = true;
             return this.commit(await this.plan(operation, existing, task, request.context, request.effects, now), request.command);
         });

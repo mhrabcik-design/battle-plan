@@ -51,7 +51,7 @@ export function useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth
             label: 'Kalendář a Google Tasks',
             state: summary.failed ? 'error' : summary.pending ? 'stale' : 'ok',
             detail: summary.failed ? `${summary.failed} změn Google odmítl. Opravte úkol a zkuste synchronizaci znovu.`
-                : summary.pending ? pendingDetail : 'Všechny čekající změny byly zapsány do Google.',
+                : summary.pending ? pendingDetail : 'Žádné změny nečekají na přenos do Google.',
             lastError: summary.lastError,
             lastSuccess: summary.lastSuccess === null ? null : new Date(summary.lastSuccess).toLocaleString('cs-CZ'),
         });

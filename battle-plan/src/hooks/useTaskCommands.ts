@@ -266,6 +266,8 @@ export function useTaskCommands({
             if (!current || current.isDeleted || (taskData.publicId && taskData.publicId !== current.publicId)) return null;
             return taskMutations.updateTask({
               localId: current.id, publicId: current.publicId, changes: { ...taskData, ...reconcileTaskChecklist(taskData, current) },
+              clearCalendarSchedule: editingTask.type === 'task' && editingTask.calendarScheduleExplicit === false
+                && !editingTask.date && !editingTask.deadline,
               expectedRevision: taskData.protocolRevision?.revision_id ?? null, context,
               effects: calendarEffectsForLocalTask({ ...current, type: taskData.type }, 'upsert', allowUnlinkedCalendar),
             });

@@ -36,12 +36,24 @@ export class TaskDriveBackup {
     constructor(drive: TaskBackupStore = new DriveJsonStore()) { this.drive = drive; }
 
     async save(data: TaskDriveBackupData): Promise<number | null> {
+        const accountId = googleService.getAccountId();
         const initialized = await this.drive.init({ createFolder: true });
         if (!initialized) return null;
 
-        const portableData = { tasks: projectTasksForCalendarAccount(data.tasks ?? [], googleService.getAccountId()), settings: filterTaskBackupSettings(data.settings) };
+        const accessToken = googleService.getAuthStatus().accessToken;
+        const folderId = this.drive.currentFolderId;
+        const assertCurrentAccount = () => {
+            if (googleService.getAccountId() !== accountId || googleService.getAuthStatus().accessToken !== accessToken
+                || this.drive.currentFolderId !== folderId) {
+                this.lastPublication = undefined;
+                throw new Error('Účet Google se během zálohování změnil. Záloha čeká na novou kontrolu.');
+            }
+        };
+        assertCurrentAccount();
+
+        const portableData = { tasks: projectTasksForCalendarAccount(data.tasks ?? [], accountId), settings: filterTaskBackupSettings(data.settings) };
         const key = canonicalBackupJson(portableData);
-        const scope = canonicalBackupJson([googleService.getAccountId(), this.drive.currentFolderId]);
+        const scope = canonicalBackupJson([accountId, folderId]);
         let publication = this.lastPublication?.key === key && this.lastPublication.scope === scope
             ? this.lastPublication : undefined;
         this.lastPublication = publication;
@@ -53,6 +65,7 @@ export class TaskDriveBackup {
 
         try {
             const before = await this.readSnapshots();
+            assertCurrentAccount();
             if (before.kind === 'error') throw new Error(before.message);
             if (before.kind === 'store-unavailable') throw new Error(before.status.message);
             const files = before.kind === 'loaded' ? before.files : [];
@@ -70,16 +83,19 @@ export class TaskDriveBackup {
             mergeTaskBackupSnapshots([...files.map(file => file.data), payload]);
             if (!publication) {
                 const saved = await this.drive.writeJsonFile(TASK_SNAPSHOT_FILENAME, payload, null, { createOnly: true });
+                assertCurrentAccount();
                 if (!saved?.fileId) throw new Error('Drive nepotvrdil identitu uložené zálohy úkolů.');
                 publication = { key, scope, fileId: saved.fileId, payload };
             }
             this.lastPublication = publication;
             const publishedFileId = publication.fileId;
             const persisted = await this.drive.readJsonFileByIdWithStatus<TaskDriveBackupPayload>(publishedFileId);
+            assertCurrentAccount();
             if (persisted.kind !== 'loaded' || canonicalBackupJson(persisted.data) !== canonicalBackupJson(payload)) {
                 throw new Error('Uloženou zálohu úkolů se nepodařilo ověřit.');
             }
             const aggregate = await this.readSnapshots();
+            assertCurrentAccount();
             if (aggregate.kind !== 'loaded' || !aggregate.files.some(file => file.fileId === publishedFileId
                 && canonicalBackupJson(file.data) === canonicalBackupJson(payload))) {
                 throw new Error('Publikovaná záloha úkolů není viditelná ve společném seznamu.');

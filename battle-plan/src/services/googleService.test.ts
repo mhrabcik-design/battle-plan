@@ -1847,6 +1847,97 @@ const modernIntent = (extra: Partial<CalendarWriteRequest> = {}): CalendarWriteR
     operation: 'upsert', knownEvent: true, projection: calendarBase, previousProjection: calendarBase, baseline: calendarBase,
     createMutationId: 'create-fixture', ...extra });
 
+for (const type of ['task', 'meeting'] as const) {
+    for (const publicChange of [false, true]) {
+        test(`existing Calendar ${type === 'task' ? 'meeting' : 'task'} to ${type} updates its paired event with ${publicChange ? 'public content' : 'private metadata only'}`, async () => {
+            clearStore(); seedSignedInStorage();
+            const input = modernIntent({ type, projection: publicChange ? { ...calendarBase, title: 'B' } : calendarBase });
+            let remote = calendarEvent(calendarBase, {
+                organizer: { self: true }, attendees: [{ email: 'guest@example.com', responseStatus: 'accepted' }],
+                reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 15 }] },
+                location: 'Office', conferenceData: { conferenceId: 'meet' },
+                extendedProperties: { shared: { shared: 'keep' }, private: {
+                    ...calendarPrivateIdentity({ ...input, type: type === 'task' ? 'meeting' : 'task' }),
+                    battleplanCreateMutation: 'original-create', unrelated: 'keep',
+                } },
+            });
+            const original = structuredClone(remote);
+            let writes = 0;
+            installGapiMock({ calendarEventsInsert: async () => { assert.fail('must keep the paired event'); }, request: async (args) => {
+                assert.match(args.path, /\/calendars\/primary\/events\/existing/);
+                if (args.method === 'GET') return { body: JSON.stringify(remote) };
+                writes++;
+                assert.equal(args.method, 'PATCH');
+                assert.equal(args.headers['If-Match'], '"v1"');
+                assert.match(args.path, publicChange ? /sendUpdates=all$/ : /sendUpdates=none$/);
+                const patch = JSON.parse(args.body);
+                if (publicChange) assert.equal(patch.summary, 'B');
+                else assert.deepEqual(Object.keys(patch), ['extendedProperties']);
+                for (const field of ['attendees', 'reminders', 'location', 'conferenceData', 'internalNotes']) assert.equal(patch[field], undefined);
+                assert.deepEqual(patch.extendedProperties.private, {
+                    ...calendarPrivateIdentity(input), battleplanCreateMutation: 'original-create', unrelated: 'keep',
+                });
+                remote = { ...remote, ...patch, extendedProperties: { ...remote.extendedProperties, ...patch.extendedProperties }, etag: '"v2"' };
+                return { body: JSON.stringify(remote) };
+            } });
+            const svc = freshService();
+            const result = await svc.writeCalendarEffect(input);
+            assert.equal(result.externalId, 'existing');
+            assert.equal(result.calendar.etag, '"v2"');
+            assert.equal(result.calendar.event?.extendedProperties?.private?.battleplanType, type);
+            for (const field of ['attendees', 'reminders', 'location', 'conferenceData'] as const) assert.deepEqual(remote[field], original[field]);
+            assert.deepEqual(remote.extendedProperties?.shared, original.extendedProperties?.shared);
+            assert.equal((await svc.writeCalendarEffect(input)).calendar.etag, '"v2"');
+            assert.equal(writes, 1, 'retry of the updated type is a no-op');
+        });
+    }
+}
+
+test('existing Calendar type changes still reject wrong or partial immutable pairing identity', async () => {
+    clearStore(); seedSignedInStorage();
+    const input = modernIntent({ type: 'task', projection: { ...calendarBase, title: 'B' } });
+    const identity = calendarPrivateIdentity({ ...input, type: 'meeting' });
+    let remote = calendarEvent(calendarBase);
+    installGapiMock({ request: async ({ method }) => {
+        assert.equal(method, 'GET', 'invalid pairing must not authorize PATCH or DELETE');
+        return { body: JSON.stringify(remote) };
+    } });
+    const svc = freshService();
+    for (const key of ['battleplanAccount', 'battleplanCalendar', 'battleplanIdentity', 'battleplanGeneration']) {
+        for (const value of ['other', undefined]) {
+            const privateProperties = { ...identity };
+            if (value === undefined) delete privateProperties[key];
+            else privateProperties[key] = value;
+            remote = calendarEvent(calendarBase, { extendedProperties: { private: privateProperties } });
+            for (const operation of ['upsert', 'delete'] as const) {
+                await assert.rejects(svc.writeCalendarEffect({ ...input, operation }),
+                    (error: unknown) => (error as { code?: string }).code === 'calendar_identity_mismatch');
+            }
+        }
+    }
+});
+
+test('create 409 retains its strict type and complete private identity guard', async () => {
+    clearStore(); seedSignedInStorage();
+    const input = modernIntent({ knownEvent: false, baseline: undefined });
+    let remote = calendarEvent(calendarBase);
+    installGapiMock({ calendarEventsInsert: async () => { throw { status: 409 }; }, request: async ({ method }) => {
+        assert.equal(method, 'GET', 'a create collision never authorizes a write');
+        return { body: JSON.stringify(remote) };
+    } });
+    const svc = freshService();
+    for (const key of ['battleplanAccount', 'battleplanCalendar', 'battleplanIdentity', 'battleplanGeneration', 'battleplanType']) {
+        remote = calendarEvent(calendarBase, { extendedProperties: { private: {
+            ...calendarPrivateIdentity(input), battleplanCreateMutation: input.createMutationId!, [key]: key === 'battleplanType' ? 'task' : 'other',
+        } } });
+        await assert.rejects(svc.writeCalendarEffect(input),
+            (error: unknown) => (error as { code?: string }).code === 'calendar_identity_mismatch');
+    }
+    remote = calendarEvent(calendarBase);
+    await assert.rejects(svc.writeCalendarEffect(input),
+        (error: unknown) => (error as { code?: string }).code === 'calendar_identity_mismatch');
+});
+
 test('modern Calendar reports same-field and DELETE/remote-edit conflicts without any write', async () => {
     clearStore(); seedSignedInStorage();
     let writes = 0;

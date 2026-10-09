@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { UnifiedTask } from '../types.ts';
-import { projectCalendarDays, calendarTaskLabel, calendarIntervalLabel, calendarTaskOrigin, isOutsideWorkingHours } from './calendarPresentation.ts';
+import { projectCalendarDays, calendarTaskLabel, calendarIntervalLabel, calendarTaskOrigin, isCalendarAllDay, isOutsideWorkingHours } from './calendarPresentation.ts';
+import { getWeeklyReschedulePatch } from './calendarUtils.ts';
 const days = ['2026-10-05', '2026-10-06', '2026-10-07'];
 const event = (timing: NonNullable<UnifiedTask['calendar']>['timing']): UnifiedTask => ({
     id: 1, publicId: 'one-event', title: '', type: 'meeting', status: 'pending', urgency: 2, createdAt: 1, updatedAt: 1,
@@ -43,4 +44,15 @@ test('an explicit local task ending after midnight shows both civil days with it
     const segments = projectCalendarDays([task], days);
     assert.deepEqual(segments.map(segment => [segment.calendarSegment?.date, calendarIntervalLabel(segment)]), [[days[0], '23:30–24:00'], [days[1], '00:00–00:30']]);
     assert.equal(segments.every(isOutsideWorkingHours), true);
+});
+
+test('date-only tasks use their displayed all-day lane for day moves even with a legacy false flag', () => {
+    const task: UnifiedTask = { id: 4, title: 'Bez času', type: 'task', date: days[0], deadline: days[0],
+        calendarScheduleExplicit: true, isAllDay: false, status: 'pending', urgency: 2, createdAt: 1, updatedAt: 1 };
+    const [displayed] = projectCalendarDays([task], days);
+    assert.equal(isCalendarAllDay(displayed), true);
+    const patch = getWeeklyReschedulePatch(displayed, { date: days[1], lane: isCalendarAllDay(displayed) ? 'all-day' : 'timed' });
+    assert.deepEqual(patch, { date: days[1], deadline: days[1], startTime: undefined, isAllDay: true });
+    assert.equal(task.startTime, undefined);
+    assert.equal(task.isAllDay, false, 'display projection does not mutate the stored row');
 });

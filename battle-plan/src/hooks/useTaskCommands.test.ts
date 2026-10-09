@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { db, type Task } from '../db.ts';
 import type { GoogleAuthStatus, UnifiedTask } from '../types.ts';
 import { applySavedEditorStatus } from '../utils/editorInteraction.ts';
+import { ensureTaskDeadline } from '../services/taskNormalization.ts';
 
 Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -94,6 +95,18 @@ test('confirming the existing fallback date enrolls it and a stale false draft c
     assert.equal(enrolled.deadline, fallback.deadline);
     assert.equal((await commandsFor({ ...enrolled, title: 'Přejmenováno', calendarScheduleExplicit: false }).handleSaveEdit()).status, 'success');
     assert.equal((await db.tasks.get(id))?.calendarScheduleExplicit, true);
+});
+
+test('clearing a selected date preserves a planner-only fallback, including the same Friday', async () => {
+    for (const originalDate of ['2026-10-20', ensureTaskDeadline({ type: 'task' }).deadline!]) {
+        const saved = draft({ title: 'Neexportovat náhradní termín', date: originalDate, deadline: originalDate, calendarScheduleExplicit: true });
+        const id = await db.tasks.add(saved);
+        const outcome = await commandsFor({ ...saved, id, date: '', deadline: '', calendarScheduleExplicit: false }).handleSaveEdit();
+        assert.equal(outcome.status, 'success');
+        const cleared = (await db.tasks.get(id))!;
+        assert.equal(cleared.calendarScheduleExplicit, false);
+        assert.ok(cleared.deadline, 'planner keeps its fallback date');
+    }
 });
 
 test('empty imported Calendar title remains public empty when private notes are saved', async () => {

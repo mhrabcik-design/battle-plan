@@ -2,7 +2,7 @@ import type { UnifiedTask } from '../types.ts';
 import type { CalendarPublicProjection, CalendarTiming } from '../services/calendarModel.ts';
 import { toCalendarProjection } from '../services/calendarMapping.ts';
 import { safeGoogleCalendarLink } from '../services/calendarReconciliation.ts';
-import { getWeeklyVisualBlock, WEEKLY_CALENDAR_END_MINUTES, WEEKLY_CALENDAR_START_MINUTES } from './calendarUtils.ts';
+import { getWeeklyVisualBlock, isAllDayTask, WEEKLY_CALENDAR_END_MINUTES, WEEKLY_CALENDAR_START_MINUTES } from './calendarUtils.ts';
 
 export const CALENDAR_READONLY_NOTICE = 'Tato událost Google Kalendáře je pouze pro čtení. Upravte ji v Google Kalendáři.';
 export const calendarTaskLabel = (task: Pick<UnifiedTask, 'title' | 'calendar'>): string => task.title || (task.calendar ? 'Událost bez názvu' : 'Bez názvu');
@@ -15,6 +15,7 @@ export function openReadonlyCalendarTask(task: UnifiedTask): boolean {
     return true;
 }
 export const calendarTaskKey = (task: UnifiedTask): string => task.calendarSegment?.key ?? (task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`);
+export const isCalendarAllDay = (task: UnifiedTask): boolean => task.calendarSegment?.isAllDay ?? isAllDayTask(task);
 export function calendarTaskOrigin(task: UnifiedTask): UnifiedTask {
     const origin = { ...task };
     delete origin.calendarSegment;

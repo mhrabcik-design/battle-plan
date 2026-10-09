@@ -11,7 +11,6 @@ import {
     getWeeklyResizePatch,
     getWeeklyReschedulePatch,
     isWeeklyScheduleNoop,
-    isAllDayTask,
     isOverCapacity,
     shouldNavigateWeeklyEdge,
     snapWeeklyMinute,
@@ -20,7 +19,7 @@ import {
     type WeeklySchedulePatch,
 } from '../utils/calendarUtils';
 import { getCalendarDensity, getWeeklyVisualInterval, layoutCalendarIntervals } from '../utils/weeklyCalendarLayout';
-import { calendarTaskKey, calendarTaskLabel, calendarTaskOrigin, calendarIntervalLabel, isCalendarReadonly, isOutsideWorkingHours, openReadonlyCalendarTask, projectCalendarDays } from '../utils/calendarPresentation';
+import { calendarTaskKey, calendarTaskLabel, calendarTaskOrigin, calendarIntervalLabel, isCalendarAllDay, isCalendarReadonly, isOutsideWorkingHours, openReadonlyCalendarTask, projectCalendarDays } from '../utils/calendarPresentation';
 
 interface WeeklyCalendarProps {
     weekOffset: number;
@@ -120,7 +119,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             const date = task.calendarSegment?.date ?? (task.type === 'task' ? task.deadline : task.date);
             const bucket = date ? buckets.get(date) : undefined;
             if (!bucket) continue;
-            (task.calendarSegment?.isAllDay ?? isAllDayTask(task) ? bucket.allDayTasks : isOutsideWorkingHours(task) ? bucket.outsideTasks : bucket.timedTasks).push(task);
+            (isCalendarAllDay(task) ? bucket.allDayTasks : isOutsideWorkingHours(task) ? bucket.outsideTasks : bucket.timedTasks).push(task);
         }
         return new Map(Array.from(buckets, ([date, bucket]) => [date, {
             ...bucket,
@@ -207,7 +206,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         if (!matched) return null;
         const { lane, date } = matched;
 
-        const originalLane = isAllDayTask(task) ? 'all-day' : 'timed';
+        const originalLane = isCalendarAllDay(task) ? 'all-day' : 'timed';
         if (lane !== originalLane || (task.isGoogleTask && lane !== 'all-day')) return null;
         if (lane === 'all-day') return { date, lane };
 
@@ -482,7 +481,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
 
     const keyboardTargetFor = (task: UnifiedTask): WeeklyDropTarget => {
         const interval = getWeeklyVisualInterval(task);
-        return isAllDayTask(task)
+        return isCalendarAllDay(task)
             ? { date: task.type === 'task' ? task.deadline! : task.date!, lane: 'all-day' }
             : { date: task.type === 'task' ? task.deadline! : task.date!, lane: 'timed', blockTopMinutes: interval.startMinute };
     };

@@ -101,6 +101,56 @@ test('account switch never publishes foreign Calendar imports or pairing into th
     assert.equal(JSON.stringify(store.files).includes('a-event'), false);
 });
 
+test('account switch during snapshot reads blocks publication of the previous account Calendar data', async (t) => {
+    const store = memoryStore();
+    let account = 'account-a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    let release!: () => void;
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const originalRead = store.drive.readJsonFilesWithStatus;
+    t.mock.method(store.drive, 'readJsonFilesWithStatus', async <T>(...args: Parameters<typeof originalRead>) => {
+        started();
+        await gate;
+        return originalRead<T>(...args);
+    });
+    const remote = task('remote', { calendar: { accountId: 'account-a', calendarId: 'primary', eventId: 'private-a',
+        canonicalIdentity: 'google:private-a', origin: 'google', generation: 0, metadataUpdatedAt: 1 } });
+    const saving = new TaskDriveBackup(store.drive).save({ tasks: [remote] });
+    await reading;
+    account = 'account-b';
+    release();
+    await assert.rejects(saving, /Účet Google/);
+    assert.equal(store.files.length, 0);
+});
+
+test('a late upload acknowledgement from a replaced Google session cannot report backup success', async (t) => {
+    const store = memoryStore();
+    let token = 'token-a';
+    t.mock.method(googleService, 'getAccountId', () => 'account-a');
+    t.mock.method(googleService, 'getAuthStatus', () => ({ state: 'SIGNED_IN', accessToken: token }));
+    const originalWrite = store.drive.writeJsonFile;
+    let release!: () => void;
+    let started!: () => void;
+    const uploading = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    t.mock.method(store.drive, 'writeJsonFile', async (...args: Parameters<typeof originalWrite>) => {
+        const result = await originalWrite(...args);
+        started();
+        await gate;
+        return result;
+    });
+    const backup = new TaskDriveBackup(store.drive);
+    const saving = backup.save({ tasks: [task('local')] });
+    await uploading;
+    token = 'replacement-token';
+    release();
+    await assert.rejects(saving, /Účet Google/);
+    assert.equal(await backup.save({ tasks: [task('local')] }) != null, true, 'fresh session can verify and recover the visible immutable publication');
+    assert.equal(store.files.length, 1);
+});
+
 test('same-time contradictory task edits and identities fail closed', () => {
     assert.throws(() => mergeTaskBackupSnapshots([snapshot([task('a'), task('a', { title: 'Conflict' })])]), /stejně nových/);
     assert.throws(() => mergeTaskBackupSnapshots([snapshot([

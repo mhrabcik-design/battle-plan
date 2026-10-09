@@ -84,6 +84,20 @@ test('opt-in excludes unselected history and fallback tasks, exports new/edited 
     assert.equal(await db.agentProtocolEffects.count(), 5, 'later authored schedule enrolls the fallback row');
 });
 
+test('clearing an unselected historical schedule never exports its normalized Friday fallback', async (t) => {
+    const db = await database(t);
+    const service = new TaskMutationService(db);
+    const historical = await service.createTask({ task: { ...task(), date: '2026-10-20', deadline: '2026-10-20', calendarScheduleExplicit: true }, context: authored });
+    assert.equal(historical.status, 'applied');
+    await writeCalendarSyncSettings(db, settings);
+    const cleared = ensureTaskDeadline({ ...historical.task, date: '', deadline: '', calendarScheduleExplicit: false }, new Date('2026-10-09T12:00:00'));
+    const result = await service.updateTask({ localId: historical.task.id, changes: cleared, context: authored });
+    assert.equal(result.status, 'applied');
+    assert.equal(result.task.calendarScheduleExplicit, false);
+    assert.equal(result.task.deadline, '2026-10-09');
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+});
+
 test('two independent databases reserve one canonical occurrence target and retain assigned legacy IDs', async (t) => {
     const first = await database(t), second = await database(t);
     const ids: string[] = [];

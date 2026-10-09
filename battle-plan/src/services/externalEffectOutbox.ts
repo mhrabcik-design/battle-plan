@@ -55,6 +55,11 @@ function calendarEffectMatchesTask(effect: AgentProtocolEffectRow, task: Task | 
         && (effect.payload.generation === undefined || effect.payload.generation === meta.generation);
 }
 
+function isUnacknowledgedCalendarCreate(effect: Extract<AgentProtocolEffectRow, { kind: 'calendar'; operation: 'upsert' }>, task: Task) {
+    return task.calendar?.origin === 'local' && !task.googleEventId && !effect.payload.googleEventId
+        && task.reservedGoogleEventId === task.calendar.eventId && effect.payload.reservedEventId === task.calendar.eventId;
+}
+
 function effectStateForProtocol(effect: AgentProtocolEffectRow): ProtocolEffect {
     const base = { effect_id: effect.id, kind: effect.kind };
     if (effect.state === 'succeeded') return { ...base, state: 'succeeded' };
@@ -107,7 +112,10 @@ export class ExternalEffectOutbox {
                     result.attempted++;
                     try {
                         const execution = await this.executeWithDeadline(claimed);
-                        if (await this.complete(claimed, execution)) result.succeeded++;
+                        if (await this.complete(claimed, execution)) {
+                            if (execution.superseded) result.failed++;
+                            else result.succeeded++;
+                        }
                         else break;
                     } catch (error) {
                         const outcome = await this.fail(claimed, error);
@@ -154,12 +162,19 @@ export class ExternalEffectOutbox {
                             if (task.calendar.suppressed) return { superseded: true };
                             // A fresh two-way pull may modernize a legacy target. Replay
                             // the current intent, never its old one-way snapshot.
-                            if (!effect.payload.projection && task.calendar.baseline) {
+                            if (!effect.payload.projection) {
                                 const settings = await readCalendarSyncSettings(this.db, task.calendar.accountId);
                                 if (settings?.enabled) {
+                                    // An absent reserved create has no common baseline.
+                                    // Only the session's committed pull gate can authorize
+                                    // it; a linked legacy target still needs a baseline.
+                                    if (!task.calendar.baseline && !(isUnacknowledgedCalendarCreate(effect, task)
+                                        && this.options.canDeliver && await this.options.canDeliver(effect))) {
+                                        throw new Error('Calendar initial pull unavailable');
+                                    }
                                     const projection = toCalendarProjection(task, settings.timeZone);
                                     if (!projection) return { superseded: true };
-                                    effect.payload = { ...effect.payload, type: task.type, projection,
+                                    effect.payload = { ...effect.payload, publicId: task.publicId, type: task.type, projection,
                                         previousProjection: task.calendar.baseline, calendarId: task.calendar.calendarId,
                                         canonicalIdentity: task.calendar.canonicalIdentity, generation: task.calendar.generation };
                                 }
@@ -208,8 +223,9 @@ export class ExternalEffectOutbox {
             if (effect.kind === 'calendar') {
                 const task = await this.db.tasks.where('publicId').equals(effect.entityPublicId).first();
                 if (calendarEffectMatchesTask(effect, task) && (task?.calendar?.conflict || task?.calendar?.readonlyReason)) return;
-                if (effect.operation === 'upsert' && !effect.payload.projection && task?.calendar && !task.calendar.baseline
-                    && (await readCalendarSyncSettings(this.db, task.calendar.accountId))?.enabled) return;
+                if (calendarEffectMatchesTask(effect, task) && effect.operation === 'upsert' && !effect.payload.projection && task?.calendar && !task.calendar.baseline
+                    && (await readCalendarSyncSettings(this.db, task.calendar.accountId))?.enabled
+                    && !(this.options.canDeliver && isUnacknowledgedCalendarCreate(effect, task))) return;
             }
             const siblings = await this.db.agentProtocolEffects.where('entityPublicId').equals(effect.entityPublicId).toArray();
             if (siblings.filter(isActive).sort(bySequence)[0]?.id !== id) return;
@@ -274,9 +290,11 @@ export class ExternalEffectOutbox {
                     await applyTaskEffectMetadata(this.db, current.entityPublicId, execution.externalId, expectedTarget);
                 }
             }
-            const completed: AgentProtocolEffectRow = { ...current, state: 'succeeded', leaseOwner: undefined,
-                leaseExpiresAt: undefined, nextAttemptAt: undefined, lastErrorCode: undefined,
-                lastErrorMessage: undefined, updatedAt: this.now() };
+            const completed: AgentProtocolEffectRow = { ...current, state: execution.superseded ? 'failed' : 'succeeded',
+                ...(execution.superseded ? { superseded: true } : {}), leaseOwner: undefined,
+                leaseExpiresAt: undefined, nextAttemptAt: undefined, lastErrorCode: execution.superseded ? 'external_effect_failed' : undefined,
+                lastErrorMessage: execution.superseded ? 'Původní Calendar záměr byl nahrazen novější změnou; nebyl odeslán.' : undefined,
+                updatedAt: this.now() };
             await this.db.agentProtocolEffects.put(completed);
             await this.queueCommandResult(completed);
             return true;

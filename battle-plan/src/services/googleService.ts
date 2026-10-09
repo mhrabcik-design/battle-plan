@@ -821,8 +821,10 @@ class GoogleService {
             const properties = event.extendedProperties?.private;
             const expected = calendarPrivateIdentity(input);
             const hasIdentity = Object.keys(expected).some(key => properties?.[key] !== undefined);
+            // Type is editable on an existing pairing; a create collision still requires its full identity.
             if ((required && !properties?.battleplanIdentity) || (hasIdentity
-                && Object.entries(expected).some(([key, value]) => key !== 'battleplanOrigin' && properties?.[key] !== value))) {
+                && Object.entries(expected).some(([key, value]) => key !== 'battleplanOrigin'
+                    && (required || key !== 'battleplanType') && properties?.[key] !== value))) {
                 throw Object.assign(new GoogleCalendarError('Calendar event identity belongs to another item', 409), { code: 'calendar_identity_mismatch' });
             }
         };
@@ -881,6 +883,7 @@ class GoogleService {
             const remote = calendarEventProjection(event, local?.timing.kind === 'timed' ? local.timing.timeZone : input.baseline?.timing.kind === 'timed' ? input.baseline.timing.timeZone : 'UTC');
             if (!remote) throw new GoogleCalendarError('Unsupported Calendar event', 400);
             let projection: CalendarPublicProjection | undefined;
+            let publicChanged = input.operation === 'delete';
             if (input.operation === 'delete') {
                 const fields = input.baseline ? calendarChangedFields(input.baseline, remote) : [];
                 if (!input.baseline || fields.length) throw new CalendarConflictError({ kind: 'local-deleted', fields,
@@ -889,11 +892,14 @@ class GoogleService {
                 const result = reconcileCalendarProjection(input.baseline, local!, remote, event.etag);
                 if (result.conflict) throw new CalendarConflictError(result.conflict);
                 projection = result.projection;
-                if (!calendarChangedFields(remote, projection).length) return acknowledge(event, projection);
+                publicChanged = calendarChangedFields(remote, projection).length > 0;
+                const typeChanged = event.extendedProperties?.private?.battleplanIdentity !== undefined
+                    && event.extendedProperties?.private?.battleplanType !== input.type;
+                if (!publicChanged && !typeChanged) return acknowledge(event, projection);
             }
-            const body = projection ? JSON.stringify({ ...this.calendarProjectionBody(projection),
+            const body = projection ? JSON.stringify({ ...(publicChanged ? this.calendarProjectionBody(projection) : {}),
                 extendedProperties: { private: { ...event.extendedProperties?.private, ...calendarPrivateIdentity(input) } } }) : '';
-            const notify = Boolean(event.attendees?.length);
+            const notify = publicChanged && Boolean(event.attendees?.length);
             try {
                 const written = await this.guardedCalendarRequest(`${this.calendarPath(input.calendarId, input.eventId)}?sendUpdates=${notify ? 'all' : 'none'}`,
                     input, generation, guard, input.operation === 'delete' ? 'DELETE' : 'PATCH', body, event.etag);
