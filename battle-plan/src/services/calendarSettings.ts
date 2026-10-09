@@ -1,4 +1,4 @@
-import type { BattlePlanDB, Task } from '../db.ts';
+import type { BattlePlanDB } from '../db.ts';
 import type { CalendarSyncSettings } from './calendarModel.ts';
 
 export const CALENDAR_ACTIVE_ACCOUNT_SETTING = 'calendar-sync-active-account';
@@ -18,15 +18,10 @@ export async function readCalendarSyncSettings(db: BattlePlanDB, accountId?: str
     } catch { return undefined; }
 }
 
-/** Device-local opt-in. Call activation and enrollment inside taskMutationTables for atomic queueing. */
+/** Device-local opt-in. Enrollment queues atomically; only an observed pull authorizes delivery. */
 export async function writeCalendarSyncSettings(db: BattlePlanDB, settings: CalendarSyncSettings): Promise<void> {
     await db.transaction('rw', db.settings, async () => {
         await db.settings.put({ id: calendarSettingsKey(settings.accountId), value: JSON.stringify(settings) });
         await db.settings.put({ id: CALENDAR_ACTIVE_ACCOUNT_SETTING, value: settings.accountId });
     });
-}
-
-/** Initial scans may only export explicitly enrolled history, never the complete task table. */
-export function isCalendarHistoryEnrolled(task: Pick<Task, 'publicId'>, settings: CalendarSyncSettings): boolean {
-    return Boolean(settings.enabled && task.publicId && settings.enrolledPublicIds.includes(task.publicId));
 }

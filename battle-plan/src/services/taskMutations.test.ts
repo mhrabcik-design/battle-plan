@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { BattlePlanDB, type Task } from '../db.ts';
 import { AgentProtocolLedger } from './agentProtocol/ledger.ts';
 import { applyTaskEffectMetadata, calendarEffectsForLocalTask, taskMutationTables, TaskMutationService } from './taskMutations.ts';
-import { writeCalendarSyncSettings, isCalendarHistoryEnrolled } from './calendarSettings.ts';
+import { writeCalendarSyncSettings } from './calendarSettings.ts';
 import { ensureTaskDeadline } from './taskNormalization.ts';
 
 const settings = { accountId: 'account-a', calendarId: 'primary', enabled: true, timeZone: 'Europe/Prague', enrolledPublicIds: [] };
@@ -58,7 +58,7 @@ test('same-version Drive pairing acknowledgement fills metadata without changing
     assert.equal(await db.agentProtocolEffects.count(), 0);
 });
 
-test('opt-in excludes unselected history and fallback tasks, exports new/edited plans for every author, and never echoes imports', async (t) => {
+test('opt-in waits for observation of history, excludes fallback tasks, exports authored plans, and never echoes imports', async (t) => {
     const db = await database(t);
     const service = new TaskMutationService(db);
     const scheduled = { ...task(), deadline: '2026-10-09', startTime: '15:00', duration: 60 };
@@ -66,9 +66,7 @@ test('opt-in excludes unselected history and fallback tasks, exports new/edited 
     assert.equal(historical.status, 'applied');
     assert.equal(await db.agentProtocolEffects.count(), 0, 'disabled by default');
     await writeCalendarSyncSettings(db, { ...settings, enrolledPublicIds: ['selected-history'] });
-    assert.equal(await db.agentProtocolEffects.count(), 0, 'activation does not scan/export all history');
-    assert.equal(isCalendarHistoryEnrolled(historical.task, settings), false);
-    assert.equal(isCalendarHistoryEnrolled({ publicId: 'selected-history' }, { ...settings, enrolledPublicIds: ['selected-history'] }), true);
+    assert.equal(await db.agentProtocolEffects.count(), 0, 'the settings write alone does not enroll history before observation');
     for (const origin of ['ui', 'voice', 'hermes'] as const) {
         await service.createTask({ task: scheduled, context: { ...authored, origin } });
     }

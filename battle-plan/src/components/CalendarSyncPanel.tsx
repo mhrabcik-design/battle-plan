@@ -4,17 +4,9 @@ import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import { googleService } from '../services/googleService';
 import type { GoogleCalendarSyncControls } from '../hooks/useGoogleCalendarSync';
-import type { CalendarSyncPreview } from '../services/googleCalendarSync';
 import type { CalendarPublicProjection } from '../services/calendarModel';
 import { toCalendarProjection } from '../services/calendarMapping';
 import { calendarProjectionLabel, calendarTaskLabel } from '../utils/calendarPresentation';
-import { toLocalIsoDate } from '../utils/monthCalendar';
-
-const shiftDate = (date: string, amount: number) => {
-    const value = new Date(`${date}T12:00:00`);
-    value.setDate(value.getDate() + amount);
-    return Number.isFinite(value.getTime()) ? toLocalIsoDate(value) : '';
-};
 const buttonClass = 'surface-action min-h-11 w-full gap-2 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50';
 const phaseLabels = { disabled: 'Vypnuto', offline: 'Čeká na připojení k internetu', 'auth-required': 'Obnovte Google přihlášení',
     hidden: 'Čeká na otevřenou aplikaci', checking: 'Kontroluji Kalendář…', ready: 'Kalendář je aktuální', error: 'Kontrola se nepodařila' };
@@ -34,21 +26,12 @@ export function CalendarSyncPanel({ controls, googleAuth, isOnline }: {
     controls: GoogleCalendarSyncControls; googleAuth: GoogleAuthStatus; isOnline: boolean;
 }) {
     const { status } = controls;
-    const [range, setRange] = useState(() => {
-        const today = toLocalIsoDate(new Date());
-        return { startDate: shiftDate(today, -30), endDate: shiftDate(today, 179) };
-    });
-    const [preview, setPreview] = useState<CalendarSyncPreview | null>(null);
-    const [selected, setSelected] = useState<string[]>([]);
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
     const inFlight = useRef(false);
     const accountId = hasUsableAuth(googleAuth) && googleAuth.accessToken ? googleService.getAccountId() : null;
     const usable = !!accountId && isOnline;
-    const currentPreview = preview?.accountId === accountId ? preview : null;
-    const serviceRange = { startDate: range.startDate, endDate: shiftDate(range.endDate, 1) };
-    const validRange = !!range.startDate && !!range.endDate && range.startDate <= range.endDate;
     const run = async (action: () => Promise<void>) => {
         if (inFlight.current) return;
         inFlight.current = true;
@@ -57,14 +40,21 @@ export function CalendarSyncPanel({ controls, googleAuth, isOnline }: {
             setError(failure instanceof Error ? failure.message : 'Kalendář se nepodařilo aktualizovat. Zkuste to znovu.');
         } finally { inFlight.current = false; setBusy(false); }
     };
-    const changeRange = (name: 'startDate' | 'endDate', value: string) => {
-        setRange(previous => ({ ...previous, [name]: value }));
-        setPreview(null); setSelected([]); setError('');
-    };
     return <section aria-labelledby="calendar-sync-heading" className="min-w-0 space-y-3 border-t border-white/10 pt-4">
         <h3 id="calendar-sync-heading" className="flex items-center gap-2 text-sm font-bold text-white"><CalendarDays className="h-4 w-4" />Google Kalendář</h3>
         <p className="break-words text-xs text-slate-400">{accountId ? `Ověřený účet: ${accountId} · primární kalendář` : 'Pro propojení se přihlaste ke Googlu.'}</p>
-        <p className="text-xs text-slate-500">Schůzky a naplánované bloky práce se synchronizují při otevřené aplikaci. Google Tasks zůstávají samostatné.</p>
+        <p className="text-xs text-slate-500">Po zapnutí se všechny stávající i nové schůzky a naplánované bloky práce přenášejí automaticky oběma směry při otevřené aplikaci. Google Tasks zůstávají samostatné.</p>
+        <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border border-white/10 p-3">
+            <input type="checkbox" checked={status?.enabled ?? false} disabled={busy || !status || (!status.enabled && !usable)}
+                onChange={event => {
+                    const enabled = event.target.checked;
+                    void run(async () => {
+                        if (enabled) await controls.activate(); else await controls.disable();
+                        setMessage(enabled ? 'Synchronizace Google Kalendáře je zapnutá.' : 'Synchronizace Google Kalendáře je vypnutá.');
+                    });
+                }} className="h-4 w-4 shrink-0 accent-indigo-500" />
+            <span className="min-w-0 break-words text-sm font-semibold text-slate-200">Synchronizovat s Google Kalendářem</span>
+        </label>
         {!isOnline && <p role="status" className="text-sm text-amber-400">Jste offline. Změny čekají na připojení.</p>}
         <p role="status" className="text-sm font-semibold text-slate-300">{status ? phaseLabels[status.phase] : 'Načítám stav Kalendáře…'}</p>
         {status && <dl className="space-y-1 text-xs text-slate-400">
@@ -74,28 +64,7 @@ export function CalendarSyncPanel({ controls, googleAuth, isOnline }: {
             </dl>}
         {status?.enabled && <>
             {status.phase === 'auth-required' && <button type="button" className={buttonClass} onClick={() => googleService.signIn()}>Obnovit přihlášení</button>}
-            <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-                <button type="button" disabled={busy || !usable} className={buttonClass} onClick={() => { void run(() => controls.refresh()); }}><RefreshCw className="h-4 w-4" />Obnovit Kalendář</button>
-                <button type="button" disabled={busy} className={buttonClass} onClick={() => { void run(async () => { await controls.disable(); setPreview(null); setSelected([]); setMessage('Propojení Kalendáře je vypnuté.'); }); }}>Vypnout propojení</button>
-            </div>
-        </>}
-        {!status?.enabled && <>
-            <p className="text-xs text-slate-400">Vyberte rozsah stávajících místních položek pro první export. Nové změny se potom přenášejí automaticky. Události z Googlu se načítají 30 dní zpět a 180 dní dopředu.</p>
-            <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-                <label className="min-w-0 text-xs text-slate-400">Historie od<input aria-label="Historie od" type="date" value={range.startDate} disabled={busy} onChange={event => changeRange('startDate', event.target.value)} className="mt-1 min-h-11 w-full min-w-0 rounded-xl border border-white/10 bg-slate-900 px-2 text-sm text-white" /></label>
-                <label className="min-w-0 text-xs text-slate-400">Do včetně<input aria-label="Historie do včetně" type="date" value={range.endDate} disabled={busy} onChange={event => changeRange('endDate', event.target.value)} className="mt-1 min-h-11 w-full min-w-0 rounded-xl border border-white/10 bg-slate-900 px-2 text-sm text-white" /></label>
-            </div>
-            <button type="button" disabled={busy || !usable || !validRange} className={`${buttonClass} border-indigo-500/40 bg-indigo-600 text-white`} onClick={() => { void run(async () => { setPreview(await controls.preview(serviceRange)); setSelected([]); }); }}>{busy ? 'Načítám…' : currentPreview ? 'Obnovit náhled' : 'Zobrazit náhled propojení'}</button>
-            {currentPreview && <div className="min-w-0 space-y-3">
-                <p className="text-xs text-slate-400">Náhled nic neodesílá. Zaškrtněte pouze položky, které chcete přenést.</p>
-                {currentPreview.candidates.length === 0 ? <p className="text-sm text-slate-300">V tomto rozsahu nejsou žádné položky k exportu.</p> : <div className="max-h-64 space-y-2 overflow-y-auto">
-                    {currentPreview.candidates.map(candidate => <label key={candidate.publicId} className="flex min-w-0 cursor-pointer gap-3 rounded-xl border border-white/10 p-3">
-                        <input type="checkbox" checked={selected.includes(candidate.publicId)} disabled={busy} onChange={event => setSelected(previous => event.target.checked ? [...previous, candidate.publicId] : previous.filter(id => id !== candidate.publicId))} className="mt-1 h-4 w-4 shrink-0 accent-indigo-500" />
-                        <span className="min-w-0 space-y-1"><span className="block break-words text-sm font-semibold text-slate-200">{candidate.projection.title || 'Událost bez názvu'}</span><span className="block break-words text-xs text-slate-400">{candidate.type === 'task' ? 'Blok úkolu' : 'Schůzka'} · {calendarProjectionLabel(candidate.projection, currentPreview.timeZone)}</span></span>
-                    </label>)}
-                </div>}
-                <button type="button" disabled={busy || !usable} className={`${buttonClass} border-emerald-500/40 bg-emerald-600 text-white`} onClick={() => { void run(async () => { await controls.activate({ range: currentPreview.range, selectedPublicIds: selected, timeZone: currentPreview.timeZone }); setPreview(null); setSelected([]); setMessage('Propojení Google Kalendáře je zapnuté.'); }); }}>Zapnout propojení · exportovat {selected.length} položek</button>
-            </div>}
+            <button type="button" disabled={busy || !usable} className={buttonClass} onClick={() => { void run(() => controls.refresh()); }}><RefreshCw className="h-4 w-4" />Obnovit Kalendář</button>
         </>}
         {!!status?.conflicts.length && <div className="space-y-3">
             <h4 className="text-sm font-bold text-amber-400">Rozhodněte o konfliktech</h4>

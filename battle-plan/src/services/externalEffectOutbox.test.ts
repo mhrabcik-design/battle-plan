@@ -249,7 +249,7 @@ test('activation drains a pending legacy create from current Task only after a c
         assert.equal(id, task.reservedGoogleEventId); if (failTrackedGet) throw new Error('tracked GET failed'); return null;
     } }, { now: () => Date.parse('2026-10-09T12:00:00Z'), drain: () => worker.drainOnce() });
     await sync.setSession({ accountId: ACCOUNT, authKey: 'session', usableAuth: true, online: true, visible: true });
-    await sync.activate({ range: { startDate: '2026-09-01', endDate: '2026-10-10' }, selectedPublicIds: [task.publicId!], timeZone: 'Europe/Prague' });
+    await sync.activate('Europe/Prague');
     const settings = (await readCalendarSyncSettings(db, ACCOUNT))!;
     await writeCalendarSyncSettings(db, { ...settings, lastCheckedAt: Date.parse('2026-10-09T11:00:00Z') });
     await assert.rejects(sync.refresh(), /tracked GET failed/);
@@ -288,7 +288,7 @@ test('a modernized legacy create never adopts an unrelated resource racing into 
     const sync = new GoogleCalendarSync(db, { listCalendarEvents: async () => ({ events: [] }), getCalendarEvent: async () => null },
         { now: () => Date.parse('2026-10-09T12:00:00Z'), drain: async () => {} });
     await sync.setSession({ accountId: ACCOUNT, authKey: 'session', usableAuth: true, online: true, visible: true });
-    await sync.activate({ range: { startDate: '2026-09-01', endDate: '2026-10-10' }, selectedPublicIds: [task.publicId!], timeZone: 'Europe/Prague' });
+    await sync.activate('Europe/Prague');
     await sync.refresh();
     const withoutPullGate = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async () => { throw new Error('unsafe legacy call'); } });
     assert.equal((await withoutPullGate.drainOnce()).attempted, 0, 'an enabled baseline-less legacy create requires the in-memory delivery gate');
@@ -313,7 +313,7 @@ test('an obsolete legacy reserved target retires after the pull instead of block
     const sync = new GoogleCalendarSync(db, { listCalendarEvents: async () => ({ events: [] }), getCalendarEvent: async () => null },
         { now: () => Date.parse('2026-10-09T12:00:00Z'), drain: () => worker.drainOnce() });
     await sync.setSession({ accountId: ACCOUNT, authKey: 'session', usableAuth: true, online: true, visible: true });
-    await sync.activate({ range: { startDate: '2026-09-01', endDate: '2026-10-10' }, selectedPublicIds: [task.publicId!], timeZone: 'Europe/Prague' });
+    await sync.activate('Europe/Prague');
     const current = (await db.tasks.get(task.id!))!;
     await db.tasks.put({ ...current, calendar: { ...current.calendar!, suppressed: true } });
     const recreated = await service.queueEffects({ localId: task.id, context: newTaskMutationContext('ui'), effects: [...upsert] });

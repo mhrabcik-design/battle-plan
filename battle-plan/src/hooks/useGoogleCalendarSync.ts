@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { googleService } from '../services/googleService';
 import { drainGoogleExternalEffects } from '../services/externalEffectOutbox.ts';
-import { GoogleCalendarSync, type CalendarSyncRange, type CalendarConflictVersion } from '../services/googleCalendarSync.ts';
+import { GoogleCalendarSync, type CalendarConflictVersion } from '../services/googleCalendarSync.ts';
 import { hasUsableAuth, type GoogleAuthStatus } from '../types';
 
 const calendarSync = new GoogleCalendarSync(db, googleService, {
@@ -50,9 +50,8 @@ export function useGoogleCalendarSync({ googleAuth, isOnline, ready = true }: {
 
     return {
         status,
-        preview: (range?: CalendarSyncRange, timeZone?: string) => calendarSync.preview(range, timeZone),
-        activate: async (input: { range: CalendarSyncRange; selectedPublicIds: string[]; timeZone?: string }) => {
-            await calendarSync.activate(input); await calendarSync.refresh();
+        activate: async () => {
+            await calendarSync.activate(); await calendarSync.refresh();
         },
         disable: () => calendarSync.disable(),
         refresh: () => calendarSync.refresh(),
