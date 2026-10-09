@@ -76,6 +76,7 @@ export interface CalendarSyncSettings {
     calendarId: string;
     enabled: boolean;
     timeZone: string;
+    /** Legacy selection retained for stored-settings compatibility; automatic sync ignores it. */
     enrolledPublicIds: string[];
     range?: { startDate: string; endDate: string };
     activatedAt?: number;

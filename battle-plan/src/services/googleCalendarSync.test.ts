@@ -27,7 +27,7 @@ test('display timezone projects New York event into Prague and preserves exact t
     if (changed?.timing.kind === 'timed') assert.equal(Date.parse(changed.timing.start), Date.parse('2026-10-09T14:00:00Z'));
 });
 
-test('calendar sync service exposes read-only preview and atomic foreground import', async (t) => {
+test('calendar sync service enables with one action and imports atomically in foreground', async (t) => {
     const { GoogleCalendarSync } = await import('./googleCalendarSync.ts');
     const db = new BattlePlanDB(`calendar-sync-${crypto.randomUUID()}`);
     await db.open();
@@ -37,9 +37,8 @@ test('calendar sync service exposes read-only preview and atomic foreground impo
         getCalendarEvent: async () => null };
     const service = new GoogleCalendarSync(db, client, { now: () => Date.parse('2026-10-09T12:00:00Z'), drain: async () => {} });
     await service.setSession({ accountId: 'a', authKey: 'session', usableAuth: true, online: true, visible: true });
-    const preview = await service.preview();
     assert.equal(await db.tasks.count(), 0);
-    await service.activate({ range: preview.range, selectedPublicIds: [], timeZone: 'Europe/Prague' });
+    await service.activate('Europe/Prague');
     await service.refresh();
     assert.equal((await db.tasks.toArray())[0]?.title, 'Call');
     assert.equal(await db.agentProtocolEffects.count(), 0);
@@ -242,22 +241,66 @@ test('verified account replacement updates offline author fallback even without 
     assert.equal((await f.db.settings.get(CALENDAR_ACTIVE_ACCOUNT_SETTING))?.value, 'b');
 });
 
-test('activation preview is read only, selection is atomic and repeated confirmation cannot enroll extra history', async t => {
+test('one activation automatically exports every existing plan after observation, without a date selection or duplicates', async t => {
     const f = await fixture(t, false);
-    const first = await f.mutations.createTask({ task: { title: 'Select', type: 'task', urgency: 2, status: 'pending',
-        deadline: '2026-10-09', startTime: '15:00', duration: 60 }, context: authored() });
-    const second = await f.mutations.createTask({ task: { title: 'Leave', type: 'meeting', urgency: 2, status: 'pending',
-        date: '2026-10-09', startTime: '09:00', duration: 60 }, context: authored() });
+    const first = await f.mutations.createTask({ task: { title: 'Existing task', type: 'task', urgency: 2, status: 'pending',
+        deadline: '2025-01-01', startTime: '15:00', duration: 60 }, context: authored() });
+    const second = await f.mutations.createTask({ task: { title: 'Existing meeting', type: 'meeting', urgency: 2, status: 'pending',
+        date: '2027-09-01', startTime: '09:00', duration: 60 }, context: authored() });
     assert.equal(first.status, 'applied'); assert.equal(second.status, 'applied');
-    const preview = await f.service.preview(undefined, 'Europe/Prague'); assert.equal(preview.candidates.length, 2);
     assert.equal(await f.db.agentProtocolEffects.count(), 0);
-    await assert.rejects(f.service.activate({ range: preview.range, timeZone: preview.timeZone, selectedPublicIds: ['task_missing'] }));
-    assert.equal(await readCalendarSyncSettings(f.db, 'a'), undefined); assert.equal(await f.db.agentProtocolEffects.count(), 0);
-    await f.service.activate({ range: preview.range, timeZone: preview.timeZone, selectedPublicIds: [first.task.publicId!] });
-    await f.service.activate({ range: preview.range, timeZone: preview.timeZone, selectedPublicIds: [second.task.publicId!] });
-    assert.equal(await f.db.agentProtocolEffects.count(), 1);
-    assert.deepEqual((await readCalendarSyncSettings(f.db, 'a'))?.enrolledPublicIds, [first.task.publicId]);
-    const effects = await f.db.agentProtocolEffects.toArray(); assert.ok(effects[0].kind === 'calendar' && effects[0].payload.automatic);
+    await f.service.activate('Europe/Prague');
+    assert.equal((await readCalendarSyncSettings(f.db, 'a'))?.enabled, true);
+    assert.equal(await f.db.agentProtocolEffects.count(), 2, 'all existing plans are queued together');
+    const worker = new ExternalEffectOutbox(f.db, { accountId: () => 'a',
+        canDeliver: effect => calendarEffectDeliveryAllowed(f.db, effect, 'a', 'session'), execute: async () => ({}) });
+    assert.equal((await worker.drainOnce()).attempted, 0, 'enabling alone cannot send before observation');
+    await f.service.refresh();
+    const effects = await f.db.agentProtocolEffects.toArray();
+    assert.deepEqual(effects.map(effect => effect.entityPublicId).sort(), [first.task.publicId, second.task.publicId].sort());
+    assert.ok(effects.every(effect => effect.kind === 'calendar' && effect.payload.automatic));
+    await f.service.activate('Europe/Prague'); await f.service.refresh();
+    assert.equal(await f.db.agentProtocolEffects.count(), 2);
+});
+
+test('already enabled legacy selection automatically enrolls omitted plans and preserves opt-outs and account boundaries', async t => {
+    const f = await fixture(t);
+    await writeCalendarSyncSettings(f.db, { ...SETTINGS, enrolledPublicIds: ['task_previously_selected'] });
+    const local = { type: 'task' as const, urgency: 2 as const, status: 'pending' as const,
+        deadline: '2026-10-09', startTime: '15:00', duration: 60, createdAt: 1, updatedAt: 1 };
+    await f.db.tasks.bulkAdd([
+        { ...local, publicId: 'task_omitted', title: 'Omitted task' },
+        { ...local, publicId: 'task_native', title: 'Native Google Task', googleId: 'native' },
+        { ...local, publicId: 'task_foreign', title: 'Other account', googleAccountId: 'b' },
+        { ...local, publicId: 'task_deleted', title: 'Archived task', isDeleted: true },
+        { ...local, publicId: 'task_unscheduled', title: 'Implicit fallback', calendarScheduleExplicit: false },
+    ]);
+    await seed(f, { publicId: 'task_cancelled', calendar: { accountId: 'a', calendarId: 'primary', eventId: 'cancelled',
+        canonicalIdentity: 'public:task_cancelled', origin: 'local', generation: 0, metadataUpdatedAt: 1, suppressed: true } });
+    await f.service.refresh(); await f.service.refresh();
+    const effects = await f.db.agentProtocolEffects.toArray();
+    assert.deepEqual(effects.map(effect => effect.entityPublicId), ['task_omitted']);
+    assert.equal((await f.db.tasks.where('publicId').equals('task_cancelled').first())?.calendar?.suppressed, true);
+});
+
+test('automatic enrollment waits for successful observation and pairs an existing remote target outside the read window', async t => {
+    const f = await fixture(t);
+    const task: Task = { publicId: 'task_recovered', title: 'Recovered local plan', type: 'meeting', urgency: 2,
+        status: 'pending', date: '2027-09-01', startTime: '09:00', duration: 60, createdAt: 1, updatedAt: 1 };
+    await f.db.tasks.add(task);
+    f.f.list = async () => { throw new Error('offline'); };
+    await assert.rejects(f.service.refresh());
+    assert.equal(await f.db.agentProtocolEffects.count(), 0);
+    const { deterministicCalendarEventId } = await import('./calendarMapping.ts');
+    const targetId = deterministicCalendarEventId(task, 'a', 'primary', 0);
+    f.f.tracked.set(targetId, { ...event(targetId, 'Google plan'),
+        extendedProperties: { private: { battleplanAccount: 'a', battleplanCalendar: 'primary',
+            battleplanIdentity: 'public:task_recovered', battleplanType: 'meeting', battleplanOrigin: 'local', battleplanGeneration: '0' } } });
+    f.f.list = undefined;
+    await f.service.refresh();
+    assert.ok(f.f.gets.includes(targetId), 'unlinked deterministic targets are observed before enrollment');
+    assert.equal(await f.db.agentProtocolEffects.count(), 0, 'a recovered remote pairing is not created again');
+    assert.equal((await f.db.tasks.where('publicId').equals('task_recovered').first())?.googleEventId, targetId);
 });
 
 test('failed first pull gates all Calendar intents including immediate drains and legacy payloads; disabled pauses automatic only', async t => {
@@ -394,9 +437,95 @@ test('enabled fresh pull modernizes a legacy queued snapshot from current Task w
     assert.equal((await f.db.agentProtocolEffects.toArray())[0].state, 'succeeded');
 });
 
-test('live read window rolls with today after activation; selection range does not freeze subsequent imports', async t => {
+test('re-enabling delivers paired edits made while disabled, merges Google fields and does not echo imports', async t => {
+    const f = await fixture(t); const task = await seed(f);
+    await f.service.disable();
+    const changed = await f.mutations.updateTask({ publicId: task.publicId,
+        changes: { title: 'Changed while disabled', internalNotes: 'Still private' }, context: authored() });
+    assert.equal(changed.status, 'applied'); assert.equal(changed.effectIds.length, 0);
+    let writes = 0;
+    const writer = { addToCalendar: async () => { throw new Error('unexpected create'); }, deleteFromCalendar: async () => true as const,
+        updateGoogleTask: async () => true, writeCalendarEffect: async (request: import('./calendarReconciliation.ts').CalendarWriteRequest) => {
+            writes++; assert.equal(request.operation, 'upsert'); assert.equal(request.eventId, 'event');
+            assert.equal(request.projection?.title, 'Changed while disabled');
+            assert.equal(request.projection?.description, 'Google description');
+            f.f.events = [event('event', request.projection!.title, request.projection!.description), event('imported', 'Google-only')];
+            return { externalId: 'event', calendar: { accountId: 'a', calendarId: 'primary', eventId: 'event',
+                canonicalIdentity: 'public:task_local', generation: 0, etag: 'fresh', projection: request.projection,
+                sentProjection: request.sentProjection } };
+        } };
+    const outbox = new ExternalEffectOutbox(f.db, { accountId: () => 'a',
+        canDeliver: effect => calendarEffectDeliveryAllowed(f.db, effect, 'a', 'session'),
+        execute: (effect, guard) => executeGoogleExternalEffect(writer, effect, guard) });
+    f.f.events = [event('event', 'Original', 'Google description'), event('imported', 'Google-only')];
+    f.f.drain = () => outbox.drainOnce();
+    await f.service.activate('Europe/Prague');
+    assert.equal((await outbox.drainOnce()).attempted, 0, 're-enable still needs a committed pull');
+    await f.service.refresh(); assert.equal(writes, 1);
+    const saved = (await f.db.tasks.get(task.id!))!;
+    assert.equal(saved.title, 'Changed while disabled'); assert.equal(saved.internalNotes, 'Still private');
+    assert.deepEqual(saved.subTasks, task.subTasks); assert.equal(saved.calendar?.generation, 0);
+    await f.service.refresh(); assert.equal(writes, 1); assert.equal(await f.db.agentProtocolEffects.count(), 1);
+    await f.service.disable();
+    await f.mutations.updateTask({ publicId: task.publicId, changes: { internalNotes: 'Private edit only' }, context: authored() });
+    await f.service.activate('Europe/Prague'); await f.service.refresh();
+    assert.equal(writes, 1, 'private-only edits and unchanged Google imports never echo');
+});
+
+test('re-enabling queues the latest paired intent after an older pending effect and preserves deletion', async t => {
+    const f = await fixture(t); const task = await seed(f);
+    await f.mutations.updateTask({ publicId: task.publicId, changes: { title: 'Older pending' }, context: authored() });
+    await f.service.disable();
+    await f.mutations.updateTask({ publicId: task.publicId, changes: { title: 'Latest while disabled' }, context: authored() });
+    const deleted = await seed(f, { publicId: 'task_deleted_off', googleEventId: 'deleted', reservedGoogleEventId: 'deleted',
+        calendar: { ...task.calendar!, eventId: 'deleted', canonicalIdentity: 'public:task_deleted_off' } });
+    await f.mutations.archiveTask({ publicId: deleted.publicId, context: authored() });
+    await f.service.activate('Europe/Prague');
+    const queued = await f.db.agentProtocolEffects.toArray();
+    assert.equal(queued.filter(effect => effect.entityPublicId === task.publicId).length, 2);
+    assert.ok(queued.some(effect => effect.entityPublicId === task.publicId && effect.operation === 'upsert'
+        && effect.payload.projection?.title === 'Latest while disabled'));
+    assert.ok(queued.some(effect => effect.entityPublicId === deleted.publicId && effect.operation === 'delete'));
+    let remoteTitle = 'Original', remoteDeleted = false;
+    const writer = { addToCalendar: async () => { throw new Error('unexpected create'); }, deleteFromCalendar: async () => true as const,
+        updateGoogleTask: async () => true, writeCalendarEffect: async (request: import('./calendarReconciliation.ts').CalendarWriteRequest) => {
+            if (request.operation === 'delete') remoteDeleted = true;
+            else remoteTitle = request.projection!.title;
+            f.f.events = [event('event', remoteTitle), remoteDeleted ? { id: 'deleted', status: 'cancelled' } : event('deleted')];
+            return { externalId: request.eventId, calendar: { accountId: 'a', calendarId: 'primary', eventId: request.eventId,
+                canonicalIdentity: request.canonicalIdentity, generation: request.generation,
+                ...(request.operation === 'delete' ? { deleted: true } : { projection: request.projection, sentProjection: request.sentProjection }) } };
+        } };
+    const outbox = new ExternalEffectOutbox(f.db, { accountId: () => 'a',
+        canDeliver: effect => calendarEffectDeliveryAllowed(f.db, effect, 'a', 'session'),
+        execute: (effect, guard) => executeGoogleExternalEffect(writer, effect, guard) });
+    f.f.drain = () => outbox.drainOnce();
+    f.f.events = [event(), event('deleted')];
+    await f.service.refresh(); await f.service.refresh();
+    assert.equal(remoteTitle, 'Latest while disabled'); assert.equal(remoteDeleted, true);
+    assert.ok((await f.db.agentProtocolEffects.toArray()).every(effect => effect.state === 'succeeded'));
+    assert.equal(await f.db.agentProtocolEffects.count(), 3, 'refresh does not append duplicate paired intents');
+    assert.equal((await f.db.tasks.get(deleted.id!))?.isDeleted, true);
+});
+
+test('activation rolls back settings and all enrollment when a later effect cannot be queued', async t => {
     const f = await fixture(t, false);
-    await f.service.activate({ range: { startDate: '2026-10-09', endDate: '2026-10-10' }, selectedPublicIds: [], timeZone: 'Europe/Prague' });
+    for (const title of ['First', 'Second']) await f.mutations.createTask({ task: { title, type: 'meeting', urgency: 2,
+        status: 'pending', date: '2026-10-09', startTime: '14:00', duration: 60 }, context: authored() });
+    let creates = 0;
+    const failSecond = () => { if (++creates === 2) throw new Error('injected second effect failure'); };
+    f.db.agentProtocolEffects.hook('creating', failSecond);
+    try { await assert.rejects(f.service.activate('Europe/Prague'), /injected second effect failure/); }
+    finally { f.db.agentProtocolEffects.hook('creating').unsubscribe(failSecond); }
+    assert.equal(await readCalendarSyncSettings(f.db, 'a'), undefined);
+    assert.equal(await f.db.agentProtocolEffects.count(), 0);
+    assert.ok((await f.db.tasks.toArray()).every(task => !task.calendar && !task.reservedGoogleEventId));
+    await f.service.activate('Europe/Prague'); assert.equal(await f.db.agentProtocolEffects.count(), 2);
+});
+
+test('live read window rolls with today after activation', async t => {
+    const f = await fixture(t, false);
+    await f.service.activate('Europe/Prague');
     await f.service.refresh(); f.f.now += 200 * 86_400_000; await f.service.refresh();
     assert.notEqual(f.f.windows[0].timeMin, f.f.windows[1].timeMin);
     assert.equal(Math.round((Date.parse(f.f.windows[1].timeMin) - Date.parse(f.f.windows[0].timeMin)) / 86_400_000), 200);
@@ -454,6 +583,6 @@ test('offline or unavailable auth exposes status and cannot perform new reads or
     assert.equal((await f.service.getStatus()).phase, 'offline'); assert.equal(f.f.lists, 0);
     await f.service.setSession({ ...SESSION, accountId: null, authKey: null, usableAuth: false }); await f.service.refresh();
     assert.equal((await f.service.getStatus()).phase, 'auth-required'); assert.equal(f.f.lists, 0);
-    await assert.rejects(f.service.preview());
+    await assert.rejects(f.service.activate());
     await f.service.setSession(SESSION); await f.service.refresh(); assert.equal(f.f.lists, 1);
 });

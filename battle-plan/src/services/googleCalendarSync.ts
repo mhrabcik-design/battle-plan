@@ -2,7 +2,7 @@ import { type BattlePlanDB, type Task } from '../db.ts';
 import type { CalendarConflict, CalendarPublicProjection, CalendarReadonlyReason, CalendarSyncSettings,
     GoogleCalendarEvent, TaskCalendarMetadata } from './calendarModel.ts';
 import { calendarEventProjection, calendarEventPublicId, calendarProjectionToTaskSchedule, canonicalCalendarIdentity,
-    toCalendarProjection, validCalendarDate } from './calendarMapping.ts';
+    deterministicCalendarEventId, toCalendarProjection } from './calendarMapping.ts';
 import { calendarChangedFields, rebaseCalendarProjection, reconcileCalendarProjection, safeGoogleCalendarLink } from './calendarReconciliation.ts';
 import { CALENDAR_ACTIVE_ACCOUNT_SETTING, readCalendarSyncSettings, writeCalendarSyncSettings } from './calendarSettings.ts';
 import { invalidateCalendarPull, markCalendarPullReady, setCalendarDeliverySession } from './calendarDeliveryGate.ts';
@@ -19,13 +19,7 @@ export interface CalendarSyncSession {
     online: boolean;
     visible: boolean;
 }
-export interface CalendarSyncRange { startDate: string; endDate: string }
-export interface CalendarSyncPreview {
-    accountId: string;
-    range: CalendarSyncRange;
-    timeZone: string;
-    candidates: { publicId: string; title: string; type: 'task' | 'meeting'; projection: CalendarPublicProjection }[];
-}
+interface CalendarSyncRange { startDate: string; endDate: string }
 export interface CalendarSyncStatus {
     enabled: boolean;
     accountId: string | null;
@@ -69,10 +63,20 @@ function dateInZone(now: number, timeZone: string): string {
 function addDays(date: string, days: number): string {
     return new Date(Date.parse(`${date}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 }
-function checkedRange(range: CalendarSyncRange): CalendarSyncRange {
-    if (!validCalendarDate(range.startDate) || !validCalendarDate(range.endDate) || range.endDate <= range.startDate)
-        throw new Error('Zvolte platný rozsah dat Kalendáře.');
-    return { startDate: range.startDate, endDate: range.endDate };
+function needsAutomaticEnrollment(task: Task, accountId: string, timeZone: string): boolean {
+    return Boolean(task.publicId && !task.isDeleted && !task.googleId && !task.googleEventId
+        && !task.calendar
+        && (!task.googleAccountId || task.googleAccountId === accountId) && toCalendarProjection(task, timeZone));
+}
+function activationOperation(task: Task, settings: CalendarSyncSettings): 'upsert' | 'delete' | null {
+    if (needsAutomaticEnrollment(task, settings.accountId, settings.timeZone)) return 'upsert';
+    const metadata = task.calendar;
+    if (!task.publicId || task.googleId || !metadata || metadata.accountId !== settings.accountId
+        || metadata.calendarId !== settings.calendarId || metadata.suppressed || metadata.readonlyReason || metadata.conflict
+        || !metadata.baseline || (task.googleAccountId && task.googleAccountId !== settings.accountId)) return null;
+    if (task.isDeleted) return task.googleEventId || task.reservedGoogleEventId ? 'delete' : null;
+    const projection = toCalendarProjection(task, settings.timeZone);
+    return projection && calendarChangedFields(metadata.baseline, projection).length ? 'upsert' : null;
 }
 function listBoundary(date: string, timeZone: string): string {
     const value = toCalendarProjection({ title: '', type: 'meeting', urgency: 2, status: 'pending', date, startTime: '00:00',
@@ -155,50 +159,26 @@ export class GoogleCalendarSync {
         const today = dateInZone(this.now(), timeZone);
         return { startDate: addDays(today, -30), endDate: addDays(today, 181) };
     }
-    async preview(range?: CalendarSyncRange, timeZone?: string): Promise<CalendarSyncPreview> {
-        const { session, current } = this.capture();
-        const settings = await readCalendarSyncSettings(this.db, session.accountId!);
-        const zone = timeZone ?? settings?.timeZone ?? browserZone();
-        const window = checkedRange(range ?? settings?.range ?? this.defaultRange(zone));
-        listBoundary(window.startDate, zone); // Validate zone without mutating configuration.
-        const tasks = await this.db.tasks.toArray();
-        if (!current()) throw new Error('Přihlášení ke Kalendáři se změnilo.');
-        const candidates: CalendarSyncPreview['candidates'] = [];
-        for (const task of tasks) {
-            if (!task.publicId || task.isDeleted || task.googleId || task.calendar?.origin === 'google' || task.calendar?.readonlyReason
-                || task.calendar?.suppressed || task.calendar?.conflict || (task.googleAccountId && task.googleAccountId !== session.accountId)
-                || (task.calendar && task.calendar.accountId !== session.accountId) || (task.type !== 'task' && task.type !== 'meeting')) continue;
-            const projection = toCalendarProjection(task, zone);
-            if (!projection) continue;
-            const timing = projection.timing;
-            const startDate = timing.kind === 'all-day' ? timing.startDate : dateInZone(Date.parse(timing.start), zone);
-            const endDate = timing.kind === 'all-day' ? timing.endDate : addDays(dateInZone(Date.parse(timing.end) - 1, zone), 1);
-            if (startDate < window.endDate && endDate > window.startDate)
-                candidates.push({ publicId: task.publicId, title: task.title, type: task.type, projection });
-        }
-        return { accountId: session.accountId!, range: window, timeZone: zone, candidates };
-    }
-    async activate(input: { range: CalendarSyncRange; selectedPublicIds: string[]; timeZone?: string }): Promise<void> {
+    async activate(timeZone?: string): Promise<void> {
         const capture = this.capture();
-        const range = checkedRange(input.range), accountId = capture.session.accountId!;
-        const selected = [...new Set(input.selectedPublicIds)];
+        const accountId = capture.session.accountId!;
         await this.db.transaction('rw', taskMutationTables(this.db), async () => {
             if (!capture.current()) throw new Error('Přihlášení ke Kalendáři se změnilo.');
             const old = await readCalendarSyncSettings(this.db, accountId);
-            if (old?.enabled) return; // Repeated confirmation does not enroll new history.
-            const preview = await this.preview(range, input.timeZone);
-            if (selected.some(id => !preview.candidates.some(candidate => candidate.publicId === id)))
-                throw new Error('Vybrané položky se změnily. Obnovte náhled Kalendáře.');
-            const settings: CalendarSyncSettings = { accountId, calendarId: 'primary', enabled: true,
-                timeZone: preview.timeZone, range, enrolledPublicIds: selected, activatedAt: this.now() };
+            if (old?.enabled) return;
+            const zone = old?.timeZone ?? timeZone ?? browserZone();
+            listBoundary(dateInZone(this.now(), zone), zone);
+            const settings: CalendarSyncSettings = { ...old, accountId, calendarId: 'primary', enabled: true,
+                timeZone: zone, enrolledPublicIds: old?.enrolledPublicIds ?? [], activatedAt: old?.activatedAt ?? this.now() };
             await writeCalendarSyncSettings(this.db, settings);
             const mutations = new TaskMutationService(this.db, { now: this.now });
-            for (const publicId of selected) {
-                const task = await this.db.tasks.where('publicId').equals(publicId).first();
-                if (!task) throw new Error('Vybraná položka již neexistuje.');
-                const result = await mutations.queueEffects({ publicId, expectedRevision: task.protocolRevision?.revision_id ?? null,
-                    context: context(accountId, 'ui'), effects: [{ kind: 'calendar', operation: 'upsert', automatic: true }] });
-                if (result.status !== 'queued') throw new Error('Vybraná položka se změnila.');
+            for (const task of await this.db.tasks.toArray()) {
+                const operation = activationOperation(task, settings);
+                if (!operation) continue;
+                const result = await mutations.queueEffects({ publicId: task.publicId,
+                    expectedRevision: task.protocolRevision?.revision_id ?? null, context: context(accountId, 'ui'),
+                    effects: [{ kind: 'calendar', operation, automatic: true }] });
+                if (result.status !== 'queued') throw new Error('Místní položka se během zapnutí synchronizace změnila.');
             }
             if (!capture.current()) throw new Error('Přihlášení ke Kalendáři se změnilo.');
         });
@@ -253,12 +233,14 @@ export class GoogleCalendarSync {
         const accountId = capture.session.accountId!;
         const settings = await readCalendarSyncSettings(this.db, accountId);
         if (!settings?.enabled || !capture.current()) return;
-        // The confirmation range selects existing local history. Observation has a
-        // rolling window, so an old activation cannot hide newly scheduled events.
+        // Observation rolls with today; local plans are enrolled regardless of date.
         const range = this.defaultRange(settings.timeZone);
-        const tracked = (await this.db.tasks.toArray()).filter(task =>
+        const localTasks = await this.db.tasks.toArray();
+        const unlinked = localTasks.filter(task => needsAutomaticEnrollment(task, accountId, settings.timeZone));
+        const observedPublicIds = new Set(unlinked.map(task => task.publicId!));
+        const tracked = localTasks.filter(task =>
             (task.calendar?.accountId === accountId && task.calendar.calendarId === settings.calendarId)
-            || (!task.calendar && task.googleEventId && task.googleAccountId === accountId));
+            || (!task.calendar && (task.googleEventId || task.reservedGoogleEventId) && task.googleAccountId === accountId));
         const result = await this.client.listCalendarEvents({ accountId, calendarId: settings.calendarId,
             timeMin: listBoundary(range.startDate, settings.timeZone), timeMax: listBoundary(range.endDate, settings.timeZone),
             timeZone: settings.timeZone }, capture.guard);
@@ -267,8 +249,9 @@ export class GoogleCalendarSync {
             if (!event.id || events.has(event.id)) throw new Error('Neúplný nebo nejednoznačný výsledek Kalendáře.');
             events.set(event.id, event);
         }
-        for (const task of tracked) {
-            const eventId = task.calendar?.eventId ?? task.googleEventId!;
+        const targets = new Set([...tracked.map(task => task.calendar?.eventId ?? task.googleEventId ?? task.reservedGoogleEventId!),
+            ...unlinked.map(task => task.reservedGoogleEventId ?? deterministicCalendarEventId(task, accountId, settings.calendarId, 0))]);
+        for (const eventId of targets) {
             if (events.has(eventId)) continue;
             const event = await this.client.getCalendarEvent(eventId, { accountId, calendarId: settings.calendarId }, capture.guard);
             if (event && event.id !== eventId) throw new Error('Kalendář vrátil jinou identitu události.');
@@ -283,6 +266,14 @@ export class GoogleCalendarSync {
             for (const [eventId, event] of events) {
                 if (!capture.current()) throw new Error('Přihlášení ke Kalendáři se změnilo.');
                 await this.importEvent(eventId, event, settings, tasks);
+            }
+            const mutations = new TaskMutationService(this.db, { now: this.now });
+            for (const task of tasks) {
+                if (!observedPublicIds.has(task.publicId!) || !needsAutomaticEnrollment(task, accountId, settings.timeZone)) continue;
+                const result = await mutations.queueEffects({ publicId: task.publicId,
+                    expectedRevision: task.protocolRevision?.revision_id ?? null, context: context(accountId, 'ui'),
+                    effects: [{ kind: 'calendar', operation: 'upsert', automatic: true }] });
+                if (result.status !== 'queued') throw new Error('Místní položka se během synchronizace změnila.');
             }
             if (!capture.current()) throw new Error('Přihlášení ke Kalendáři se změnilo.');
             await writeCalendarSyncSettings(this.db, { ...currentSettings, lastCheckedAt: this.now() });
