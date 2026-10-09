@@ -101,3 +101,10 @@ A terminal human decision permanently resolves that exact occurrence. A new occu
 The append-only, synchronized record of human decisions keyed by Suggestion Occurrence rather than by one proposal delivery.
 
 Exact terminal decisions suppress an occurrence across later cycles and devices. Comments remain nonterminal, deferrals expire, and approximate text similarity requires a human same-or-new decision.
+
+## Calendar Planning
+
+### Scheduled Work Block
+A calendar interval reserved for a task, distinct from the task itself and from a meeting imported from the calendar.
+
+Cancelling the block in the calendar keeps the task and pauses automatic recreation of that block. Explicit restoration creates a new block identity, so an old calendar copy cannot revive the cancelled block.
