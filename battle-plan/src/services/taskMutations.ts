@@ -22,6 +22,7 @@ import { canonicalCalendarIdentity, deterministicCalendarEventId, toCalendarProj
 import { readCalendarSyncSettings } from './calendarSettings.ts';
 import { applyCalendarPairing, mergeCalendarMetadata } from './calendarMetadata.ts';
 import type { CalendarPublicProjection, CalendarSyncSettings } from './calendarModel.ts';
+import { calendarAcknowledgedTask, type CalendarWriteAcknowledgement } from './calendarReconciliation.ts';
 
 export const TASK_EVENT_STREAM_ID = 'battleplan-events';
 export const TASK_EVENT_PRODUCER_ID = 'battleplan-producer';
@@ -767,12 +768,26 @@ export async function applyTaskEffectMetadata(
     entityPublicId: string,
     externalId: string | undefined,
     expectedTargetId?: string,
+    acknowledgement?: CalendarWriteAcknowledgement,
 ): Promise<void> {
     if (!externalId) return;
     const task = await db.tasks.where('publicId').equals(entityPublicId).first();
-    if (!task || task.id == null || task.isDeleted) return;
+    if (!task || task.id == null) return;
     const targetId = task.googleEventId ?? task.reservedGoogleEventId;
     if (!targetId || targetId !== externalId || (expectedTargetId !== undefined && targetId !== expectedTargetId)) return;
+    if (acknowledgement) {
+        const merged = calendarAcknowledgedTask(task, acknowledgement, Date.now());
+        if (merged.task === task) return;
+        if (merged.contentChanged) {
+            const result = await new TaskMutationService(db).importTask({ task: { ...merged.task,
+                updatedAt: Math.max(Date.now(), (task.updatedAt || task.createdAt || 0) + 1) },
+                localId: task.id, expectedRevision: task.protocolRevision?.revision_id ?? null,
+                context: newTaskMutationContext('google', 'google-calendar', acknowledgement.accountId) });
+            if (result.status !== 'applied' && result.status !== 'unchanged') throw new Error('Calendar acknowledgement revision changed');
+        } else await db.tasks.put(merged.task);
+        return;
+    }
+    if (task.isDeleted) return;
     await db.tasks.update(task.id, { googleEventId: externalId });
 }
 

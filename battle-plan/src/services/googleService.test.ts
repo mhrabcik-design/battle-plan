@@ -1,6 +1,8 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, mock, test } from 'node:test';
+import type { CalendarPublicProjection, GoogleCalendarEvent } from './calendarModel.ts';
+import { calendarPrivateIdentity, type CalendarWriteRequest } from './calendarReconciliation.ts';
 
 const store = new Map<string, string>();
 const localStorage = {
@@ -1785,6 +1787,247 @@ test('Calendar refuses writes to cancelled events or a foreign organizer without
             /cancelled|organizer/);
     }
 });
+
+const calendarBase: CalendarPublicProjection = { title: 'A', description: 'Original',
+    timing: { kind: 'timed', start: '2026-09-20T12:00:00Z', end: '2026-09-20T13:00:00Z', timeZone: 'Europe/Prague' } };
+const calendarEvent = (projection: CalendarPublicProjection, extra: Partial<GoogleCalendarEvent> = {}): GoogleCalendarEvent => ({
+    id: 'existing', etag: '"v1"', summary: projection.title, description: projection.description,
+    start: { dateTime: calendarBase.timing.kind === 'timed' ? calendarBase.timing.start : '', timeZone: 'Europe/Prague' },
+    end: { dateTime: calendarBase.timing.kind === 'timed' ? calendarBase.timing.end : '', timeZone: 'Europe/Prague' }, ...extra,
+});
+
+test('modern Calendar projection merges remote description and preserves Google-owned metadata', async () => {
+    clearStore(); seedSignedInStorage();
+    const local = { ...calendarBase, title: 'B' };
+    const remote = calendarEvent({ ...calendarBase, description: 'Google text' }, {
+        attendees: [{ email: 'guest@example.com', responseStatus: 'accepted' }],
+        reminders: { useDefault: true }, location: 'Office', conferenceData: { conferenceId: 'meet' },
+        extendedProperties: { private: { unrelated: 'keep' } },
+    });
+    let writes = 0;
+    installGapiMock({ request: async (args) => {
+        if (args.method === 'GET') return { body: JSON.stringify(remote) };
+        writes++;
+        const body = JSON.parse(args.body);
+        assert.equal(body.summary, 'B');
+        assert.equal(body.description, 'Google text');
+        for (const field of ['attendees', 'reminders', 'location', 'conferenceData', 'internalNotes']) assert.equal(body[field], undefined);
+        assert.equal(body.extendedProperties.private.unrelated, 'keep');
+        assert.equal(args.headers['If-Match'], '"v1"');
+        return { body: JSON.stringify({ ...remote, ...body, etag: '"v2"' }) };
+    } });
+    assert.equal(await freshService().addToCalendar({ title: 'B', projection: local, previousProjection: calendarBase,
+        baseline: calendarBase, googleEventId: 'existing', canonicalIdentity: 'public:p', generation: 0, type: 'meeting', internalNotes: 'secret' }), 'existing');
+    assert.equal(writes, 1);
+});
+
+test('Calendar list reads every page and rejects the whole read when a later page fails', async () => {
+    clearStore(); seedSignedInStorage();
+    let fail = false;
+    const paths: string[] = [];
+    installGapiMock({ request: async ({ path }) => {
+        paths.push(path);
+        if (path.includes('pageToken=next')) {
+            if (fail) throw { status: 503 };
+            return { body: JSON.stringify({ items: [{ id: 'two' }], timeZone: 'Europe/Prague' }) };
+        }
+        return { body: JSON.stringify({ items: [{ id: 'one' }], nextPageToken: 'next', timeZone: 'Europe/Prague' }) };
+    } });
+    const svc = freshService();
+    const options = { accountId: 'user@example.com', timeMin: '2026-08-01T00:00:00Z', timeMax: '2027-04-01T00:00:00Z' };
+    assert.deepEqual(await svc.listCalendarEvents(options), { events: [{ id: 'one' }, { id: 'two' }], timeZone: 'Europe/Prague' });
+    assert.match(paths[0], /singleEvents=true/);
+    assert.match(paths[0], /showDeleted=true/);
+    fail = true;
+    await assert.rejects(svc.listCalendarEvents(options), (error: unknown) => (error as { status?: number }).status === 503);
+});
+
+const modernIntent = (extra: Partial<CalendarWriteRequest> = {}): CalendarWriteRequest => ({ accountId: 'user@example.com',
+    calendarId: 'primary', eventId: 'existing', canonicalIdentity: 'public:p', generation: 0, type: 'meeting',
+    operation: 'upsert', knownEvent: true, projection: calendarBase, previousProjection: calendarBase, baseline: calendarBase,
+    createMutationId: 'create-fixture', ...extra });
+
+test('modern Calendar reports same-field and DELETE/remote-edit conflicts without any write', async () => {
+    clearStore(); seedSignedInStorage();
+    let writes = 0;
+    installGapiMock({ request: async ({ method }) => {
+        if (method !== 'GET') { writes++; throw new Error('must not write'); }
+        return { body: JSON.stringify(calendarEvent({ ...calendarBase, title: 'Google' })) };
+    } });
+    const svc = freshService();
+    await assert.rejects(svc.writeCalendarEffect(modernIntent({ projection: { ...calendarBase, title: 'Local' } })),
+        (error: unknown) => (error as { calendarConflict?: { kind: string; fields: string[] } }).calendarConflict?.fields[0] === 'title');
+    await assert.rejects(svc.writeCalendarEffect(modernIntent({ operation: 'delete', projection: undefined })),
+        (error: unknown) => (error as { calendarConflict?: { kind: string } }).calendarConflict?.kind === 'local-deleted');
+    assert.equal(writes, 0);
+});
+
+test('modern 412 rereads and merges the new remote fields rather than blindly replaying its PATCH', async () => {
+    clearStore(); seedSignedInStorage();
+    let remote = calendarEvent(calendarBase), writes = 0, reads = 0;
+    installGapiMock({ request: async (args) => {
+        if (args.method === 'GET') { reads++; return { body: JSON.stringify(remote) }; }
+        writes++;
+        if (writes === 1) { remote = { ...remote, description: 'Google', etag: '"v2"' }; throw { status: 412 }; }
+        assert.equal(args.headers['If-Match'], '"v2"');
+        const patch = JSON.parse(args.body);
+        assert.equal(patch.summary, 'B'); assert.equal(patch.description, 'Google');
+        remote = { ...remote, ...patch, etag: '"v3"' };
+        return { body: JSON.stringify(remote) };
+    } });
+    const result = await freshService().writeCalendarEffect(modernIntent({ projection: { ...calendarBase, title: 'B' } }));
+    assert.equal(result.calendar.projection?.description, 'Google');
+    assert.equal(result.calendar.etag, '"v3"');
+    assert.equal(reads, 2); assert.equal(writes, 2);
+});
+
+test('modern 412 followed by a same-field edit stops at conflict', async () => {
+    clearStore(); seedSignedInStorage();
+    let remote = calendarEvent(calendarBase), writes = 0;
+    installGapiMock({ request: async ({ method }) => {
+        if (method === 'GET') return { body: JSON.stringify(remote) };
+        writes++; remote = { ...remote, summary: 'Google', etag: '"v2"' }; throw { status: 412 };
+    } });
+    await assert.rejects(freshService().writeCalendarEffect(modernIntent({ projection: { ...calendarBase, title: 'B' } })),
+        (error: unknown) => (error as { calendarConflict?: { kind: string } }).calendarConflict?.kind === 'fields');
+    assert.equal(writes, 1);
+});
+
+test('a modern retry after lost create response adopts only its complete canonical private identity', async () => {
+    clearStore(); seedSignedInStorage();
+    const input = modernIntent({ knownEvent: false, baseline: undefined });
+    let remote: GoogleCalendarEvent | undefined, inserts = 0, patches = 0;
+    installGapiMock({ calendarEventsInsert: async (args) => {
+        inserts++;
+        const resource = (args as { resource: GoogleCalendarEvent }).resource;
+        assert.equal(resource.id, 'existing');
+        assert.equal(resource.start?.date, undefined); assert.equal(resource.end?.date, undefined);
+        assert.equal(Object.values(resource.start!).includes(null), false);
+        assert.equal(Object.values(resource.end!).includes(null), false);
+        assert.deepEqual(resource.extendedProperties?.private, { ...calendarPrivateIdentity(input), battleplanCreateMutation: input.createMutationId });
+        if (remote) throw { status: 409 };
+        remote = { ...resource, etag: '"v1"' };
+        throw new Error('response lost');
+    }, request: async ({ method }) => {
+        if (method !== 'GET') patches++;
+        return { body: JSON.stringify(remote) };
+    } });
+    const svc = freshService();
+    await assert.rejects(svc.writeCalendarEffect(input));
+    remote!.description = 'Google';
+    const adopted = await svc.writeCalendarEffect(input);
+    assert.equal(adopted.externalId, 'existing');
+    assert.equal(adopted.calendar.projection?.description, 'Google');
+    assert.equal(inserts, 2); assert.equal(patches, 0);
+    remote!.extendedProperties!.private!.battleplanIdentity = 'public:other';
+    await assert.rejects(svc.writeCalendarEffect(input), (error: unknown) => (error as { code?: string }).code === 'calendar_identity_mismatch');
+    assert.equal(patches, 0);
+});
+
+test('a matching canonical create from another mutation adopts identical content but conflicts on differing content', async () => {
+    clearStore(); seedSignedInStorage();
+    const input = modernIntent({ knownEvent: false, baseline: undefined, createMutationId: 'this-device' });
+    let remote = calendarEvent(calendarBase, { extendedProperties: { private: { ...calendarPrivateIdentity(input), battleplanCreateMutation: 'another-device' } } });
+    let writes = 0;
+    installGapiMock({ calendarEventsInsert: async () => { throw { status: 409 }; }, request: async ({ method }) => {
+        if (method !== 'GET') writes++;
+        return { body: JSON.stringify(remote) };
+    } });
+    const svc = freshService();
+    assert.equal((await svc.writeCalendarEffect(input)).externalId, 'existing');
+    remote = { ...remote, summary: 'Different' };
+    await assert.rejects(svc.writeCalendarEffect(input),
+        (error: unknown) => (error as { calendarConflict?: { kind: string } }).calendarConflict?.kind === 'legacy-baseline');
+    assert.equal(writes, 0);
+});
+
+test('modern no-op preserves Google reminders and offset-normalized timing without PATCH', async () => {
+    clearStore(); seedSignedInStorage();
+    let writes = 0;
+    const remote = calendarEvent(calendarBase, { start: { dateTime: '2026-09-20T14:00:00+02:00', timeZone: 'Europe/Prague' },
+        end: { dateTime: '2026-09-20T15:00:00+02:00', timeZone: 'Europe/Prague' }, reminders: { useDefault: true } });
+    installGapiMock({ request: async ({ method }) => { if (method !== 'GET') writes++; return { body: JSON.stringify(remote) }; } });
+    assert.equal((await freshService().writeCalendarEffect(modernIntent())).calendar.etag, '"v1"');
+    assert.equal(writes, 0);
+});
+
+test('explicit 404/410 and cancelled events distinguish remote deletion from missing list entries', async () => {
+    clearStore(); seedSignedInStorage();
+    for (const status of [404, 410]) {
+        installGapiMock({ request: async () => { throw { status }; } });
+        const svc = freshService();
+        assert.equal(await svc.getCalendarEvent('existing', { accountId: 'user@example.com' }), null);
+        assert.equal((await svc.writeCalendarEffect(modernIntent())).calendar.deleted, true);
+        await assert.rejects(svc.writeCalendarEffect(modernIntent({ currentProjection: { ...calendarBase, title: 'Unsent' } })),
+            (error: unknown) => (error as { calendarConflict?: { kind: string } }).calendarConflict?.kind === 'remote-deleted');
+    }
+    installGapiMock({ request: async () => ({ body: JSON.stringify({ id: 'existing', status: 'cancelled' }) }) });
+    assert.equal((await freshService().getCalendarEvent('existing', { accountId: 'user@example.com' }))?.status, 'cancelled');
+});
+
+for (const scenario of ['success', '401'] as const) {
+    test(`Calendar paginated read: late ${scenario} neither returns old account data nor invalidates replacement auth`, async () => {
+        clearStore(); seedSignedInStorage();
+        const started = deferred<void>(), release = deferred<void>();
+        let calls = 0;
+        installGapiMock({ request: async () => {
+            calls++; started.resolve(); await release.promise;
+            if (scenario === '401') throw { status: 401 };
+            return { body: JSON.stringify({ items: [{ id: 'old' }], nextPageToken: 'next' }) };
+        } });
+        const svc = freshService();
+        const pending = svc.listCalendarEvents({ accountId: 'user@example.com', timeMin: '2026-08-01T00:00:00Z', timeMax: '2027-04-01T00:00:00Z' });
+        await started.promise; await consent(svc, 'replacement-token'); release.resolve();
+        await assert.rejects(pending, /ownership/);
+        assert.equal(calls, 1);
+        assert.equal(svc.getAuthStatus().accessToken, 'replacement-token');
+        assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
+    });
+}
+
+test('Calendar account switch on a later page discards every earlier page', async (t) => {
+    clearStore(); seedSignedInStorage();
+    const started = deferred<void>(), release = deferred<void>();
+    let calls = 0;
+    installGapiMock({ request: async () => {
+        if (++calls === 1) return { body: JSON.stringify({ items: [{ id: 'one' }], nextPageToken: 'next' }) };
+        started.resolve(); await release.promise; return { body: JSON.stringify({ items: [{ id: 'two' }] }) };
+    } });
+    const svc = freshService();
+    const pending = svc.listCalendarEvents({ accountId: 'user@example.com', timeMin: '2026-08-01T00:00:00Z', timeMax: '2027-04-01T00:00:00Z' });
+    await started.promise;
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ email: 'other@example.com' }));
+    await consent(svc, 'other-token'); release.resolve();
+    await assert.rejects(pending, /ownership/);
+    assert.equal(svc.getAccountId(), 'other@example.com');
+    assert.equal(calls, 2);
+});
+
+for (const operation of ['get', 'patch', 'delete', 'insert'] as const) {
+    for (const outcome of ['401', 'success'] as const) {
+        test(`Calendar ${operation}: late ${outcome} rejects the old generation and preserves replacement auth`, async () => {
+            clearStore(); seedSignedInStorage();
+            const started = deferred<void>(), release = deferred<void>();
+            const late = async () => {
+                started.resolve(); await release.promise;
+                if (outcome === '401') throw { status: 401 };
+                return { body: JSON.stringify(calendarEvent(calendarBase)), result: calendarEvent(calendarBase) };
+            };
+            installGapiMock({ calendarEventsInsert: late, request: async ({ method }) => {
+                if (operation === 'get' || method !== 'GET') return late();
+                return { body: JSON.stringify(calendarEvent(calendarBase)) };
+            } });
+            const svc = freshService();
+            const pending = operation === 'get' ? svc.getCalendarEvent('existing', { accountId: 'user@example.com' })
+                : svc.writeCalendarEffect(modernIntent(operation === 'insert' ? { knownEvent: false, baseline: undefined }
+                    : operation === 'delete' ? { operation: 'delete', projection: undefined } : { projection: { ...calendarBase, title: 'B' } }));
+            await started.promise; await consent(svc, 'replacement-token'); release.resolve();
+            await assert.rejects(pending, /ownership/);
+            assert.equal(svc.getAuthStatus().accessToken, 'replacement-token');
+            assert.equal(svc.getAuthStatus().state, 'SIGNED_IN');
+        });
+    }
+}
 for (const method of ['getTasks', 'getTaskLists'] as const) {
     for (const status of [401, 403]) {
         test(`${method}: late ${status} cannot invalidate a replacement session`, async () => {

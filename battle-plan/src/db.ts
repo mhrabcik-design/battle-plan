@@ -327,6 +327,9 @@ export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
             generation?: number;
             projection?: CalendarPublicProjection;
             previousProjection?: CalendarPublicProjection;
+            sentProjection?: CalendarPublicProjection;
+            currentProjection?: CalendarPublicProjection;
+            calendarOrigin?: TaskCalendarMetadata['origin'];
             baseline?: CalendarPublicProjection;
             etag?: string;
             title: string;
@@ -343,7 +346,8 @@ export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
             reservedEventId: string;
         };
     }
-    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string; calendarId?: string; baseline?: CalendarPublicProjection; etag?: string } }
+    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string; calendarId?: string; baseline?: CalendarPublicProjection; etag?: string;
+        canonicalIdentity?: string; generation?: number; type?: Task['type']; calendarOrigin?: TaskCalendarMetadata['origin'] } }
     | { kind: 'google_tasks'; operation: 'complete'; payload: { googleTaskId: string; googleListId?: string } }
 );
 

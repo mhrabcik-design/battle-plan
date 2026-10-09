@@ -1,5 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { GoogleAuthState, GoogleAuthStatus, GoogleTaskRaw } from '../types';
+import { calendarEventProjection, calendarProjectionToTaskSchedule } from './calendarMapping.ts';
+import type { CalendarConflict, CalendarPublicProjection, GoogleCalendarEvent } from './calendarModel.ts';
+import { calendarChangedFields, calendarPrivateIdentity, rebaseCalendarProjection, reconcileCalendarProjection, safeGoogleCalendarLink,
+    type CalendarWriteRequest, type CalendarWriteResult } from './calendarReconciliation.ts';
 export type { GoogleAuthState, GoogleAuthStatus };
 
 /** Rechecked after reading the remote ETag and immediately before sending a queued write. */
@@ -15,6 +19,17 @@ export class GoogleCalendarError extends Error {
         this.status = status;
     }
 }
+
+export class CalendarConflictError extends GoogleCalendarError {
+    readonly calendarConflict: CalendarConflict;
+    constructor(calendarConflict: CalendarConflict) {
+        super('Calendar změny vyžadují výběr uživatele.');
+        this.calendarConflict = calendarConflict;
+    }
+}
+export interface CalendarReadScope { accountId: string; calendarId?: string }
+export interface CalendarListOptions extends CalendarReadScope { timeMin: string; timeMax: string; timeZone?: string }
+export interface CalendarListResult { events: GoogleCalendarEvent[]; timeZone?: string }
 
 function googleErrorStatus(error: unknown): number | undefined {
     const value = error as { status?: number; result?: { error?: { code?: number } } };
@@ -699,18 +714,210 @@ class GoogleService {
         }
     }
 
-    private async assertCalendarAccess(accountId: string | null, guard?: CalendarWriteGuard) {
+    private async assertCalendarAccess(accountId: string | null, guard?: CalendarWriteGuard, generation = this.authGeneration) {
         if (!accountId || this.getAccountId() !== accountId || (guard && !await guard.isCurrent())
-            || this.getAccountId() !== accountId) throw new GoogleCalendarError('Calendar effect ownership lost');
+            || this.getAccountId() !== accountId || generation !== this.authGeneration) throw new GoogleCalendarError('Calendar effect ownership lost');
     }
 
-    private async calendarConditionalWrite(eventId: string, method: 'PATCH' | 'DELETE', event: any, guard?: CalendarWriteGuard) {
+    private calendarPath(calendarId = 'primary', eventId?: string) {
+        return `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events${eventId ? `/${encodeURIComponent(eventId)}` : ''}`;
+    }
+
+    private async calendarSession(scope: CalendarReadScope, guard?: CalendarWriteGuard) {
+        if ((await this.ensureFreshToken()) === 'auth-unavailable') throw new AuthUnavailableError('Google sign-in required');
+        const generation = this.authGeneration;
+        await this.assertCalendarAccess(scope.accountId, guard, generation);
+        return generation;
+    }
+
+    private async guardedCalendarRequest(path: string, scope: CalendarReadScope, generation: number, guard?: CalendarWriteGuard,
+        method = 'GET', body = '', etag?: string): Promise<any> {
+        await this.assertCalendarAccess(scope.accountId, guard, generation);
+        try {
+            const response = await window.gapi.client.request({ path, method,
+                headers: etag ? { 'If-Match': etag, 'Content-Type': 'application/json' } : {}, body });
+            await this.assertCalendarAccess(scope.accountId, guard, generation);
+            if (response.status >= 400) throw { status: response.status };
+            const value = response.body ? JSON.parse(response.body) : (response as unknown as { result?: unknown }).result;
+            if (method === 'DELETE') return value ?? {};
+            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new GoogleCalendarError('Invalid Calendar response');
+            return value;
+        } catch (error) {
+            await this.assertCalendarAccess(scope.accountId, guard, generation);
+            if (isUnauthenticatedError(error)) { this.markAuthUnavailable(); throw new AuthUnavailableError('Google sign-in required'); }
+            if (error instanceof GoogleCalendarError) throw error;
+            throw new GoogleCalendarError('Google Calendar request failed', googleErrorStatus(error));
+        }
+    }
+
+    /** An incomplete window throws; an absent ID in this result is never a deletion. */
+    async listCalendarEvents(options: CalendarListOptions, guard?: CalendarWriteGuard): Promise<CalendarListResult> {
+        if (!Number.isFinite(Date.parse(options.timeMin)) || !Number.isFinite(Date.parse(options.timeMax))
+            || Date.parse(options.timeMax) <= Date.parse(options.timeMin)) throw new GoogleCalendarError('Invalid Calendar window');
+        const generation = await this.calendarSession(options, guard);
+        const events: GoogleCalendarEvent[] = [];
+        const seenTokens = new Set<string>();
+        let pageToken: string | undefined, timeZone: string | undefined;
+        do {
+            const query = new URLSearchParams({ timeMin: options.timeMin, timeMax: options.timeMax,
+                singleEvents: 'true', showDeleted: 'true', maxResults: '2500' });
+            if (options.timeZone) query.set('timeZone', options.timeZone);
+            if (pageToken) query.set('pageToken', pageToken);
+            const page = await this.guardedCalendarRequest(`${this.calendarPath(options.calendarId)}?${query}`, options, generation, guard);
+            if (page.items !== undefined && (!Array.isArray(page.items) || page.items.some((event: GoogleCalendarEvent) => !event || typeof event.id !== 'string'))) {
+                throw new GoogleCalendarError('Invalid Calendar page');
+            }
+            events.push(...(page.items ?? []));
+            timeZone ??= typeof page.timeZone === 'string' ? page.timeZone : undefined;
+            pageToken = page.nextPageToken;
+            if (pageToken) {
+                if (typeof pageToken !== 'string' || seenTokens.has(pageToken)) throw new GoogleCalendarError('Invalid Calendar pagination');
+                seenTokens.add(pageToken);
+            }
+        } while (pageToken);
+        return { events, ...(timeZone ? { timeZone } : {}) };
+    }
+
+    private async readCalendarEvent(eventId: string, scope: CalendarReadScope, generation: number,
+        guard?: CalendarWriteGuard): Promise<GoogleCalendarEvent | null> {
+        try {
+            const event = await this.guardedCalendarRequest(this.calendarPath(scope.calendarId, eventId), scope, generation, guard);
+            if (event.id !== eventId) throw new GoogleCalendarError('Unexpected Calendar event identity');
+            return event;
+        } catch (error) {
+            if ([404, 410].includes(googleErrorStatus(error) ?? 0)) return null;
+            throw error;
+        }
+    }
+
+    /** null is explicit 404/410. A cancelled resource is returned with its status. */
+    async getCalendarEvent(eventId: string, scope: CalendarReadScope, guard?: CalendarWriteGuard): Promise<GoogleCalendarEvent | null> {
+        return this.readCalendarEvent(eventId, scope, await this.calendarSession(scope, guard), guard);
+    }
+
+    private calendarProjectionBody(projection: CalendarPublicProjection, clearOpposite = true) {
+        const timing = projection.timing;
+        return { summary: projection.title, description: projection.description,
+            start: timing.kind === 'all-day' ? { ...(clearOpposite ? { dateTime: null, timeZone: null } : {}), date: timing.startDate }
+                : { ...(clearOpposite ? { date: null } : {}), dateTime: timing.start, timeZone: timing.timeZone },
+            end: timing.kind === 'all-day' ? { ...(clearOpposite ? { dateTime: null, timeZone: null } : {}), date: timing.endDate }
+                : { ...(clearOpposite ? { date: null } : {}), dateTime: timing.end, timeZone: timing.timeZone } };
+    }
+
+    /** Uses the latest common baseline and sends only Calendar's shared public fields. */
+    async writeCalendarEffect(input: CalendarWriteRequest, guard?: CalendarWriteGuard): Promise<CalendarWriteResult> {
+        if (![input.accountId, input.calendarId, input.eventId, input.canonicalIdentity].every(value => typeof value === 'string' && value.length > 0)
+            || !Number.isSafeInteger(input.generation) || input.generation < 0) throw new GoogleCalendarError('Invalid Calendar identity', 400);
+        const generation = await this.calendarSession(input, guard);
+        const original = input.sentProjection ?? input.projection;
+        const local = input.projection ? rebaseCalendarProjection(input.projection, input.previousProjection, input.baseline) : undefined;
+        if (input.operation === 'upsert' && (!local || !calendarProjectionToTaskSchedule(local, input.type))) throw new GoogleCalendarError('Invalid Calendar projection', 400);
+        const acknowledge = (event: GoogleCalendarEvent | null, projection?: CalendarPublicProjection, deleted = false): CalendarWriteResult => ({
+            externalId: input.eventId, calendar: { accountId: input.accountId, calendarId: input.calendarId, eventId: input.eventId,
+                canonicalIdentity: input.canonicalIdentity, generation: input.generation, projection, sentProjection: original,
+                ...(event?.etag ? { etag: event.etag } : {}), ...(event ? { event } : {}), ...(deleted ? { deleted: true } : {}) },
+        });
+        const verifyIdentity = (event: GoogleCalendarEvent, required: boolean) => {
+            const properties = event.extendedProperties?.private;
+            const expected = calendarPrivateIdentity(input);
+            const hasIdentity = Object.keys(expected).some(key => properties?.[key] !== undefined);
+            if ((required && !properties?.battleplanIdentity) || (hasIdentity
+                && Object.entries(expected).some(([key, value]) => key !== 'battleplanOrigin' && properties?.[key] !== value))) {
+                throw Object.assign(new GoogleCalendarError('Calendar event identity belongs to another item', 409), { code: 'calendar_identity_mismatch' });
+            }
+        };
+        // Only an unacknowledged create may reserve this identity. A 409 never
+        // authorizes taking over an unrelated resource or replaying old text.
+        if (input.operation === 'upsert' && !input.knownEvent && !input.baseline) {
+            await this.assertCalendarAccess(input.accountId, guard, generation);
+            try {
+                const response = await window.gapi.client.calendar.events.insert({ calendarId: input.calendarId,
+                    resource: { id: input.eventId, ...this.calendarProjectionBody(local!, false), extendedProperties: { private: {
+                        ...calendarPrivateIdentity(input), ...(input.createMutationId ? { battleplanCreateMutation: input.createMutationId } : {}) } } } });
+                await this.assertCalendarAccess(input.accountId, guard, generation);
+                if (response.result.id !== input.eventId) throw new GoogleCalendarError('Unexpected Calendar event identity');
+                const returned = response.result as GoogleCalendarEvent;
+                // Read back when the API fixture/response omits its resource fields.
+                const event = returned.etag && calendarEventProjection(returned, local!.timing.kind === 'timed' ? local!.timing.timeZone : 'UTC')
+                    ? returned : await this.readCalendarEvent(input.eventId, input, generation, guard);
+                if (!event || event.status === 'cancelled') throw new CalendarConflictError({ kind: 'remote-deleted', fields: [], local, detectedAt: Date.now() });
+                return acknowledge(event, calendarEventProjection(event, local!.timing.kind === 'timed' ? local!.timing.timeZone : 'UTC') ?? local);
+            } catch (error) {
+                await this.assertCalendarAccess(input.accountId, guard, generation);
+                if (isUnauthenticatedError(error)) { this.markAuthUnavailable(); throw new AuthUnavailableError('Google sign-in required'); }
+                if (googleErrorStatus(error) !== 409) {
+                    if (error instanceof GoogleCalendarError || error instanceof AuthUnavailableError) throw error;
+                    throw new GoogleCalendarError('Google Calendar create failed', googleErrorStatus(error));
+                }
+                const event = await this.readCalendarEvent(input.eventId, input, generation, guard);
+                if (!event) throw new GoogleCalendarError('Reserved Calendar identity unavailable', 409);
+                verifyIdentity(event, true);
+                if (!event.etag) throw new GoogleCalendarError('Calendar resource has no ETag');
+                if (event.status === 'cancelled') throw new CalendarConflictError({ kind: 'remote-deleted', fields: [], local, detectedAt: Date.now() });
+                const remote = calendarEventProjection(event, local!.timing.kind === 'timed' ? local!.timing.timeZone : 'UTC');
+                if (!remote) throw new GoogleCalendarError('Unsupported Calendar event', 400);
+                if (!input.createMutationId || event.extendedProperties?.private?.battleplanCreateMutation !== input.createMutationId) {
+                    const result = reconcileCalendarProjection(undefined, local!, remote, event.etag);
+                    if (result.conflict) throw new CalendarConflictError(result.conflict);
+                }
+                return acknowledge(event, remote);
+            }
+        }
+        // 412 restarts the read/merge decision. A second racing write returns to
+        // durable delivery rather than issuing an unconditional overwrite.
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const event = await this.readCalendarEvent(input.eventId, input, generation, guard);
+            if (!event || event.status === 'cancelled') {
+                const pendingLocal = input.currentProjection ?? local;
+                if (input.operation === 'upsert' && (!input.baseline || (pendingLocal && calendarChangedFields(input.baseline, pendingLocal).length))) {
+                    throw new CalendarConflictError({ kind: 'remote-deleted', fields: [], base: input.baseline, local: pendingLocal, detectedAt: Date.now() });
+                }
+                return acknowledge(event, undefined, true);
+            }
+            verifyIdentity(event, false);
+            if (event.organizer && event.organizer.self !== true) throw new GoogleCalendarError('Calendar event belongs to another organizer', 403);
+            if (event.recurringEventId || event.recurrence?.length || (event.eventType && event.eventType !== 'default')) throw new GoogleCalendarError('Readonly Calendar event', 403);
+            if (!event.etag) throw new GoogleCalendarError('Calendar resource has no ETag');
+            const remote = calendarEventProjection(event, local?.timing.kind === 'timed' ? local.timing.timeZone : input.baseline?.timing.kind === 'timed' ? input.baseline.timing.timeZone : 'UTC');
+            if (!remote) throw new GoogleCalendarError('Unsupported Calendar event', 400);
+            let projection: CalendarPublicProjection | undefined;
+            if (input.operation === 'delete') {
+                const fields = input.baseline ? calendarChangedFields(input.baseline, remote) : [];
+                if (!input.baseline || fields.length) throw new CalendarConflictError({ kind: 'local-deleted', fields,
+                    base: input.baseline, remote, remoteEtag: event.etag, detectedAt: Date.now() });
+            } else {
+                const result = reconcileCalendarProjection(input.baseline, local!, remote, event.etag);
+                if (result.conflict) throw new CalendarConflictError(result.conflict);
+                projection = result.projection;
+                if (!calendarChangedFields(remote, projection).length) return acknowledge(event, projection);
+            }
+            const body = projection ? JSON.stringify({ ...this.calendarProjectionBody(projection),
+                extendedProperties: { private: { ...event.extendedProperties?.private, ...calendarPrivateIdentity(input) } } }) : '';
+            const notify = Boolean(event.attendees?.length);
+            try {
+                const written = await this.guardedCalendarRequest(`${this.calendarPath(input.calendarId, input.eventId)}?sendUpdates=${notify ? 'all' : 'none'}`,
+                    input, generation, guard, input.operation === 'delete' ? 'DELETE' : 'PATCH', body, event.etag);
+                if (input.operation === 'delete') return acknowledge(null, undefined, true);
+                const complete = written.id === input.eventId && written.etag && calendarEventProjection(written, projection!.timing.kind === 'timed' ? projection!.timing.timeZone : 'UTC');
+                const finalEvent = complete ? written : await this.readCalendarEvent(input.eventId, input, generation, guard);
+                if (!finalEvent || finalEvent.status === 'cancelled') throw new CalendarConflictError({ kind: 'remote-deleted', fields: [], base: input.baseline, local, detectedAt: Date.now() });
+                verifyIdentity(finalEvent, false);
+                return acknowledge(finalEvent, calendarEventProjection(finalEvent, projection!.timing.kind === 'timed' ? projection!.timing.timeZone : 'UTC') ?? projection);
+            } catch (error) {
+                if (googleErrorStatus(error) === 412 && attempt === 0) continue;
+                throw error;
+            }
+        }
+        throw new GoogleCalendarError('Calendar precondition changed', 412);
+    }
+
+    private async calendarConditionalWrite(eventId: string, method: 'PATCH' | 'DELETE', event: any, guard?: CalendarWriteGuard, generation = this.authGeneration) {
         const accountId = this.getAccountId();
-        await this.assertCalendarAccess(accountId, guard);
+        await this.assertCalendarAccess(accountId, guard, generation);
         const path = `/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`;
         const response = await window.gapi.client.request({ path, method: 'GET', headers: {}, body: '' });
         const current = JSON.parse(response.body || '{}');
-        await this.assertCalendarAccess(accountId, guard);
+        await this.assertCalendarAccess(accountId, guard, generation);
         if (current.status === 'cancelled') {
             if (method === 'DELETE') return eventId;
             throw new GoogleCalendarError('Calendar event was cancelled', 410);
@@ -731,40 +938,47 @@ class GoogleService {
             end: { date: null, dateTime: null, timeZone: null, ...event.end },
         });
         const notify = current.attendees?.length > 0 && (method === 'DELETE' || publicChanged);
-        await this.assertCalendarAccess(accountId, guard);
+        await this.assertCalendarAccess(accountId, guard, generation);
         // A late request cannot overwrite a successor that changed this ETag.
         // 412 must return to the queue, where ownership and ordering are checked anew.
         await window.gapi.client.request({
             path: `${path}?sendUpdates=${notify ? 'all' : 'none'}`, method,
             headers: { 'If-Match': current.etag, 'Content-Type': 'application/json' }, body,
         });
+        await this.assertCalendarAccess(accountId, guard, generation);
         return eventId;
     }
 
     async getCalendarEventLink(eventId: string, guard?: CalendarWriteGuard): Promise<string> {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') throw new AuthUnavailableError('Google sign-in required');
         const accountId = this.getAccountId();
-        await this.assertCalendarAccess(accountId, guard);
+        const generation = this.authGeneration;
+        await this.assertCalendarAccess(accountId, guard, generation);
         const response = await window.gapi.client.request({
             path: `/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
             method: 'GET', headers: {}, body: '',
         });
-        await this.assertCalendarAccess(accountId, guard);
+        await this.assertCalendarAccess(accountId, guard, generation);
         const event = JSON.parse(response.body || '{}');
         if (event.status === 'cancelled') throw new GoogleCalendarError('Calendar event was cancelled', 410);
         if (event.organizer?.self !== true) throw new GoogleCalendarError('Calendar event belongs to another organizer', 403);
-        let link: URL;
-        try { link = new URL(event.htmlLink); } catch { throw new GoogleCalendarError('Invalid Google Calendar link'); }
-        if (link.protocol !== 'https:' || link.username || link.password || link.port
-            || !((link.hostname === 'calendar.google.com' && link.pathname.startsWith('/calendar/'))
-                || (link.hostname === 'www.google.com' && link.pathname.startsWith('/calendar/')))) {
-            throw new GoogleCalendarError('Invalid Google Calendar link');
-        }
-        return link.href;
+        const link = safeGoogleCalendarLink(event.htmlLink);
+        if (!link) throw new GoogleCalendarError('Invalid Google Calendar link');
+        return link;
     }
 
     async addToCalendar(task: any, guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
+        const generation = this.authGeneration;
+        const accountId = this.getAccountId();
+
+        if (task.projection) {
+            const result = await this.writeCalendarEffect({ ...task, operation: 'upsert',
+                accountId: task.accountId ?? this.getAccountId(), calendarId: task.calendarId ?? 'primary',
+                eventId: task.googleEventId ?? task.reservedGoogleEventId ?? task.reservedEventId,
+                knownEvent: Boolean(task.googleEventId), generation: task.generation ?? 0 }, guard);
+            return result.externalId;
+        }
 
         try {
             const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
@@ -821,22 +1035,25 @@ class GoogleService {
                 'resource': event,
             };
             if (task.googleEventId) {
-                return await this.calendarConditionalWrite(task.googleEventId, 'PATCH', event, guard);
+                return await this.calendarConditionalWrite(task.googleEventId, 'PATCH', event, guard, generation);
             }
             if (task.reservedGoogleEventId) event.id = task.reservedGoogleEventId;
-            if (guard && !await guard.isCurrent()) throw new GoogleCalendarError('Calendar effect ownership lost');
+            await this.assertCalendarAccess(accountId, guard, generation);
             try {
                 const response = await window.gapi.client.calendar.events.insert(params);
+                await this.assertCalendarAccess(accountId, guard, generation);
                 return response.result.id;
             } catch (error) {
+                await this.assertCalendarAccess(accountId, guard, generation);
                 // The first insert may have succeeded before its response was lost.
                 if (task.reservedGoogleEventId && googleErrorStatus(error) === 409) {
                     delete event.id;
-                    return await this.calendarConditionalWrite(task.reservedGoogleEventId, 'PATCH', event, guard);
+                    return await this.calendarConditionalWrite(task.reservedGoogleEventId, 'PATCH', event, guard, generation);
                 }
                 throw error;
             }
         } catch (e: unknown) {
+            if (generation !== this.authGeneration) throw new GoogleCalendarError('Calendar effect ownership lost');
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error creating calendar event', err);
             if (isUnauthenticatedError(e)) {
@@ -850,10 +1067,12 @@ class GoogleService {
 
     async deleteFromCalendar(eventId: string, guard?: CalendarWriteGuard) {
         if ((await this.ensureFreshToken()) === 'auth-unavailable') return;
+        const generation = this.authGeneration;
         try {
-            await this.calendarConditionalWrite(eventId, 'DELETE', undefined, guard);
+            await this.calendarConditionalWrite(eventId, 'DELETE', undefined, guard, generation);
             return true;
         } catch (e: unknown) {
+            if (generation !== this.authGeneration) throw new GoogleCalendarError('Calendar effect ownership lost');
             if (googleErrorStatus(e) === 404 || googleErrorStatus(e) === 410) return true;
             const err = e as { status?: number; result?: { error?: { status?: string; message?: string } }; message?: string };
             console.error('Error deleting calendar event', err);
