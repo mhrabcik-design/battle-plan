@@ -9,6 +9,8 @@ import { rebaseCalendarProjection, calendarScopeMatches, type CalendarWriteAckno
 import { calendarProjectionToTaskSchedule, toCalendarProjection } from './calendarMapping.ts';
 import type { CalendarConflict } from './calendarModel.ts';
 import { hasUsableAuth } from '../types.ts';
+import { calendarEffectDeliveryAllowed } from './calendarDeliveryGate.ts';
+import { readCalendarSyncSettings } from './calendarSettings.ts';
 
 export interface ExternalEffectExecutionResult {
     externalId?: string;
@@ -21,6 +23,7 @@ interface ExternalEffectOutboxOptions {
     execute: ExternalEffectExecutor;
     accountId: () => string | null;
     canExecute?: () => boolean;
+    canDeliver?: (effect: AgentProtocolEffectRow) => Promise<boolean>;
     now?: () => number;
     leaseDurationMs?: number;
     executionTimeoutMs?: number;
@@ -149,6 +152,18 @@ export class ExternalEffectOutbox {
                         if (task.calendar.conflict || task.calendar.readonlyReason) throw new Error('Calendar changes require resolution');
                         if (effect.operation === 'upsert') {
                             if (task.calendar.suppressed) return { superseded: true };
+                            // A fresh two-way pull may modernize a legacy target. Replay
+                            // the current intent, never its old one-way snapshot.
+                            if (!effect.payload.projection && task.calendar.baseline) {
+                                const settings = await readCalendarSyncSettings(this.db, task.calendar.accountId);
+                                if (settings?.enabled) {
+                                    const projection = toCalendarProjection(task, settings.timeZone);
+                                    if (!projection) return { superseded: true };
+                                    effect.payload = { ...effect.payload, type: task.type, projection,
+                                        previousProjection: task.calendar.baseline, calendarId: task.calendar.calendarId,
+                                        canonicalIdentity: task.calendar.canonicalIdentity, generation: task.calendar.generation };
+                                }
+                            }
                             if (effect.payload.projection) {
                                 effect.payload.sentProjection = structuredClone(effect.payload.projection);
                                 effect.payload.projection = rebaseCalendarProjection(effect.payload.projection, effect.payload.previousProjection, task.calendar.baseline);
@@ -186,12 +201,15 @@ export class ExternalEffectOutbox {
     }
 
     private async claim(id: string): Promise<AgentProtocolEffectRow | undefined> {
-        return this.db.transaction('rw', [this.db.agentProtocolEffects, this.db.agentCommandReceipts, this.db.tasks], async () => {
+        return this.db.transaction('rw', [this.db.agentProtocolEffects, this.db.agentCommandReceipts, this.db.tasks, this.db.settings], async () => {
             const effect = await this.db.agentProtocolEffects.get(id);
             if (!effect || !isDue(effect, this.now()) || !this.sessionMatches(effect)) return;
+            if (this.options.canDeliver && !await this.options.canDeliver(effect)) return;
             if (effect.kind === 'calendar') {
                 const task = await this.db.tasks.where('publicId').equals(effect.entityPublicId).first();
                 if (calendarEffectMatchesTask(effect, task) && (task?.calendar?.conflict || task?.calendar?.readonlyReason)) return;
+                if (effect.operation === 'upsert' && !effect.payload.projection && task?.calendar && !task.calendar.baseline
+                    && (await readCalendarSyncSettings(this.db, task.calendar.accountId))?.enabled) return;
             }
             const siblings = await this.db.agentProtocolEffects.where('entityPublicId').equals(effect.entityPublicId).toArray();
             if (siblings.filter(isActive).sort(bySequence)[0]?.id !== id) return;
@@ -212,7 +230,8 @@ export class ExternalEffectOutbox {
     }
 
     private async isCurrent(claimed: AgentProtocolEffectRow, metadataClock?: number) {
-        if (!this.owns(await this.db.agentProtocolEffects.get(claimed.id), claimed) || !this.sessionMatches(claimed)) return false;
+        if (!this.owns(await this.db.agentProtocolEffects.get(claimed.id), claimed) || !this.sessionMatches(claimed)
+            || (this.options.canDeliver && !await this.options.canDeliver(claimed))) return false;
         if (claimed.kind !== 'calendar') return true;
         const task = await this.db.tasks.where('publicId').equals(claimed.entityPublicId).first();
         return calendarEffectMatchesTask(claimed, task) && !task?.calendar?.conflict
@@ -237,7 +256,8 @@ export class ExternalEffectOutbox {
     private async complete(claimed: AgentProtocolEffectRow, execution: ExternalEffectExecutionResult) {
         return this.db.transaction('rw', taskMutationTables(this.db), async () => {
             const current = await this.db.agentProtocolEffects.get(claimed.id);
-            if (!this.owns(current, claimed) || !this.sessionMatches(claimed)) return false;
+            if (!this.owns(current, claimed) || !this.sessionMatches(claimed)
+                || (this.options.canDeliver && !await this.options.canDeliver(claimed))) return false;
             if (current.kind === 'calendar' && !execution.superseded) {
                 const task = await this.db.tasks.where('publicId').equals(current.entityPublicId).first();
                 if (!calendarEffectMatchesTask(current, task) || task?.calendar?.conflict
@@ -322,6 +342,23 @@ export class ExternalEffectOutbox {
             messageId: crypto.randomUUID(), payload, commandReceiptId: effect.commandReceiptId,
             fencingToken: state.receipt.fencingToken, status: 'pending', attempts: 0, createdAt: this.now(), updatedAt: this.now() });
     }
+
+    /** Protocol has no cancelled enum. Obsolete intents are inspectable failures,
+     * explicitly labelled superseded; this never claims an external write succeeded. */
+    async supersedeCalendarEffects(publicId: string, accountId: string): Promise<void> {
+        await this.db.transaction('rw', taskMutationTables(this.db), async () => {
+            const effects = await this.db.agentProtocolEffects.where('entityPublicId').equals(publicId).toArray();
+            for (const effect of effects) {
+                if (effect.kind !== 'calendar' || effect.accountId !== accountId || !isActive(effect)) continue;
+                const retired: AgentProtocolEffectRow = { ...effect, state: 'failed', superseded: true, fencingToken: effect.fencingToken + 1,
+                    leaseOwner: undefined, leaseExpiresAt: undefined, nextAttemptAt: undefined,
+                    lastErrorCode: 'external_effect_failed',
+                    lastErrorMessage: 'Původní záměr byl nahrazen výslovnou volbou při řešení konfliktu; nebyl odeslán.', updatedAt: this.now() };
+                await this.db.agentProtocolEffects.put(retired);
+                await this.queueCommandResult(retired);
+            }
+        });
+    }
 }
 
 type GoogleEffectClient = Pick<GoogleService, 'addToCalendar' | 'deleteFromCalendar' | 'updateGoogleTask'>
@@ -368,9 +405,12 @@ export async function executeGoogleExternalEffect(client: GoogleEffectClient, ef
 /** Unknown destinations are bound only by an explicit mutation/Sync action, never by this background worker. */
 export async function drainGoogleExternalEffects(effectIds?: readonly string[]): Promise<ExternalEffectDrainResult> {
     const { googleService } = await import('./googleService.ts');
+    const authKey = googleService.getAuthStatus().accessToken;
     return new ExternalEffectOutbox(defaultDb, {
         accountId: () => googleService.getAccountId(),
-        canExecute: () => (typeof navigator === 'undefined' || navigator.onLine !== false) && hasUsableAuth(googleService.getAuthStatus()),
+        canExecute: () => (typeof navigator === 'undefined' || navigator.onLine !== false)
+            && googleService.getAuthStatus().accessToken === authKey && hasUsableAuth(googleService.getAuthStatus()),
+        canDeliver: effect => calendarEffectDeliveryAllowed(defaultDb, effect, googleService.getAccountId(), authKey),
         execute: (effect, guard) => executeGoogleExternalEffect(googleService, effect, guard),
     }).drainOnce(effectIds);
 }
@@ -384,7 +424,7 @@ export function summarizeExternalEffects(effects: AgentProtocolEffectRow[], acco
         latestSuccess.set(key, Math.max(latestSuccess.get(key) ?? 0, effect.sequence));
     }
     const pending = effects.filter(isActive);
-    const failed = effects.filter((effect) => effect.state === 'failed'
+    const failed = effects.filter((effect) => effect.state === 'failed' && !effect.superseded
         && (latestSuccess.get(`${effect.entityPublicId}\0${effect.kind}`) ?? 0) <= effect.sequence);
     return {
         pending: pending.length, failed: failed.length,

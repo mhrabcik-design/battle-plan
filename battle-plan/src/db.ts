@@ -303,6 +303,8 @@ interface AgentProtocolEffectRowBase {
     sequence: number;
     accountId?: string;
     state: AgentProtocolEffectState;
+    /** Explicit resolution retired this intent without claiming an external success. */
+    superseded?: boolean;
     attempts: number;
     fencingToken: number;
     leaseOwner?: string;
@@ -319,6 +321,7 @@ export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
         kind: 'calendar';
         operation: 'upsert';
         payload: {
+            automatic?: boolean;
             /** Absent only in durable legacy effects; new effects always include these. */
             type?: Task['type'];
             publicId?: string;
@@ -346,7 +349,7 @@ export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
             reservedEventId: string;
         };
     }
-    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string; calendarId?: string; baseline?: CalendarPublicProjection; etag?: string;
+    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string; automatic?: boolean; calendarId?: string; baseline?: CalendarPublicProjection; etag?: string;
         canonicalIdentity?: string; generation?: number; type?: Task['type']; calendarOrigin?: TaskCalendarMetadata['origin'] } }
     | { kind: 'google_tasks'; operation: 'complete'; payload: { googleTaskId: string; googleListId?: string } }
 );

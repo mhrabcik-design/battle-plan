@@ -31,7 +31,7 @@ function zonedTimestamp(date: string, clock: string, timeZone: string): number |
 
 export type CalendarTaskSchedule = Pick<Task, 'date' | 'deadline' | 'startTime' | 'duration' | 'isAllDay'>;
 
-export function calendarProjectionToTaskSchedule(projection: CalendarPublicProjection, type: 'task' | 'meeting'): CalendarTaskSchedule | null {
+export function calendarProjectionToTaskSchedule(projection: CalendarPublicProjection, type: 'task' | 'meeting', displayTimeZone?: string): CalendarTaskSchedule | null {
     const timing = projection.timing;
     if (timing.kind === 'all-day') {
         if (!validCalendarDate(timing.startDate) || !validCalendarDate(timing.endDate) || timing.endDate <= timing.startDate) return null;
@@ -40,14 +40,14 @@ export function calendarProjectionToTaskSchedule(projection: CalendarPublicProje
     const start = Date.parse(timing.start), end = Date.parse(timing.end);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
     try {
-        const semantic = zonedParts(type === 'task' ? end : start, timing.timeZone);
+        const semantic = zonedParts(type === 'task' ? end : start, displayTimeZone ?? timing.timeZone);
         return { date: semantic.date, deadline: semantic.date, startTime: semantic.time, duration: (end - start) / 60_000, isAllDay: false };
     } catch { return null; }
 }
 
 function unchangedTiming(task: Task, timing: CalendarTiming): boolean {
     if (task.type !== 'task' && task.type !== 'meeting') return false;
-    const schedule = calendarProjectionToTaskSchedule({ title: '', description: '', timing }, task.type);
+    const schedule = calendarProjectionToTaskSchedule({ title: '', description: '', timing }, task.type, task.calendar?.displayTimeZone);
     const date = task.type === 'task' ? task.deadline || task.date : task.date;
     return Boolean(schedule && (task.type === 'task' ? schedule.deadline : schedule.date) === date
         && Boolean(schedule.isAllDay) === Boolean(task.isAllDay)
@@ -55,7 +55,7 @@ function unchangedTiming(task: Task, timing: CalendarTiming): boolean {
 }
 
 /** Task.startTime means END; meeting.startTime means START. No viewport clipping/default dates. */
-export function toCalendarProjection(task: Task, timeZone = task.calendar?.timing?.kind === 'timed' ? task.calendar.timing.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone): CalendarPublicProjection | null {
+export function toCalendarProjection(task: Task, timeZone = task.calendar?.displayTimeZone ?? (task.calendar?.timing?.kind === 'timed' ? task.calendar.timing.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone)): CalendarPublicProjection | null {
     if ((task.type !== 'task' && task.type !== 'meeting') || (task.type === 'task' && task.calendarScheduleExplicit === false)) return null;
     const exact = task.calendar?.timing;
     if (exact && unchangedTiming(task, exact)) return { title: task.title, description: task.description ?? '', timing: structuredClone(exact) };

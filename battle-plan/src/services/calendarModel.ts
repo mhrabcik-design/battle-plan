@@ -33,9 +33,13 @@ export interface TaskCalendarMetadata {
     baseline?: CalendarPublicProjection;
     etag?: string;
     timing?: CalendarTiming;
+    /** The planner's civil clock; timing retains the original event zone. */
+    displayTimeZone?: string;
     readonlyReason?: CalendarReadonlyReason;
     htmlLink?: string;
     recurringEventId?: string;
+    /** Keep the source task, but display expanded occurrences instead of its master block. */
+    recurringMaster?: boolean;
     originalStartTime?: GoogleCalendarDateTime;
     eventType?: string;
     suppressed?: boolean;
@@ -73,6 +77,7 @@ export interface CalendarSyncSettings {
     enabled: boolean;
     timeZone: string;
     enrolledPublicIds: string[];
+    range?: { startDate: string; endDate: string };
     activatedAt?: number;
     lastCheckedAt?: number;
 }

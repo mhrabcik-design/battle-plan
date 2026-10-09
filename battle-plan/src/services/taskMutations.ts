@@ -43,7 +43,7 @@ export type TaskDraft = Omit<Task, 'createdAt' | 'updatedAt' | 'protocolRevision
 };
 
 export type TaskEffectRequest =
-    | { kind: 'calendar'; operation: 'upsert' | 'delete' }
+    | { kind: 'calendar'; operation: 'upsert' | 'delete'; automatic?: boolean }
     | { kind: 'google_tasks'; operation: 'complete' };
 
 export function calendarEffectsForLocalTask(
@@ -193,6 +193,7 @@ function effectRows(
             const reservedEventId = task.reservedGoogleEventId!;
             const projection = toCalendarProjection(task, timeZone);
             const payload: Extract<AgentProtocolEffectRow, { kind: 'calendar'; operation: 'upsert' }>['payload'] = {
+                ...(request.automatic ? { automatic: true } : {}),
                 type: task.type,
                 publicId: task.publicId,
                 canonicalIdentity: canonicalCalendarIdentity(task),
@@ -223,6 +224,7 @@ function effectRows(
         }
         if (request.kind === 'calendar' && request.operation === 'delete' && (task.googleEventId || task.reservedGoogleEventId)) {
             return [{ ...base, kind: 'calendar', operation: 'delete', payload: {
+                ...(request.automatic ? { automatic: true } : {}),
                 eventId: (task.googleEventId || task.reservedGoogleEventId)!,
                 ...(task.calendar ? { calendarId: task.calendar.calendarId, baseline: task.calendar.baseline, etag: task.calendar.etag } : {}),
             } }];
@@ -389,7 +391,8 @@ export class TaskMutationService {
         const context = validateContext(request.context);
         return this.db.transaction('rw', taskMutationTables(this.db), async () => {
             const task = await this.findExisting(request);
-            if (!task || task.isDeleted) return { status: 'not_found' } as const;
+            if (!task || (task.isDeleted && (!request.effects.length
+                || request.effects.some(effect => effect.kind !== 'calendar' || effect.operation !== 'delete')))) return { status: 'not_found' } as const;
             if (context.origin === 'google' || context.origin === 'drive') return { status: 'queued', effectIds: [] } as const;
             assertCalendarWritable(task, context.origin);
             if (isStale(task, request.expectedRevision)) return { status: 'stale', currentRevision: currentRevision(task) } as const;
@@ -517,11 +520,15 @@ export class TaskMutationService {
         const settings = await readCalendarSyncSettings(this.db, next.calendar?.accountId ?? next.googleAccountId ?? context.googleAccountId);
         const authored = operation !== 'import' && context.origin !== 'drive' && context.origin !== 'google';
         let requests = authored ? [...requestedEffects] : [];
+        // Existing editor/voice callers pass linked Calendar effects on every edit.
+        // A saved opt-out pauses those authored intents; explicit Sync uses queueEffects.
+        if (authored && settings?.enabled === false) requests = requests.filter(request => request.kind !== 'calendar');
         if (authored && settings?.enabled && !next.googleId && !next.calendar?.suppressed && !next.calendar?.conflict) {
+            requests = requests.map(request => request.kind === 'calendar' ? { ...request, automatic: true } : request);
             const calendarOperation = next.isDeleted ? 'delete' : 'upsert';
             if ((next.isDeleted ? Boolean(next.googleEventId || next.reservedGoogleEventId) : Boolean(toCalendarProjection(next, settings.timeZone)))
                 && !requests.some(request => request.kind === 'calendar' && request.operation === calendarOperation)) {
-                requests.push({ kind: 'calendar', operation: calendarOperation });
+                requests.push({ kind: 'calendar', operation: calendarOperation, automatic: true });
             }
         }
         if (next.calendar?.suppressed || next.calendar?.conflict) requests = requests.filter(request => request.kind !== 'calendar');

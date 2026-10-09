@@ -108,7 +108,7 @@ export function calendarAcknowledgedTask(task: Task, ack: CalendarWriteAcknowled
         for (const field of CALENDAR_SHARED_FIELDS) {
             if (!calendarFieldEqual(field, local, ack.sentProjection) || calendarFieldEqual(field, local, ack.projection)) continue;
             if (field === 'timing') {
-                const schedule = calendarProjectionToTaskSchedule(ack.projection, task.type);
+                const schedule = calendarProjectionToTaskSchedule(ack.projection, task.type, task.calendar?.displayTimeZone);
                 if (!schedule) continue;
                 if (task.type === 'task' && ack.projection.timing.kind === 'all-day') schedule.duration = task.duration;
                 next = { ...next, ...schedule };
