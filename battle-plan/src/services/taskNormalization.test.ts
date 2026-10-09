@@ -20,6 +20,7 @@ test('undated tasks get Friday of the local Monday–Sunday week', () => {
         assert.equal(saved.deadline, expected);
         assert.equal(saved.date, expected);
         assert.equal(saved.startTime, '10:00');
+        assert.equal(saved.calendarScheduleExplicit, false, 'Friday fallback is visibility, not an authored Calendar plan');
         assert.equal(task.deadline, '');
         assert.equal(now.getTime(), timestamp);
     }
@@ -37,7 +38,7 @@ test('dates are preserved, mirrored or repaired without scheduling thoughts and 
         assert.equal(saved.deadline, '2026-09-18');
     }
     const scheduled = { type: 'task' as const, date: '2026-09-08', deadline: '2026-09-18' };
-    assert.deepEqual(ensureTaskDeadline(scheduled, now), scheduled);
+    assert.deepEqual(ensureTaskDeadline(scheduled, now), { ...scheduled, calendarScheduleExplicit: true });
     for (const invalid of [undefined, '', ' ', 'tomorrow', '2026-02-30']) {
         assert.equal(ensureTaskDeadline({ type: 'task', deadline: invalid }, now).deadline, '2026-09-11');
     }

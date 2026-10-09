@@ -10,13 +10,14 @@ const validTaskDate = (value: unknown): value is string => (
 /** Keep saved tasks visible in the Monday–Sunday week, including weekend capture. */
 export function ensureTaskDeadline<T extends Partial<Task>>(
     task: T, now = new Date(),
-): Omit<T, 'date' | 'deadline'> & Pick<Task, 'date' | 'deadline'> {
+): Omit<T, 'date' | 'deadline'> & Pick<Task, 'date' | 'deadline' | 'calendarScheduleExplicit'> {
     if (task.type !== 'task') return task;
     const friday = new Date(now);
     friday.setDate(friday.getDate() + 5 - (friday.getDay() || 7));
     const deadline = validTaskDate(task.deadline) ? task.deadline
         : validTaskDate(task.date) ? task.date : toLocalIsoDate(friday);
-    return { ...task, deadline, date: validTaskDate(task.date) ? task.date : deadline };
+    const calendarScheduleExplicit = task.calendarScheduleExplicit ?? (validTaskDate(task.deadline) || validTaskDate(task.date));
+    return { ...task, deadline, date: validTaskDate(task.date) ? task.date : deadline, calendarScheduleExplicit };
 }
 
 // Type and clamp helpers extracted from semanticEngine.ts so the same

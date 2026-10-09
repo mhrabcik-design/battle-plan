@@ -4,6 +4,7 @@ import { filterTaskBackupSettings } from '../utils/taskBackupSettings.ts';
 import { mergeTaskBackupSnapshots } from './taskBackupSnapshots.ts';
 import { canonicalBackupJson } from '../utils/canonicalBackupJson.ts';
 import { googleService } from './googleService.ts';
+import { projectTasksForCalendarAccount } from './calendarMetadata.ts';
 
 const TASK_BACKUP_FILENAME = 'battle_plan_data.json';
 const TASK_SNAPSHOT_FILENAME = 'battle_plan_task_snapshot_v2.json';
@@ -38,7 +39,7 @@ export class TaskDriveBackup {
         const initialized = await this.drive.init({ createFolder: true });
         if (!initialized) return null;
 
-        const portableData = { tasks: structuredClone(data.tasks ?? []), settings: filterTaskBackupSettings(data.settings) };
+        const portableData = { tasks: projectTasksForCalendarAccount(data.tasks ?? [], googleService.getAccountId()), settings: filterTaskBackupSettings(data.settings) };
         const key = canonicalBackupJson(portableData);
         const scope = canonicalBackupJson([googleService.getAccountId(), this.drive.currentFolderId]);
         let publication = this.lastPublication?.key === key && this.lastPublication.scope === scope

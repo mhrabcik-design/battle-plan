@@ -1,4 +1,5 @@
 import Dexie, { type Table, type Transaction } from 'dexie';
+import type { CalendarPublicProjection, TaskCalendarMetadata } from './services/calendarModel.ts';
 import { reconcileProjectIdentities } from './utils/projectIdentityReconciliation.ts';
 import { createLegacyWorkLogSyncId } from './utils/workLogSyncIdentity.ts';
 import type {
@@ -45,6 +46,9 @@ export interface Task {
     googleId?: string;
     googleListId?: string;
     googleAccountId?: string;
+    calendar?: TaskCalendarMetadata;
+    /** False when deadline/date were filled only for planner visibility. */
+    calendarScheduleExplicit?: boolean;
     /** Durable sequence allocator, retained even after old effects are pruned. */
     effectSequence?: number;
     source?: 'user' | 'agent'; // attribution: which surface produced this row
@@ -315,6 +319,16 @@ export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
         kind: 'calendar';
         operation: 'upsert';
         payload: {
+            /** Absent only in durable legacy effects; new effects always include these. */
+            type?: Task['type'];
+            publicId?: string;
+            canonicalIdentity?: string;
+            calendarId?: string;
+            generation?: number;
+            projection?: CalendarPublicProjection;
+            previousProjection?: CalendarPublicProjection;
+            baseline?: CalendarPublicProjection;
+            etag?: string;
             title: string;
             description?: string;
             internalNotes?: string;
@@ -329,7 +343,7 @@ export type AgentProtocolEffectRow = AgentProtocolEffectRowBase & (
             reservedEventId: string;
         };
     }
-    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string } }
+    | { kind: 'calendar'; operation: 'delete'; payload: { eventId: string; calendarId?: string; baseline?: CalendarPublicProjection; etag?: string } }
     | { kind: 'google_tasks'; operation: 'complete'; payload: { googleTaskId: string; googleListId?: string } }
 );
 

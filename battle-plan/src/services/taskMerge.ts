@@ -47,6 +47,7 @@ export async function mergeTasksFromDrive(tasks: Task[]): Promise<boolean> {
                 context: newTaskMutationContext('drive'),
             });
             if (result.status === 'applied') changed = true;
+            else if (result.status === 'unchanged' && result.metadataChanged) changed = true;
             else if (result.status !== 'unchanged') throw new Error(`Task import failed: ${result.status}`);
         }
     });

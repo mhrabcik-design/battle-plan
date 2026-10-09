@@ -17,6 +17,16 @@ test('revision covers all payload fields and settings without depending on array
     assert.notEqual(taskBackupRevision(rows, [{ id: 'a', value: 'changed' }, settings[0]]), before);
 });
 
+test('account-scoped observer revision ignores excluded imports and foreign pairing changes', () => {
+    const calendar = { accountId: 'a', calendarId: 'primary', eventId: 'event', canonicalIdentity: 'public:a', origin: 'google' as const, generation: 0, metadataUpdatedAt: 1 };
+    const remote = { ...task(1), calendar };
+    const local = { ...task(2), calendar: { ...calendar, origin: 'local' as const } };
+    const revision = taskBackupRevision([remote, local], [], 'b');
+    assert.equal(taskBackupRevision([{ ...remote, title: 'Foreign change' }, { ...local, calendar: { ...local.calendar, etag: 'new-etag' } }], [], 'b'), revision);
+    assert.notEqual(taskBackupRevision([remote, local], [], 'a'), revision);
+    assert.notEqual(taskBackupRevision([remote, { ...local, title: 'Local change' }], [], 'b'), revision);
+});
+
 test('production live query observes task changes while no task list is mounted and observes settings', async () => {
     await db.tasks.clear();
     await db.settings.clear();

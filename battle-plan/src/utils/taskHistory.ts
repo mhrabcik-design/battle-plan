@@ -7,5 +7,6 @@ export const isTaskVisibleInWeek = (task: Task, start: string, end: string): boo
 };
 
 export const isTaskCleanupCandidate = (task: Task, cutoff: number): boolean => {
-    return !!task.isDeleted && (task.updatedAt || task.createdAt) < cutoff;
+    return !!task.isDeleted && !task.calendar && !task.googleEventId && !task.reservedGoogleEventId
+        && (task.updatedAt || task.createdAt) < cutoff;
 };

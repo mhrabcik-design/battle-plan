@@ -18,6 +18,10 @@ import {
     calculateProtocolRevisionId,
     validateEventBatchPayloadContract,
 } from './agentProtocol/validation.ts';
+import { canonicalCalendarIdentity, deterministicCalendarEventId, toCalendarProjection, validCalendarDate } from './calendarMapping.ts';
+import { readCalendarSyncSettings } from './calendarSettings.ts';
+import { applyCalendarPairing, mergeCalendarMetadata } from './calendarMetadata.ts';
+import type { CalendarPublicProjection, CalendarSyncSettings } from './calendarModel.ts';
 
 export const TASK_EVENT_STREAM_ID = 'battleplan-events';
 export const TASK_EVENT_PRODUCER_ID = 'battleplan-producer';
@@ -63,7 +67,7 @@ export type TaskMutationApplied = {
 export type TaskMutationResult = TaskMutationApplied
     | { status: 'stale'; currentRevision: string | null }
     | { status: 'not_found' }
-    | { status: 'unchanged'; task: Task }
+    | { status: 'unchanged'; task: Task; metadataChanged?: boolean }
     | { status: 'expired' | 'fence_lost' };
 
 export interface TaskMutationCommandContext {
@@ -166,6 +170,8 @@ function effectRows(
     requests: readonly TaskEffectRequest[],
     now: number,
     uuid: () => string,
+    previousProjection?: CalendarPublicProjection,
+    timeZone?: string,
 ): AgentProtocolEffectRow[] {
     let sequence = task.effectSequence ?? 0;
     return requests.flatMap((request): AgentProtocolEffectRow[] => {
@@ -184,7 +190,16 @@ function effectRows(
         };
         if (request.kind === 'calendar' && request.operation === 'upsert') {
             const reservedEventId = task.reservedGoogleEventId!;
+            const projection = toCalendarProjection(task, timeZone);
             const payload: Extract<AgentProtocolEffectRow, { kind: 'calendar'; operation: 'upsert' }>['payload'] = {
+                type: task.type,
+                publicId: task.publicId,
+                canonicalIdentity: canonicalCalendarIdentity(task),
+                ...(task.calendar ? { calendarId: task.calendar.calendarId, generation: task.calendar.generation } : {}),
+                ...(projection ? { projection } : {}),
+                ...(previousProjection ? { previousProjection: structuredClone(previousProjection) } : {}),
+                ...(task.calendar?.baseline ? { baseline: structuredClone(task.calendar.baseline) } : {}),
+                ...(task.calendar?.etag ? { etag: task.calendar.etag } : {}),
                 title: task.title,
                 status: task.status,
                 ...(task.internalNotes !== undefined ? { internalNotes: task.internalNotes } : {}),
@@ -206,7 +221,10 @@ function effectRows(
             }];
         }
         if (request.kind === 'calendar' && request.operation === 'delete' && (task.googleEventId || task.reservedGoogleEventId)) {
-            return [{ ...base, kind: 'calendar', operation: 'delete', payload: { eventId: (task.googleEventId || task.reservedGoogleEventId)! } }];
+            return [{ ...base, kind: 'calendar', operation: 'delete', payload: {
+                eventId: (task.googleEventId || task.reservedGoogleEventId)!,
+                ...(task.calendar ? { calendarId: task.calendar.calendarId, baseline: task.calendar.baseline, etag: task.calendar.etag } : {}),
+            } }];
         }
         if (request.kind === 'google_tasks' && task.googleId) {
             return [{
@@ -222,15 +240,19 @@ function effectRows(
 
 /** Include these in outer read/write transactions that compose a mutation. */
 export function taskMutationTables(db: BattlePlanDB): Table[] {
-    return [db.tasks, db.agentEventStreams, db.agentProtocolEvents, db.agentProtocolOutbox,
+    return [db.tasks, db.settings, db.agentEventStreams, db.agentProtocolEvents, db.agentProtocolOutbox,
         db.agentProtocolEffects, db.agentCommandReceipts, db.agentCommandReceiptHistory];
 }
 
 function editableFields(changes: Partial<Task>): Partial<Task> {
     const copy = copyTaskFields(changes);
     for (const field of ['googleEventId', 'reservedGoogleEventId', 'googleId', 'googleListId', 'googleAccountId',
-        'suggestionSubjectId', 'suggestionOccurrenceKey'] as const) delete copy[field];
+        'suggestionSubjectId', 'suggestionOccurrenceKey', 'calendar', 'calendarScheduleExplicit'] as const) delete copy[field];
     return copy;
+}
+
+export function assertCalendarWritable(task: Task, origin: TaskMutationOrigin): void {
+    if (task.calendar?.readonlyReason && origin !== 'google' && origin !== 'drive') throw new Error('calendar_task_readonly');
 }
 
 export class TaskMutationService {
@@ -273,8 +295,9 @@ export class TaskMutationService {
             createdAt: now,
             updatedAt: now,
         };
+        if (request.context.origin !== 'google' && request.context.origin !== 'drive') delete task.calendar;
         return this.db.transaction('rw', taskMutationTables(this.db), async () => {
-            const plan = this.plan('create', undefined, task, request.context, request.effects, now);
+            const plan = await this.plan('create', undefined, task, request.context, request.effects, now);
             return this.commit(plan, request.command);
         });
     }
@@ -313,10 +336,24 @@ export class TaskMutationService {
                 ? await this.db.tasks.get(request.localId)
                 : request.task.publicId ? await this.db.tasks.where('publicId').equals(request.task.publicId).first() : undefined;
             if (request.localId != null && !existing) return { status: 'not_found' };
+            if (existing) assertCalendarWritable(existing, request.context.origin);
             if (isStale(existing, request.expectedRevision)) return { status: 'stale', currentRevision: currentRevision(existing) };
             const remoteUpdated = request.task.updatedAt || request.task.createdAt || 0;
             const localUpdated = existing ? (existing.updatedAt || existing.createdAt || 0) : -1;
-            if (existing && remoteUpdated <= localUpdated) return { status: 'unchanged', task: existing };
+            if (existing && !existing.calendar && request.task.calendar) {
+                const target = existing.googleEventId ?? existing.reservedGoogleEventId;
+                if ((target && target !== request.task.calendar.eventId)
+                    || (existing.googleAccountId && existing.googleAccountId !== request.task.calendar.accountId)) throw new Error('Konflikt Calendar pairing s lokální frontou.');
+            }
+            const calendar = mergeCalendarMetadata([existing?.calendar, request.task.calendar]);
+            if (existing && remoteUpdated <= localUpdated) {
+                if (JSON.stringify(calendar) !== JSON.stringify(existing.calendar)) {
+                    const updated = calendar ? applyCalendarPairing(existing, calendar, request.task.googleEventId) : { ...existing, calendar };
+                    await this.db.tasks.put(updated);
+                    return { status: 'unchanged', task: updated, metadataChanged: true };
+                }
+                return { status: 'unchanged', task: existing };
+            }
             const now = this.readNow();
             const task: Task = {
                 ...copyTaskFields(request.task),
@@ -325,6 +362,7 @@ export class TaskMutationService {
                 title: request.task.title, type: request.task.type, urgency: request.task.urgency, status: request.task.status,
                 createdAt: existing?.createdAt ?? request.task.createdAt ?? now,
                 updatedAt: remoteUpdated || now,
+                ...(calendar ? { calendar } : {}),
             };
             if (existing) {
                 // An import may fill missing legacy links, but cannot replace a
@@ -337,7 +375,8 @@ export class TaskMutationService {
                     if (existing[field] !== undefined) Object.assign(task, { [field]: existing[field] });
                 }
             }
-            return this.commit(this.plan('import', existing, task, request.context, [], now));
+            const pairedTask = calendar ? applyCalendarPairing(task, calendar, request.task.googleEventId) : task;
+            return this.commit(await this.plan('import', existing, pairedTask, request.context, [], now));
         });
     }
 
@@ -350,12 +389,24 @@ export class TaskMutationService {
         return this.db.transaction('rw', taskMutationTables(this.db), async () => {
             const task = await this.findExisting(request);
             if (!task || task.isDeleted) return { status: 'not_found' } as const;
+            if (context.origin === 'google' || context.origin === 'drive') return { status: 'queued', effectIds: [] } as const;
+            assertCalendarWritable(task, context.origin);
             if (isStale(task, request.expectedRevision)) return { status: 'stale', currentRevision: currentRevision(task) } as const;
-            this.reserveTarget(task, context, request.effects);
+            if (task.calendar?.suppressed && request.effects.some(effect => effect.kind === 'calendar' && effect.operation === 'upsert')) {
+                task.calendar = { ...task.calendar, generation: task.calendar.generation + 1, suppressed: false, metadataUpdatedAt: this.readNow() };
+                delete task.calendar.baseline;
+                delete task.calendar.etag;
+                delete task.calendar.conflict;
+                task.calendar.eventId = deterministicCalendarEventId(task, task.calendar.accountId, task.calendar.calendarId, task.calendar.generation);
+                task.reservedGoogleEventId = task.calendar.eventId;
+                delete task.googleEventId;
+            }
+            const settings = await readCalendarSyncSettings(this.db, task.calendar?.accountId ?? task.googleAccountId ?? context.googleAccountId);
+            this.reserveTarget(task, context, request.effects, settings);
             await this.bindPendingEffects(task);
             const active = (await this.db.agentProtocolEffects.where('entityPublicId').equals(task.publicId!).toArray())
                 .filter((effect) => ['pending', 'retry_scheduled', 'running'].includes(effect.state));
-            const desired = effectRows(task, context, request.effects, this.readNow(), this.createUuid);
+            const desired = effectRows(task, context, request.effects, this.readNow(), this.createUuid, task.calendar?.baseline, settings?.timeZone);
             const effectIds: string[] = [];
             const additions: AgentProtocolEffectRow[] = [];
             for (const effect of desired) {
@@ -399,6 +450,7 @@ export class TaskMutationService {
         return this.db.transaction('rw', taskMutationTables(this.db), async () => {
             const existing = await this.findExisting(request);
             if (!existing || existing.isDeleted) return request.command ? this.finalizeStale(request.command, null) : { status: 'not_found' };
+            assertCalendarWritable(existing, request.context.origin);
             if (isStale(existing, request.expectedRevision)) {
                 return request.command
                     ? this.finalizeStale(request.command, currentRevision(existing))
@@ -414,7 +466,11 @@ export class TaskMutationService {
                 createdAt: existing.createdAt,
                 updatedAt: now,
             };
-            return this.commit(this.plan(operation, existing, task, request.context, request.effects, now), request.command);
+            const scheduleChanged = (['date', 'deadline', 'startTime', 'isAllDay'] as const)
+                .some(field => field in safeChanges && safeChanges[field] !== existing[field]);
+            if ((scheduleChanged || safeChanges.calendarScheduleExplicit === true)
+                && (validCalendarDate(task.deadline) || validCalendarDate(task.date))) task.calendarScheduleExplicit = true;
+            return this.commit(await this.plan(operation, existing, task, request.context, request.effects, now), request.command);
         });
     }
 
@@ -427,12 +483,17 @@ export class TaskMutationService {
         return undefined;
     }
 
-    private reserveTarget(task: Task, context: TaskMutationContext, effects: readonly TaskEffectRequest[]): void {
+    private reserveTarget(task: Task, context: TaskMutationContext, effects: readonly TaskEffectRequest[], settings?: CalendarSyncSettings): void {
         if (!effects.length) return;
-        task.googleAccountId ??= context.googleAccountId;
+        task.googleAccountId ??= task.calendar?.accountId ?? context.googleAccountId ?? settings?.accountId;
         if (effects.some((effect) => effect.kind === 'calendar' && effect.operation === 'upsert')) {
-            task.reservedGoogleEventId ??= task.googleEventId
-                ?? `bp${this.createUuid().replace(/^urn:uuid:/i, '').replaceAll('-', '')}`;
+            task.reservedGoogleEventId ??= task.googleEventId ?? task.calendar?.eventId
+                ?? (task.googleAccountId ? deterministicCalendarEventId(task, task.googleAccountId, settings?.calendarId ?? 'primary', task.calendar?.generation ?? 0)
+                    : `bp${this.createUuid().replace(/^urn:uuid:/i, '').replaceAll('-', '')}`);
+            if (!task.calendar && task.googleAccountId && toCalendarProjection(task, settings?.timeZone)) {
+                task.calendar = { accountId: task.googleAccountId, calendarId: settings?.calendarId ?? 'primary', eventId: task.reservedGoogleEventId,
+                    canonicalIdentity: canonicalCalendarIdentity(task), origin: 'local', generation: 0, metadataUpdatedAt: this.readNow() };
+            }
         }
     }
 
@@ -443,16 +504,27 @@ export class TaskMutationService {
         });
     }
 
-    private plan(
+    private async plan(
         operation: MutationPlan['operation'],
         existing: Task | undefined,
         next: Task,
         rawContext: TaskMutationContext,
         requestedEffects: readonly TaskEffectRequest[],
         now: number,
-    ): MutationPlan {
+    ): Promise<MutationPlan> {
         const context = validateContext(rawContext);
-        this.reserveTarget(next, context, requestedEffects);
+        const settings = await readCalendarSyncSettings(this.db, next.calendar?.accountId ?? next.googleAccountId ?? context.googleAccountId);
+        const authored = operation !== 'import' && context.origin !== 'drive' && context.origin !== 'google';
+        let requests = authored ? [...requestedEffects] : [];
+        if (authored && settings?.enabled && !next.googleId && !next.calendar?.suppressed && !next.calendar?.conflict) {
+            const calendarOperation = next.isDeleted ? 'delete' : 'upsert';
+            if ((next.isDeleted ? Boolean(next.googleEventId || next.reservedGoogleEventId) : Boolean(toCalendarProjection(next, settings.timeZone)))
+                && !requests.some(request => request.kind === 'calendar' && request.operation === calendarOperation)) {
+                requests.push({ kind: 'calendar', operation: calendarOperation });
+            }
+        }
+        if (next.calendar?.suppressed || next.calendar?.conflict) requests = requests.filter(request => request.kind !== 'calendar');
+        this.reserveTarget(next, context, requests, settings);
         const projection = projectTaskForProtocol(next);
         const baseRevision = currentRevision(existing);
         const revision: ProtocolRevision = {
@@ -468,7 +540,7 @@ export class TaskMutationService {
             mutation_id: context.mutationId,
         };
         const task = { ...next, protocolRevision: revision };
-        const effects = effectRows(task, context, requestedEffects, now, this.createUuid);
+        const effects = effectRows(task, context, requests, now, this.createUuid, existing ? toCalendarProjection(existing, settings?.timeZone) ?? undefined : undefined, settings?.timeZone);
         if (effects.length) task.effectSequence = effects.at(-1)!.sequence;
         return {
             operation,
@@ -535,8 +607,8 @@ export class TaskMutationService {
         const current = await this.assertPlanStillCurrent(plan);
         const task = structuredClone(plan.task);
         if (plan.current && current) {
-            for (const field of ['googleEventId', 'googleId', 'googleListId'] as const) {
-                if (current[field] !== plan.current[field]) task[field] = current[field];
+            for (const field of ['googleEventId', 'googleId', 'googleListId', 'calendar'] as const) {
+                if (JSON.stringify(current[field]) !== JSON.stringify(plan.current[field])) Object.assign(task, { [field]: current[field] });
             }
         }
         await this.bindPendingEffects(task);

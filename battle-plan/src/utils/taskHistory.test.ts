@@ -29,4 +29,5 @@ test('cleanup retains completed rows and selects only stale tombstones', () => {
     assert.equal(isTaskCleanupCandidate(row({ status: 'completed', updatedAt: 10 }), cutoff), false);
     assert.equal(isTaskCleanupCandidate(row({ isDeleted: true, updatedAt: 10 }), cutoff), true);
     assert.equal(isTaskCleanupCandidate(row({ isDeleted: true, updatedAt: 2_000 }), cutoff), false);
+    assert.equal(isTaskCleanupCandidate(row({ isDeleted: true, updatedAt: 10, reservedGoogleEventId: 'pending-delete' }), cutoff), false);
 });

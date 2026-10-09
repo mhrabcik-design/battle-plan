@@ -6,6 +6,7 @@ import { getErrorMessage } from '../utils/errors';
 import { readTaskBackupSnapshot } from '../utils/taskBackupRevision.ts';
 import type { SyncHealth } from './useSyncDiagnostics';
 import { createTaskBackupCoordinator } from './taskBackupCoordinator.ts';
+import { googleService } from '../services/googleService';
 
 interface UseTaskBackupArgs {
     googleAuth: GoogleAuthStatus;
@@ -17,7 +18,8 @@ interface UseTaskBackupArgs {
 
 export function useTaskBackup({ googleAuth, ready, setLastSync, addLog, updateSyncHealth }: UseTaskBackupArgs) {
     const enabled = hasUsableAuth(googleAuth) && ready;
-    const snapshot = useLiveQuery(readTaskBackupSnapshot, []);
+    const accountId = googleService.getAccountId();
+    const snapshot = useLiveQuery(() => readTaskBackupSnapshot(accountId), [accountId]);
     const coordinator = useRef<ReturnType<typeof createTaskBackupCoordinator> | null>(null);
 
     useEffect(() => {

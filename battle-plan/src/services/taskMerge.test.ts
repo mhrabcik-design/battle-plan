@@ -29,6 +29,36 @@ test('Drive IDs never replace unrelated local identities; matching publicId reta
     assert.equal((await db.tasks.get(remote.id))?.title, 'Removed');
 });
 
+test('metadata-only Drive recovery preserves local content and domain revision, including suppression generation', async () => {
+    await db.tasks.clear();
+    const local = task({ publicId: 'task_calendar', title: 'Local content', internalNotes: 'Keep private', updatedAt: 50 });
+    await db.tasks.add(local);
+    const calendar = { accountId: 'a', calendarId: 'primary', eventId: 'e0', canonicalIdentity: 'public:task_calendar', origin: 'local' as const, generation: 0, metadataUpdatedAt: 1 };
+    assert.equal(await mergeTasksFromDrive([{ ...local, title: 'Stale cloud', updatedAt: 10, calendar }]), true);
+    assert.equal((await db.tasks.toArray())[0].title, 'Local content');
+    assert.equal(await db.agentProtocolEvents.count(), 0);
+    const suppressed = { ...calendar, suppressed: true, metadataUpdatedAt: 2 };
+    assert.equal(await mergeTasksFromDrive([{ ...local, calendar: suppressed }]), true);
+    const restored = { ...calendar, eventId: 'e1', generation: 1, metadataUpdatedAt: 3 };
+    assert.equal(await mergeTasksFromDrive([{ ...local, calendar: restored }]), true);
+    assert.equal(await mergeTasksFromDrive([{ ...local, calendar: suppressed }]), false);
+    const result = (await db.tasks.toArray())[0];
+    assert.equal(result.calendar?.eventId, 'e1');
+    assert.equal(result.calendar?.suppressed, undefined);
+    assert.equal(result.internalNotes, 'Keep private');
+    assert.equal(result.updatedAt, 50);
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+});
+
+test('Drive rejects a conflicting portable Calendar target before replacing a local legacy reservation', async () => {
+    await db.tasks.clear();
+    const local = task({ publicId: 'task_reserved', reservedGoogleEventId: 'local-target', googleAccountId: 'a' });
+    await db.tasks.add(local);
+    await assert.rejects(mergeTasksFromDrive([{ ...local, calendar: { accountId: 'a', calendarId: 'primary', eventId: 'other-target', canonicalIdentity: 'public:task_reserved', origin: 'local', generation: 0, metadataUpdatedAt: 2 } }]), /Calendar pairing/);
+    assert.equal((await db.tasks.toArray())[0].reservedGoogleEventId, 'local-target');
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+});
+
 test('legacy snapshots cannot overwrite an identified row and repeated import is deterministic', async () => {
     await db.tasks.clear();
     await db.tasks.add(task({ id: 1, publicId: 'task_local', title: 'Local' }));
