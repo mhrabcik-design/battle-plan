@@ -12,6 +12,7 @@ import { calendarEffectsForLocalTask, newTaskMutationContext, taskMutations, tas
 import { drainGoogleExternalEffects } from '../services/externalEffectOutbox.ts';
 import { buildTaskEmail } from '../utils/taskSharing.ts';
 import { prepareCalendarInvitation } from '../services/calendarInvitation.ts';
+import { CALENDAR_READONLY_NOTICE, isCalendarReadonly, calendarTaskOrigin } from '../utils/calendarPresentation.ts';
 
 const SYNC_PENDING_MSG = 'Změna je uložená lokálně, ale synchronizace s Googlem zatím není dokončená.';
 
@@ -28,6 +29,20 @@ async function deliverEffects(effectIds: readonly string[]): Promise<boolean> {
 }
 
 const uiMutationContext = () => newTaskMutationContext('ui', undefined, googleService.getAccountId() ?? undefined);
+
+async function runWritableCommand<T>(task: UnifiedTask | null, rejected: T, operation: () => Promise<T>): Promise<T> {
+  const current = task?.id && !task.isGoogleTask ? await db.tasks.get(task.id) : undefined;
+  if (task && (isCalendarReadonly(task) || current && isCalendarReadonly(current))) {
+    alert(CALENDAR_READONLY_NOTICE);
+    return rejected;
+  }
+  try { return await operation(); } catch (error) {
+    // The authoritative mutation boundary may observe a fresh import after our read.
+    if (!(error instanceof Error) || error.message !== 'calendar_task_readonly') throw error;
+    alert(CALENDAR_READONLY_NOTICE);
+    return rejected;
+  }
+}
 
 interface UseTaskCommandsArgs {
   googleAuth: GoogleAuthStatus;
@@ -170,7 +185,7 @@ export function useTaskCommands({
     scheduleBusyRef.current = true;
     setIsScheduleBusy(true);
     try {
-      const restored = await persistRescheduleTask(lastScheduleChange.after, getSchedule(lastScheduleChange.before), lastScheduleChange.after);
+      const restored = await runWritableCommand(lastScheduleChange.after, null, () => persistRescheduleTask(lastScheduleChange.after, getSchedule(lastScheduleChange.before), lastScheduleChange.after));
       if (restored) setLastScheduleChange(null);
       else alert('Změnu nelze vrátit: položka již není dostupná, její termín se mezitím změnil nebo se nepodařilo připojit ke Googlu.');
     } catch (error) {
@@ -219,7 +234,7 @@ export function useTaskCommands({
     const save = async (): Promise<EditorSaveOutcome> => {
       if (!editingTask) return { status: 'failed', message: 'Editor už není otevřený.' };
       const title = editingTask.title.trim();
-      if (!title) return { status: 'failed', message: 'Doplňte název záznamu.' };
+      if (!title && !editingTask.calendar) return { status: 'failed', message: 'Doplňte název záznamu.' };
       const rawTime = editingTask.startTime?.trim();
       const startTime = rawTime ? normalizeClockTime(rawTime) : undefined;
       if (!editingTask.isAllDay && rawTime && startTime === null) {
@@ -241,7 +256,7 @@ export function useTaskCommands({
         if (result === null) return { status: 'failed', message: 'Google Task se nepodařilo uložit.' };
         void refreshGoogleTasks().catch(error => console.error('Google Tasks refresh failed after save', error));
       } else {
-        const taskData = { ...taskToSave };
+        const taskData = calendarTaskOrigin(taskToSave);
         delete (taskData as Partial<UnifiedTask>).isGoogleTask;
         const context = uiMutationContext();
         const allowUnlinkedCalendar = hasUsableAuth(googleAuth) && Boolean(context.googleAccountId);
@@ -284,7 +299,7 @@ export function useTaskCommands({
       if (result.status === 'queued' && !await deliverEffects(result.effectIds)) alert(SYNC_PENDING_MSG);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      alert(msg || "Chyba při synchronizaci s Googlem");
+      alert(msg === 'calendar_task_readonly' ? CALENDAR_READONLY_NOTICE : msg || "Chyba při synchronizaci s Googlem");
     } finally {
       setIsProcessing(false);
     }
@@ -294,17 +309,30 @@ export function useTaskCommands({
     window.location.href = buildTaskEmail(task).mailto;
   }, []);
 
+  const guardedApplyAiResult = useCallback((result: Partial<Task>, updateId: number | null) => runWritableCommand(updateId ? { ...result, id: updateId } as UnifiedTask : null, undefined, () => applyAiResult(result, updateId)), [applyAiResult]);
+  const guardedToggleSubtask = useCallback((task: UnifiedTask, subTaskId: string) => runWritableCommand(task, undefined, () => toggleSubtask(task, subTaskId)), [toggleSubtask]);
+  const guardedToggleTask = useCallback((task: UnifiedTask) => runWritableCommand(task, null, () => handleToggleTask(task)), [handleToggleTask]);
+  const guardedRescheduleTask = useCallback((task: UnifiedTask, patch: WeeklySchedulePatch) => runWritableCommand(task, false, () => handleRescheduleTask(task, patch)), [handleRescheduleTask]);
+  const guardedDeleteTask = useCallback((task: UnifiedTask) => runWritableCommand(task, false, () => handleDeleteTask(task)), [handleDeleteTask]);
+  const guardedSaveEdit = useCallback(() => runWritableCommand<EditorSaveOutcome>(editingTask, { status: 'failed', message: CALENDAR_READONLY_NOTICE }, handleSaveEdit), [editingTask, handleSaveEdit]);
+  const guardedSync = useCallback((task: UnifiedTask) => runWritableCommand(task, undefined, () => handleSyncToGoogle(task)), [handleSyncToGoogle]);
+  const guardedInvitation = useCallback(async (task: UnifiedTask) => {
+    const link = await runWritableCommand<string | null>(task, null, () => prepareCalendarInvitation(task));
+    if (!link) throw new Error(CALENDAR_READONLY_NOTICE);
+    return link;
+  }, []);
+
   return {
-    applyAiResult,
-    toggleSubtask,
-    handleToggleTask,
-    handleRescheduleTask,
+    applyAiResult: guardedApplyAiResult,
+    toggleSubtask: guardedToggleSubtask,
+    handleToggleTask: guardedToggleTask,
+    handleRescheduleTask: guardedRescheduleTask,
     handleUndoSchedule,
     canUndoSchedule: lastScheduleChange !== null && !isScheduleBusy,
-    handleDeleteTask,
-    handleSaveEdit,
-    handleSyncToGoogle,
+    handleDeleteTask: guardedDeleteTask,
+    handleSaveEdit: guardedSaveEdit,
+    handleSyncToGoogle: guardedSync,
     handleExport,
-    handlePrepareInvitation: prepareCalendarInvitation,
+    handlePrepareInvitation: guardedInvitation,
   };
 }

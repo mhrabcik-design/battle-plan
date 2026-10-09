@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { AlertCircle, Mail, Clock, Users, Lightbulb, CheckCircle2, Hourglass, Mic, FileText, Trash2 } from 'lucide-react';
 import type { UnifiedTask } from '../types';
 import { getTaskCompletionClasses, getTaskVisualTone, type TaskVisualTone } from '../utils/taskListPresentation';
+import { calendarTaskLabel, calendarIntervalLabel, isCalendarReadonly, openReadonlyCalendarTask } from '../utils/calendarPresentation';
 
 const toneStyles: Record<TaskVisualTone, { accent: string; label: string }> = {
     task: { accent: 'rgb(99 102 241)', label: 'Úkol' },
@@ -48,6 +49,9 @@ export function TaskCard({
     startRecording
 }: TaskCardProps) {
     const isCompleted = task.status === 'completed';
+    const readonly = isCalendarReadonly(task);
+    const label = calendarTaskLabel(task);
+    const openTask = () => { if (!openReadonlyCalendarTask(task)) setEditingTask(task); };
     const completionClasses = getTaskCompletionClasses(isCompleted, useCompletedTaskTreatment);
     const overCapacity = isOverCapacity(task);
     const visualTone = getTaskVisualTone(task, overCapacity);
@@ -66,7 +70,7 @@ export function TaskCard({
             <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <div className={`text-xs font-semibold px-2 py-0.5 rounded border ${getUrgencyColor(task.urgency)}`}>
-                        {task.isGoogleTask ? 'Google Task' : task.urgency === 3 ? 'Vysoká priorita' : task.urgency === 1 ? 'Nízká priorita' : task.type === 'meeting' ? 'Schůzka' : task.type === 'thought' || task.type === 'note' ? 'Myšlenka' : 'Úkol'}
+                        {readonly ? 'Google Kalendář · pouze pro čtení' : task.isGoogleTask ? 'Google Task' : task.urgency === 3 ? 'Vysoká priorita' : task.urgency === 1 ? 'Nízká priorita' : task.type === 'meeting' ? 'Schůzka' : task.type === 'thought' || task.type === 'note' ? 'Myšlenka' : 'Úkol'}
                     </div>
                     {task.isGoogleTask && (
                         <div className="w-4 h-4 bg-blue-600 rounded flex items-center justify-center text-xs font-black text-on-accent shadow-sm">G</div>
@@ -80,7 +84,7 @@ export function TaskCard({
                     {task.startTime && (
                         <div className="task-time-badge flex h-7 items-center gap-1.5 rounded-lg border px-2">
                             <Clock className="h-3 w-3 text-indigo-400" />
-                            <span className="text-xs font-semibold">{task.startTime}</span>
+                            <span className="text-xs font-semibold">{calendarIntervalLabel(task)}</span>
                         </div>
                     )}
                 </div>
@@ -93,7 +97,7 @@ export function TaskCard({
                         {task.type === 'meeting' ? <Users className="w-4 h-4" /> : task.type === 'thought' ? <Lightbulb className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                        <h3 className={`task-title mb-1 transition-colors ${completionClasses.title}`}><button type="button" onClick={() => setEditingTask(task)}>{task.title}</button></h3>
+                        <h3 className={`task-title mb-1 transition-colors ${completionClasses.title}`}><button type="button" onClick={openTask}>{label}</button></h3>
                         <p className="text-sm text-slate-400 line-clamp-2 leading-relaxed mb-2">{task.description}</p>
 
                         {task.type === 'task' && task.deadline && (
@@ -111,7 +115,7 @@ export function TaskCard({
                 </div>
             </div>
 
-            {task.subTasks && task.subTasks.length > 0 && (
+            {!readonly && task.subTasks && task.subTasks.length > 0 && (
                 <div className="space-y-1 mb-3 ml-11">
                     {task.subTasks.slice(0, 3).map(st => (
                         <button key={st.id} onClick={() => toggleSubtask(task, st.id)} aria-pressed={st.completed} className="flex min-h-9 items-center gap-2 group/st w-full text-left">
@@ -139,7 +143,7 @@ export function TaskCard({
                 </div>
             )}
 
-            <div className="task-action-rail mt-auto border-t border-slate-800/50 pt-3">
+            {readonly ? <div className="mt-auto border-t border-slate-800/50 pt-3"><button type="button" onClick={openTask} className="surface-action min-h-11 w-full gap-2 px-3 text-xs text-slate-300">Otevřít v Google Kalendáři</button></div> : <div className="task-action-rail mt-auto border-t border-slate-800/50 pt-3">
                 <button
                     onClick={async () => handleToggleTask(task)}
                     className={`surface-action h-11 min-w-0 gap-2 px-2 text-xs ${isCompleted ? 'border-emerald-500/40 bg-emerald-600 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
@@ -182,7 +186,7 @@ export function TaskCard({
                 >
                     <Trash2 className="w-3.5 h-3.5" />
                 </button>
-            </div>
+            </div>}
         </motion.article>
     );
 }

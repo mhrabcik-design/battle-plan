@@ -1103,3 +1103,19 @@ test('health: old applied diagnostics suppress replay after clearing and re-mirr
     assert.equal((await agentBridge.applyWrite(write)).disposition, 'applied');
     assert.equal(await db.projects.count(), 0);
 });
+
+test('readonly Calendar mutations are terminal failure receipts and never retry', async () => {
+    await resetDb();
+    const id = await db.tasks.add({ title: 'Jen čtení', type: 'meeting', date: '2026-10-05', status: 'pending', urgency: 2, createdAt: 1, updatedAt: 1,
+        calendar: { accountId: 'a', calendarId: 'primary', eventId: 'e', canonicalIdentity: 'e', origin: 'google', generation: 0, metadataUpdatedAt: 1, readonlyReason: 'recurring' } });
+    for (const action of ['update_task', 'delete_task', 'complete_task'] as const) {
+        const write = { id: `readonly-${action}`, action, created_at: 1, task_data: { id, title: 'Přepsat' } };
+        const result = await agentBridge.applyWrite(write);
+        assert.equal(result.success, false);
+        assert.equal(result.disposition, 'terminal');
+        assert.equal(result.last_error, 'calendar_task_readonly');
+        assert.ok((await db.agentInbox.get(write.id))?.applied_at);
+        assert.deepEqual(await agentBridge.applyWrite(write), result);
+    }
+    assert.equal((await db.tasks.get(id))?.title, 'Jen čtení');
+});

@@ -20,6 +20,7 @@ import {
     type WeeklySchedulePatch,
 } from '../utils/calendarUtils';
 import { getCalendarDensity, getWeeklyVisualInterval, layoutCalendarIntervals } from '../utils/weeklyCalendarLayout';
+import { calendarTaskKey, calendarTaskLabel, calendarTaskOrigin, calendarIntervalLabel, isCalendarReadonly, isOutsideWorkingHours, openReadonlyCalendarTask, projectCalendarDays } from '../utils/calendarPresentation';
 
 interface WeeklyCalendarProps {
     weekOffset: number;
@@ -66,7 +67,7 @@ const ALL_DAY_VISIBLE_ROWS = 3;
 const DRAG_THRESHOLD = 8;
 const EDGE_DWELL_MS = 650;
 
-const taskKey = (task: UnifiedTask) => task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`;
+const taskKey = calendarTaskKey;
 
 export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     weekOffset,
@@ -111,24 +112,27 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     const [announcement, setAnnouncement] = useState('');
     const [dayWidth, setDayWidth] = useState(160);
     const days = useMemo(() => getWeekDays(weekOffset), [weekOffset]);
-    const tasksByKey = useMemo(() => new Map(tasks.map(task => [taskKey(task), task])), [tasks]);
+    const projectedTasks = useMemo(() => projectCalendarDays(tasks, days.map(day => day.full)), [tasks, days]);
+    const tasksByKey = useMemo(() => new Map(projectedTasks.map(task => [taskKey(task), task])), [projectedTasks]);
     const dayDataByDate = useMemo(() => {
-        const buckets = new Map(days.map(day => [day.full, { allDayTasks: [] as UnifiedTask[], timedTasks: [] as UnifiedTask[] }]));
-        for (const task of tasks) {
-            const date = task.type === 'task' ? task.deadline : task.date;
+        const buckets = new Map(days.map(day => [day.full, { allDayTasks: [] as UnifiedTask[], timedTasks: [] as UnifiedTask[], outsideTasks: [] as UnifiedTask[] }]));
+        for (const task of projectedTasks) {
+            const date = task.calendarSegment?.date ?? (task.type === 'task' ? task.deadline : task.date);
             const bucket = date ? buckets.get(date) : undefined;
             if (!bucket) continue;
-            (isAllDayTask(task) ? bucket.allDayTasks : bucket.timedTasks).push(task);
+            (task.calendarSegment?.isAllDay ?? isAllDayTask(task) ? bucket.allDayTasks : isOutsideWorkingHours(task) ? bucket.outsideTasks : bucket.timedTasks).push(task);
         }
         return new Map(Array.from(buckets, ([date, bucket]) => [date, {
             ...bucket,
             timedLayout: new Map(layoutCalendarIntervals(bucket.timedTasks.map(getWeeklyVisualInterval), dayWidth).map(item => [item.id, item])),
         }]));
-    }, [dayWidth, days, tasks]);
+    }, [dayWidth, days, projectedTasks]);
     const allDayCounts = days.map(day => dayDataByDate.get(day.full)?.allDayTasks.length ?? 0);
     const expandedCount = expandedAllDay ? dayDataByDate.get(expandedAllDay)?.allDayTasks.length ?? 0 : 0;
     const allDayLaneHeight = Math.max(ALL_DAY_LANE_HEIGHT, Math.max(Math.min(Math.max(...allDayCounts), ALL_DAY_VISIBLE_ROWS), expandedCount) * ALL_DAY_LANE_HEIGHT);
-    const timelineTop = 40 + allDayLaneHeight;
+    const outsideCount = Math.max(...days.map(day => dayDataByDate.get(day.full)?.outsideTasks.length ?? 0));
+    const outsideLaneHeight = outsideCount ? 24 + outsideCount * 52 : 0;
+    const timelineTop = 40 + allDayLaneHeight + outsideLaneHeight;
 
     const clearEdgeIntent = useCallback(() => {
         if (edgeTimerRef.current === null && edgeDirectionRef.current === null) return;
@@ -352,6 +356,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     }, [busyTask, captureDropLaneGeometry, clearEdgeIntent]);
 
     const commitDrop = useCallback(async (task: UnifiedTask, target: WeeklyDropTarget | null) => {
+        if (isCalendarReadonly(task)) { resetDragState(); return; }
         if (!target) {
             resetDragState('Přesun zrušen');
             return;
@@ -483,6 +488,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     };
 
     const handleKeyDown = async (event: React.KeyboardEvent<HTMLButtonElement>, task: UnifiedTask) => {
+        if (isCalendarReadonly(task)) return;
         const active = dragRef.current?.pointerId === -1 && taskKey(dragRef.current.task) === taskKey(task);
         if (!active && event.key !== ' ') return;
         if (!active) {
@@ -514,7 +520,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             suppressClickRef.current = null;
             return;
         }
-        setEditingTask(task);
+        if (!openReadonlyCalendarTask(task)) setEditingTask(calendarTaskOrigin(task));
     };
 
     const closeCollision = (collisionId: string) => {
@@ -523,12 +529,14 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     };
 
     const pointerProps = (task: UnifiedTask) => ({
-        onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => handlePointerDown(event, task),
-        onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => { void handleKeyDown(event, task); },
+        onPointerDown: isCalendarReadonly(task) ? undefined : (event: React.PointerEvent<HTMLButtonElement>) => handlePointerDown(event, task),
+        onKeyDown: isCalendarReadonly(task) ? undefined : (event: React.KeyboardEvent<HTMLButtonElement>) => { void handleKeyDown(event, task); },
         onClick: () => openTask(task),
         'data-task-key': taskKey(task),
         'aria-busy': busyTask === taskKey(task),
-        'aria-grabbed': draggingTask ? draggingTask === task : undefined,
+        'aria-grabbed': !isCalendarReadonly(task) && draggingTask ? draggingTask === task : undefined,
+        'aria-label': `${calendarTaskLabel(task)} · ${calendarIntervalLabel(task)}${isCalendarReadonly(task) ? ' · Google Kalendář, pouze pro čtení' : ''}`,
+        title: `${calendarTaskLabel(task)} · ${calendarIntervalLabel(task)}${isCalendarReadonly(task) ? ' · Google Kalendář, pouze pro čtení' : ''}`,
     });
 
     const draggingKey = draggingTask ? taskKey(draggingTask) : null;
@@ -652,6 +660,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                     style={{ height: `${calendarHours.length * rowHeight + timelineTop + 20}px` }}
                 >
                     <div className="relative border-r border-white/10 bg-slate-950/40 z-20 ml-6 md:ml-10">
+                        {outsideLaneHeight > 0 && <span className="absolute left-0 right-0 break-words text-[10px] text-slate-400" style={{ top: `${40 + allDayLaneHeight}px` }}>Mimo pracovní dobu</span>}
                         {calendarHours.map(hour => (
                             <div key={hour} className="absolute left-0 w-full flex items-center justify-center -translate-y-1/2" style={{ top: `${(hour - startHour) * rowHeight + timelineTop}px`, height: '20px' }}>
                                 <span className="text-xs font-black text-slate-400 tabular-nums">{String(hour).padStart(2, '0')}:00</span>
@@ -660,7 +669,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                     </div>
 
                     {days.map(day => {
-                        const { allDayTasks, timedTasks, timedLayout } = dayDataByDate.get(day.full)!;
+                        const { allDayTasks, timedTasks, timedLayout, outsideTasks } = dayDataByDate.get(day.full)!;
                         const isAllDayTarget = dropTarget?.date === day.full && dropTarget.lane === 'all-day';
                         const isTimedTarget = dropTarget?.date === day.full && dropTarget.lane === 'timed';
 
@@ -682,10 +691,11 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                         const completed = task.status === 'completed';
                                         const isDragging = draggingKey === taskKey(task);
                                         return (
-                                            <button key={`${taskKey(task)}-allday`} {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`w-full px-2 py-1 rounded-md border transition-[opacity,transform,border-color,box-shadow] duration-150 flex items-center gap-1.5 overflow-hidden touch-pan-y cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-25 scale-[0.97] border-dashed shadow-none' : 'shadow-sm'} ${completed ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' : task.type === 'meeting' ? 'bg-indigo-600/80 border-indigo-500/50 hover:border-indigo-300' : 'bg-amber-600/80 border-amber-500/50 hover:border-amber-300'} disabled:opacity-60`}>
-                                                {!completed && <GripVertical className="h-3 w-3 shrink-0 text-white/45" />}
+                                            <button key={`${taskKey(task)}-allday`} {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`w-full px-2 py-1 rounded-md border transition-[opacity,transform,border-color,box-shadow] duration-150 flex items-center gap-1.5 overflow-hidden touch-pan-y ${isCalendarReadonly(task) ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${isDragging ? 'opacity-25 scale-[0.97] border-dashed shadow-none' : 'shadow-sm'} ${completed ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' : task.type === 'meeting' ? 'bg-indigo-600/80 border-indigo-500/50 hover:border-indigo-300' : 'bg-amber-600/80 border-amber-500/50 hover:border-amber-300'} disabled:opacity-60`}>
+                                                {!completed && !isCalendarReadonly(task) && <GripVertical className="h-3 w-3 shrink-0 text-white/45" />}
                                                 {completed ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <Sun className="w-3 h-3 text-on-accent shrink-0" />}
-                                                <span className={`text-sm font-bold uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-on-accent'}`}>{task.title}</span>
+                                                <span className={`text-sm font-bold uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-on-accent'}`}>{calendarTaskLabel(task)}</span>
+                                                {isCalendarReadonly(task) && <span className="shrink-0 text-[9px] text-on-accent">Google · pouze pro čtení</span>}
                                                 {completed && <span className="text-[9px] font-black uppercase ml-auto">Splněno</span>}
                                                 {task.isGoogleTask && <span className="text-sm bg-blue-500/30 text-blue-200 px-1 rounded-sm border border-blue-400/30 shrink-0">G</span>}
                                             </button>
@@ -697,6 +707,14 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                         </button>
                                     )}
                                 </div>
+
+                                {outsideLaneHeight > 0 && <div className="absolute left-0 right-0 space-y-1 border-y border-white/10 bg-slate-900/60 px-1" style={{ top: `${40 + allDayLaneHeight}px`, height: `${outsideLaneHeight}px` }}>
+                                    <p className="h-5 text-[10px] font-semibold text-slate-400">Mimo pracovní dobu</p>
+                                    {outsideTasks.map(task => <button key={taskKey(task)} type="button" data-task-key={taskKey(task)} onClick={() => openTask(task)} className="surface-focus flex h-12 w-full min-w-0 flex-col rounded-lg border border-white/10 bg-slate-800 px-2 py-1 text-left" aria-label={`${calendarTaskLabel(task)} · ${calendarIntervalLabel(task)}${isCalendarReadonly(task) ? ' · Google Kalendář, pouze pro čtení' : ''}`}>
+                                        <span className="w-full truncate text-xs font-bold text-white">{calendarTaskLabel(task)}</span>
+                                        <span className="text-[10px] text-slate-300">{calendarIntervalLabel(task)}{isCalendarReadonly(task) ? ' · Google, pouze pro čtení' : ''}</span>
+                                    </button>)}
+                                </div>}
 
                                 {calendarHours.map(hour => <div key={hour} className="absolute left-0 w-full border-b border-white/5" style={{ top: `${(hour - startHour) * rowHeight + timelineTop}px`, height: `${rowHeight}px` }} />)}
 
@@ -710,12 +728,11 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                         const layout = timedLayout.get(taskKey(task));
                                         if (!layout?.visible) return null;
                                         const visualInterval = preview
-                                            ? getWeeklyVisualInterval({ ...task, ...preview })
+                                            ? getWeeklyVisualInterval({ ...calendarTaskOrigin(task), ...preview })
                                             : layout;
                                         const height = Math.max(40, ((visualInterval.endMinute - visualInterval.startMinute) / 60) * rowHeight);
                                         const top = ((visualInterval.startMinute - startHour * 60) / 60) * rowHeight;
-                                        const displayTime = preview?.startTime ?? task.startTime;
-                                        const displayDuration = preview?.duration ?? task.duration;
+                                        const displayTime = calendarIntervalLabel(preview ? { ...calendarTaskOrigin(task), ...preview } : task);
                                         const density = getCalendarDensity(height);
                                         const left = `calc(${layout.column} * ((100% - ${(layout.columnCount - 1) * 4}px) / ${layout.columnCount} + 4px))`;
                                         const width = `calc((100% - ${(layout.columnCount - 1) * 4}px) / ${layout.columnCount})`;
@@ -723,24 +740,25 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                         const hiddenTasks = layout.hiddenIds.map(id => tasksByKey.get(id)).filter((item): item is UnifiedTask => Boolean(item));
                                         return (
                                             <div key={taskKey(task)} className="absolute" style={{ top: `${top}px`, height: `${height}px`, left, width }}>
-                                                <button {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`relative flex h-full w-full flex-col gap-0.5 overflow-hidden rounded-lg border p-2 text-left transition-[opacity,transform,border-color,box-shadow] duration-150 group/item touch-pan-y cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-25 scale-[0.97] border-dashed shadow-none' : 'shadow-lg'} ${completed ? 'bg-emerald-950/80 border-emerald-500/40' : task.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : isOverCapacity(currentTime, task) ? 'bg-red-950/40 border-red-500/40 animate-pulse-red' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'} disabled:opacity-60`}>
+                                                <button {...pointerProps(task)} disabled={busyTask === taskKey(task)} className={`relative flex h-full w-full flex-col gap-0.5 overflow-hidden rounded-lg border p-2 text-left transition-[opacity,transform,border-color,box-shadow] duration-150 group/item touch-pan-y ${isCalendarReadonly(task) ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${isDragging ? 'opacity-25 scale-[0.97] border-dashed shadow-none' : 'shadow-lg'} ${completed ? 'bg-emerald-950/80 border-emerald-500/40' : task.type === 'meeting' ? 'bg-indigo-600 border-indigo-500/50 hover:border-indigo-400' : isOverCapacity(currentTime, task) ? 'bg-red-950/40 border-red-500/40 animate-pulse-red' : 'bg-slate-800/90 border-slate-700/60 hover:border-slate-500'} disabled:opacity-60`}>
                                                     <div className={`absolute top-0 left-0 bottom-0 w-1 ${completed ? 'bg-emerald-400' : task.type === 'meeting' ? 'bg-indigo-300' : isOverCapacity(currentTime, task) ? 'bg-red-500' : 'bg-orange-500'} opacity-80`} />
                                                     <div className="flex items-center justify-between gap-1">
                                                         <span className="flex min-w-0 items-center gap-1">
-                                                            {!completed && <GripVertical className="h-3 w-3 shrink-0 text-white/35" />}
-                                                            <span className={`text-xs font-black uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-white'}`}>{task.title}</span>
+                                                            {!completed && !isCalendarReadonly(task) && <GripVertical className="h-3 w-3 shrink-0 text-white/35" />}
+                                                            <span className={`text-xs font-black uppercase tracking-tight line-clamp-1 leading-tight ${completed ? 'line-through text-emerald-200' : 'text-white'}`}>{calendarTaskLabel(task)}</span>
                                                         </span>
                                                         {completed && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300 shrink-0" />}
                                                         {task.isGoogleTask && <span className="text-sm bg-blue-500/20 text-blue-400 px-1 rounded-sm border border-blue-500/30 shrink-0">G</span>}
                                                     </div>
-                                                    {completed ? <span className="text-[9px] font-black uppercase text-emerald-300 mt-auto">Splněno</span> : density !== 'compact' ? (
+                                                    {isCalendarReadonly(task) && <span className={density === 'compact' ? 'sr-only' : 'text-[9px] text-slate-200'}>Google Kalendář · pouze pro čtení</span>}
+                                                    {completed ? <span className="text-[9px] font-black uppercase text-emerald-300 mt-auto">Splněno · {displayTime}</span> : density !== 'compact' ? (
                                                         <div className="flex flex-col gap-1 mt-auto">
-                                                            {displayTime && <div className="flex items-center gap-1 opacity-60"><Clock className="w-2.5 h-2.5 text-slate-400" /><span className="text-sm font-bold text-slate-400">{displayTime} {displayDuration ? `(${displayDuration}m)` : ''}</span></div>}
+                                                            {displayTime && <div className="flex items-center gap-1 opacity-90"><Clock className="w-2.5 h-2.5 text-slate-300" /><span className="text-xs font-bold text-slate-200">{displayTime}</span></div>}
                                                             {density === 'comfortable' && task.type === 'task' && task.deadline && <div className="flex items-center gap-1 opacity-90"><Hourglass className={`w-2.5 h-2.5 ${isOverCapacity(currentTime, task) ? 'text-red-400' : getDeadlineColor(currentTime, task.deadline, task.startTime)}`} /><span className={`text-xs font-black uppercase tracking-tight ${isOverCapacity(currentTime, task) ? 'text-red-400' : getDeadlineColor(currentTime, task.deadline, task.startTime)}`}>{formatTimeLeft(currentTime, task.deadline, task.startTime)}</span></div>}
                                                         </div>
                                                     ) : displayTime ? <span className="mt-auto truncate text-[9px] font-bold text-slate-300">{displayTime}</span> : null}
                                                 </button>
-                                                {!completed && !task.isGoogleTask && canResizeWeeklyTask(task) && (
+                                                {!completed && !task.isGoogleTask && !isCalendarReadonly(task) && canResizeWeeklyTask(task) && (
                                                     <button
                                                         type="button"
                                                         tabIndex={-1}
@@ -789,8 +807,8 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                                                                     }}
                                                                 >
                                                                     {hiddenTasks.map(hiddenTask => (
-                                                                        <button key={taskKey(hiddenTask)} type="button" className="surface-focus block min-h-9 w-full rounded-lg px-2 text-left text-xs font-bold text-slate-200 hover:bg-slate-800" onClick={() => { setExpandedCollision(null); setEditingTask(hiddenTask); }}>
-                                                                            {hiddenTask.title}
+                                                                        <button key={taskKey(hiddenTask)} type="button" className="surface-focus block min-h-9 w-full rounded-lg px-2 text-left text-xs font-bold text-slate-200 hover:bg-slate-800" onClick={() => { setExpandedCollision(null); openTask(hiddenTask); }}>
+                                                                            {calendarTaskLabel(hiddenTask)} · {calendarIntervalLabel(hiddenTask)}{isCalendarReadonly(hiddenTask) ? ' · Google, pouze pro čtení' : ''}
                                                                         </button>
                                                                     ))}
                                                                 </motion.div>

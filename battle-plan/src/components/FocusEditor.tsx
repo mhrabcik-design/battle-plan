@@ -2,12 +2,14 @@ import { Share2, MicOff, Mic, Save, X, Users, CheckCircle2, Hourglass, Sun, Mail
 import type { UnifiedTask, GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import React, { useState, useEffect, useRef } from 'react';
-import type { Task } from '../db';
+import { db, type Task } from '../db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDuration, normalizeClockTime, parseDuration } from '../utils/calendarUtils';
 import type { EditorSaveOutcome } from '../hooks/useTaskCommands';
 import { applySavedEditorStatus, getEditorCloseIntent, getEditorTaskSnapshot } from '../utils/editorInteraction';
 import { OverlaySurface } from './ui/OverlaySurface';
 import { buildTaskEmail } from '../utils/taskSharing';
+import { calendarTaskLabel, calendarProjectionLabel, isCalendarReadonly, openReadonlyCalendarTask } from '../utils/calendarPresentation';
 
 interface FocusEditorProps {
     editingTask: UnifiedTask;
@@ -29,6 +31,7 @@ interface FocusEditorProps {
     getDeadlineColor: (date?: string, time?: string) => string;
     formatTimeLeft: (date?: string, time?: string) => string;
     onNotice: (message: string) => void;
+    onRestoreCalendarBlock: (publicId: string) => Promise<void>;
 }
 
 export function FocusEditor({
@@ -51,11 +54,17 @@ export function FocusEditor({
     getDeadlineColor,
     formatTimeLeft,
     onNotice,
+    onRestoreCalendarBlock,
 }: FocusEditorProps) {
     const [isTogglingTask, setIsTogglingTask] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [isPreparingInvitation, setIsPreparingInvitation] = useState(false);
+    const [isRestoring, setIsRestoring] = useState(false);
+    const storedTask = useLiveQuery(() => editingTask.id && !editingTask.isGoogleTask ? db.tasks.get(editingTask.id) : undefined, [editingTask.id, editingTask.isGoogleTask]);
+    const currentTask = storedTask && (!editingTask.publicId || storedTask.publicId === editingTask.publicId) ? storedTask : undefined;
+    const currentCalendar = currentTask?.calendar ?? editingTask.calendar;
+    const readonlyTask = currentTask && isCalendarReadonly(currentTask) ? currentTask : isCalendarReadonly(editingTask) ? editingTask : null;
     const [invitationLink, setInvitationLink] = useState<{ key: string; url: string } | null>(null);
     const [shareNotice, setShareNotice] = useState('');
     const [showShareText, setShowShareText] = useState(false);
@@ -65,7 +74,7 @@ export function FocusEditor({
     const titleRef = useRef<HTMLInputElement>(null);
     const currentSnapshot = getEditorTaskSnapshot(editingTask);
     const isDirty = getEditorTaskSnapshot(initialTask) !== currentSnapshot;
-    const isBusy = isSaving || isDeleting || isTogglingTask || isPreparingInvitation;
+    const isBusy = isSaving || isDeleting || isTogglingTask || isPreparingInvitation || isRestoring;
     const invalidStartTime = !editingTask.isAllDay && Boolean(editingTask.startTime?.trim()) && normalizeClockTime(editingTask.startTime ?? '') === null;
     const hasSavedIdentity = Boolean(editingTask.id || (editingTask.isGoogleTask && editingTask.googleId));
     const shareDisabled = isBusy || isDirty || !hasSavedIdentity || isRecording;
@@ -83,6 +92,7 @@ export function FocusEditor({
 
     const requestClose = () => {
         if (mutationRef.current) return;
+        if (readonlyTask) { setEditingTask(null); return; }
         const intent = getEditorCloseIntent({
             recording: isRecording && activeVoiceUpdateId === editingTask.id,
             dirty: isDirty,
@@ -181,6 +191,33 @@ export function FocusEditor({
             setIsPreparingInvitation(false);
         }
     };
+
+    const restoreBlock = async () => {
+        if (mutationRef.current || !editingTask.publicId) return;
+        mutationRef.current = true; setIsRestoring(true); setEditorError(null);
+        try {
+            await onRestoreCalendarBlock(editingTask.publicId);
+            const current = editingTask.id ? await db.tasks.get(editingTask.id) : undefined;
+            if (current) {
+                setEditingTask(previous => previous ? { ...previous, calendar: current.calendar } : null);
+                setInitialTask(previous => ({ ...previous, calendar: current.calendar }));
+            }
+            onNotice('Blok úkolu je obnovený v Kalendáři.');
+        } catch (error) { setEditorError(error instanceof Error ? error.message : 'Blok se nepodařilo obnovit.'); }
+        finally { mutationRef.current = false; setIsRestoring(false); }
+    };
+
+    if (readonlyTask) {
+        const zone = readonlyTask.calendar?.displayTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const timing = readonlyTask.calendar?.timing;
+        return <OverlaySurface title={calendarTaskLabel(readonlyTask)} onRequestClose={requestClose} variant="sheet" className="flex h-full w-full min-w-0 flex-col bg-slate-900 p-6 text-slate-300">
+            <div className="flex items-start justify-between gap-3"><h2 className="break-words text-xl font-bold text-white">{calendarTaskLabel(readonlyTask)}</h2><button type="button" aria-label="Zavřít editor" onClick={requestClose} className="surface-action h-11 w-11 shrink-0"><X /></button></div>
+            <p className="mt-4 text-sm">Google Kalendář · pouze pro čtení</p>
+            {timing && <p className="mt-3 break-words text-sm">{calendarProjectionLabel({ title: readonlyTask.title, description: readonlyTask.description ?? '', timing }, zone)}</p>}
+            <p className="mt-3 whitespace-pre-wrap break-words text-sm">{readonlyTask.description}</p>
+            <button type="button" className="surface-action mt-6 min-h-11 gap-2 px-4" onClick={() => openReadonlyCalendarTask(readonlyTask)}><ExternalLink className="h-4 w-4" />Otevřít v Google Kalendáři</button>
+        </OverlaySurface>;
+    }
 
     return (
         <OverlaySurface
@@ -342,7 +379,7 @@ export function FocusEditor({
                                                 aria-describedby={editingTask.type === 'task' ? 'task-deadline-hint' : undefined}
                                                 type="date"
                                                 value={(editingTask.type === 'task' ? (editingTask.deadline || editingTask.date) : (editingTask.date || editingTask.deadline)) || ''}
-                                                onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value, updatedAt: Date.now() })}
+                                                onChange={(e) => setEditingTask({ ...editingTask, date: e.target.value, deadline: e.target.value, calendarScheduleExplicit: !!e.target.value, updatedAt: Date.now() })}
                                                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-xs font-bold text-white outline-none"
                                             />
                                             {editingTask.type === 'task' && (
@@ -350,9 +387,10 @@ export function FocusEditor({
                                                     Bez termínu se úkol uloží na pátek tohoto týdne.
                                                 </p>
                                             )}
+                                            {!editingTask.isGoogleTask && editingTask.type === 'task' && editingTask.calendarScheduleExplicit === false && <button type="button" className="surface-action min-h-11 w-full px-2 text-xs" onClick={() => setEditingTask({ ...editingTask, calendarScheduleExplicit: true, updatedAt: Date.now() })}>Potvrdit termín pro Kalendář</button>}
                                         </div>
                                         <div className="space-y-2">
-                                            <label htmlFor="task-time" className="text-sm font-black text-slate-500 uppercase">Čas (24h)</label>
+                                            <label htmlFor="task-time" className="text-sm font-black text-slate-500 uppercase">{editingTask.type === 'task' ? 'Čas dokončení (24h)' : 'Čas začátku (24h)'}</label>
                                             <input
                                                 type="text"
                                                 id="task-time"
@@ -367,7 +405,7 @@ export function FocusEditor({
                                                     if (val.length === 2 && !val.includes(':') && val.length > (editingTask.startTime?.length || 0)) {
                                                         val += ':';
                                                     }
-                                                    setEditingTask({ ...editingTask, startTime: val, updatedAt: Date.now() });
+                                                    setEditingTask({ ...editingTask, startTime: val, calendarScheduleExplicit: true, updatedAt: Date.now() });
                                                 }}
                                                 className={`w-full bg-slate-800 border rounded-xl px-4 py-3 text-xs font-bold text-white outline-none placeholder:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed ${invalidStartTime ? 'border-red-500/50' : 'border-slate-700'}`}
                                             />
@@ -375,6 +413,8 @@ export function FocusEditor({
                                     </div>
 
                                     {invalidStartTime && <p id="task-time-error" className="text-xs text-red-400">Zadejte čas ve formátu HH:mm (00:00–23:59).</p>}
+                                    {currentCalendar?.displayTimeZone && currentCalendar.displayTimeZone !== Intl.DateTimeFormat().resolvedOptions().timeZone && <p className="text-xs text-slate-400">Čas Kalendáře: {currentCalendar.displayTimeZone}</p>}
+                                    {editingTask.type === 'task' && currentCalendar?.suppressed && <div className="space-y-2 rounded-xl border border-amber-500/30 p-3"><p className="text-xs text-slate-400">Blok byl smazán v Googlu. Úkol zůstal zachovaný; automatická synchronizace blok neobnoví.</p><button type="button" disabled={isBusy || isDirty || !!currentCalendar.conflict || !hasUsableAuth(googleAuth)} className="surface-action min-h-11 w-full px-3 text-xs disabled:opacity-50" onClick={() => { void restoreBlock(); }}>{isRestoring ? 'Obnovuji…' : 'Obnovit blok v Kalendáři'}</button>{isDirty && <p className="text-xs text-slate-400">Před obnovením uložte rozepsané změny.</p>}</div>}
 
                                     {/* ALL-DAY TOGGLE + DURATION INPUT */}
                                     <DurationAllDayEditor
@@ -541,10 +581,10 @@ function DurationAllDayEditor({
     const handleDurationBlur = () => {
         const parsed = parseDuration(durationText);
         if (parsed !== null) {
-            setEditingTask({ ...editingTask, duration: parsed, updatedAt: Date.now() });
+            setEditingTask({ ...editingTask, duration: parsed, calendarScheduleExplicit: true, updatedAt: Date.now() });
             setDurationText(formatDuration(parsed));
         } else if (durationText.trim() === '') {
-            setEditingTask({ ...editingTask, duration: undefined, updatedAt: Date.now() });
+            setEditingTask({ ...editingTask, duration: undefined, calendarScheduleExplicit: true, updatedAt: Date.now() });
         } else {
             setDurationText(formatDuration(editingTask.duration));
         }
@@ -555,6 +595,7 @@ function DurationAllDayEditor({
         setEditingTask({
             ...editingTask,
             isAllDay: newAllDay,
+            calendarScheduleExplicit: true,
             startTime: newAllDay ? undefined : editingTask.startTime,
             updatedAt: Date.now()
         });
