@@ -29,4 +29,14 @@ test('cleanup retains completed rows and selects only stale tombstones', () => {
     assert.equal(isTaskCleanupCandidate(row({ status: 'completed', updatedAt: 10 }), cutoff), false);
     assert.equal(isTaskCleanupCandidate(row({ isDeleted: true, updatedAt: 10 }), cutoff), true);
     assert.equal(isTaskCleanupCandidate(row({ isDeleted: true, updatedAt: 2_000 }), cutoff), false);
+    assert.equal(isTaskCleanupCandidate(row({ isDeleted: true, updatedAt: 10, reservedGoogleEventId: 'pending-delete' }), cutoff), false);
+});
+
+test('Calendar interval beginning before the week overlaps it, with exclusive end', () => {
+    const calendar = { accountId: 'a', calendarId: 'primary', eventId: 'e', canonicalIdentity: 'e', origin: 'google' as const,
+        generation: 0, metadataUpdatedAt: 1, readonlyReason: 'multi-day' as const,
+        timing: { kind: 'all-day' as const, startDate: '2026-05-02', endDate: '2026-05-06' } };
+    assert.equal(isTaskVisibleInWeek(row({ type: 'meeting', date: '2026-05-02', calendar }), '2026-05-04', '2026-05-10'), true);
+    assert.equal(isTaskVisibleInWeek(row({ type: 'meeting', date: '2026-05-02', calendar: { ...calendar, timing: { ...calendar.timing, endDate: '2026-05-04' } } }), '2026-05-04', '2026-05-10'), false);
+    assert.equal(isTaskVisibleInWeek(row({ type: 'meeting', date: '2026-05-05', calendar: { ...calendar, recurringMaster: true } }), '2026-05-04', '2026-05-10'), false);
 });

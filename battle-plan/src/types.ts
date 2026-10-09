@@ -6,6 +6,8 @@ export type UnifiedTask = Task & {
     isGoogleTask?: boolean;
     googleListId?: string;
     googleId?: string;
+    /** View-only daily projection; never persisted as another Task. */
+    calendarSegment?: { key: string; date: string; isAllDay: boolean; startMinute: number; endMinute: number };
 };
 
 export type GoogleAuthState = 'SIGNED_IN' | 'REFRESH_PENDING' | 'OFFLINE_AUTH' | 'SIGNED_OUT';

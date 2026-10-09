@@ -4,6 +4,11 @@ import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { BattlePlanDB, type AgentProtocolEffectRow } from '../db.ts';
 import { TaskMutationService, newTaskMutationContext } from './taskMutations.ts';
+import type { CalendarPublicProjection } from './calendarModel.ts';
+import type { CalendarWriteAcknowledgement } from './calendarReconciliation.ts';
+import { GoogleCalendarSync } from './googleCalendarSync.ts';
+import { calendarEffectDeliveryAllowed } from './calendarDeliveryGate.ts';
+import { readCalendarSyncSettings, writeCalendarSyncSettings } from './calendarSettings.ts';
 import {
     ExternalEffectOutbox, createExternalEffectScheduler, executeGoogleExternalEffect, summarizeExternalEffects,
 } from './externalEffectOutbox.ts';
@@ -53,6 +58,348 @@ test('a retry and a filtered drain cannot overtake an older edit, while another 
     now = 200;
     assert.equal((await worker.drainOnce()).attempted, 0);
     assert.equal((await db.agentProtocolEffects.get(effectId))?.state, 'retry_scheduled');
+});
+
+async function scheduledMeeting(db: BattlePlanDB) {
+    const service = new TaskMutationService(db);
+    const result = await service.createTask({ task: { title: 'A', description: 'Original', internalNotes: 'private',
+        status: 'pending', type: 'meeting', urgency: 2, date: '2026-09-20', startTime: '14:00', duration: 60 },
+        context: newTaskMutationContext('ui', undefined, ACCOUNT), effects: [...upsert] });
+    if (result.status !== 'applied') throw new Error('create failed');
+    return { service, task: result.task, effectId: result.effectIds[0] };
+}
+
+test('Calendar acknowledgement merges only still-sent fields and rebases a queued pre-ack edit', async (t) => {
+    const db = await database(t);
+    const { task, service, effectId } = await scheduledMeeting(db);
+    await service.updateTask({ localId: task.id, changes: { title: 'B' }, context: newTaskMutationContext('ui'), effects: [...upsert] });
+    const first = (await db.agentProtocolEffects.get(effectId))!;
+    if (first.kind !== 'calendar' || first.operation !== 'upsert') throw new Error('upsert');
+    const original = first.payload.projection!;
+    const merged = { ...original, description: 'Google text' };
+    const calls: CalendarPublicProjection[] = [];
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async (effect) => {
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        calls.push(effect.payload.projection!);
+        return { externalId: target(effect), calendar: { ...task.calendar!, projection: calls.length === 1 ? merged : effect.payload.projection!,
+            sentProjection: effect.id === effectId ? original : { ...original, title: 'B' }, etag: `"v${calls.length}"` } };
+    } });
+    const revision = (await db.tasks.get(task.id!))!.protocolRevision;
+    assert.equal((await worker.drainOnce([effectId])).succeeded, 1);
+    const after = (await db.tasks.get(task.id!))!;
+    assert.equal(after.title, 'B');
+    assert.equal(after.description, 'Google text');
+    assert.equal(after.internalNotes, 'private');
+    assert.notDeepEqual(after.protocolRevision, revision, 'Google public content uses the mutation boundary');
+    assert.equal(after.calendar?.etag, '"v1"');
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    assert.equal(calls[1].title, 'B');
+    assert.equal(calls[1].description, 'Google text');
+});
+
+test('Calendar field conflict stays pending and gates every direct drain caller', async (t) => {
+    const db = await database(t);
+    const { task, effectId } = await scheduledMeeting(db);
+    const effect = (await db.agentProtocolEffects.get(effectId))!;
+    if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+    let calls = 0;
+    const conflict = { kind: 'fields' as const, fields: ['title' as const], base: effect.payload.projection,
+        local: effect.payload.projection, remote: { ...effect.payload.projection!, title: 'Google' }, detectedAt: 123 };
+    const options = { accountId: () => ACCOUNT, execute: async () => { calls++; throw { calendarConflict: conflict }; } };
+    await db.agentCommandReceipts.put({ id: 'receipt', commandId: crypto.randomUUID(), payloadDigest: `sha256:${'a'.repeat(64)}`,
+        producerId: 'hermes-agent', receiverId: 'test-receiver', commandExpiresAt: Date.now() + 60_000,
+        lifecycle: 'applied', effectState: 'pending', fencingToken: 1, attempts: 1, historyCount: 0,
+        result: { entityPublicId: task.publicId, revision: task.protocolRevision }, createdAt: 1, updatedAt: 1, retainUntil: Date.now() + 60_000 });
+    await db.agentProtocolEffects.update(effectId, { commandReceiptId: 'receipt' });
+    await new ExternalEffectOutbox(db, options).drainOnce();
+    assert.deepEqual((await db.tasks.get(task.id!))?.calendar?.conflict, conflict);
+    assert.equal((await db.agentProtocolEffects.get(effectId))?.state, 'pending');
+    assert.equal((await db.agentCommandReceipts.get('receipt'))?.effectState, 'pending');
+    await new ExternalEffectOutbox(db, options).drainOnce([effectId]);
+    assert.equal(calls, 1);
+});
+
+test('modern metadata-only ack preserves revision and all local-only fields', async (t) => {
+    const db = await database(t);
+    const { task, service } = await scheduledMeeting(db);
+    await service.updateTask({ localId: task.id, changes: { urgency: 3, status: 'completed',
+        subTasks: [{ id: 'check', title: 'Local', completed: true }], progress: 50 }, context: newTaskMutationContext('ui') });
+    const before = (await db.tasks.get(task.id!))!;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async (effect) => {
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        return { externalId: target(effect), calendar: { ...before.calendar!, projection: effect.payload.projection,
+            sentProjection: effect.payload.sentProjection, etag: '"ack"' } };
+    } });
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    const after = (await db.tasks.get(task.id!))!;
+    assert.deepEqual(after.protocolRevision, before.protocolRevision);
+    assert.equal(after.updatedAt, before.updatedAt);
+    assert.equal(after.status, 'completed'); assert.equal(after.urgency, 3); assert.equal(after.progress, 50);
+    assert.deepEqual(after.subTasks, before.subTasks); assert.equal(after.internalNotes, 'private');
+    assert.equal(after.calendar?.etag, '"ack"');
+});
+
+test('metadata changed during I/O rejects a stale ack and releases its claim for a new decision', async (t) => {
+    const db = await database(t);
+    const { task, effectId } = await scheduledMeeting(db);
+    const started = deferred(), release = deferred();
+    let lateGuard: boolean | undefined;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async (effect, guard) => {
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        started.resolve(); await release.promise; lateGuard = await guard.isCurrent();
+        return { externalId: target(effect), calendar: { ...task.calendar!, projection: effect.payload.projection,
+            sentProjection: effect.payload.sentProjection, etag: '"old"' } };
+    } });
+    const pending = worker.drainOnce(); await started.promise;
+    const current = (await db.tasks.get(task.id!))!;
+    const original = (await db.agentProtocolEffects.get(effectId))!;
+    if (original.kind !== 'calendar' || original.operation !== 'upsert') throw new Error('upsert');
+    const newMetadata = { ...current.calendar!, baseline: { ...original.payload.projection!, title: 'Google', description: 'Newest' },
+        etag: '"new"', metadataUpdatedAt: current.calendar!.metadataUpdatedAt + 1 };
+    await db.tasks.put({ ...current, calendar: newMetadata });
+    release.resolve();
+    assert.equal((await pending).retryScheduled, 1);
+    assert.equal(lateGuard, false);
+    assert.deepEqual((await db.tasks.get(task.id!))?.calendar, newMetadata);
+    const effect = (await db.agentProtocolEffects.get(effectId))!;
+    assert.equal(effect.state, 'retry_scheduled'); assert.equal(effect.leaseOwner, undefined);
+});
+
+test('a newer local title during I/O keeps ownership and accepts only the still-sent Google description', async (t) => {
+    const db = await database(t);
+    const { task, service, effectId } = await scheduledMeeting(db);
+    const started = deferred(), release = deferred();
+    let lateGuard: boolean | undefined;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async (effect, guard) => {
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        started.resolve(); await release.promise; lateGuard = await guard.isCurrent();
+        return { externalId: target(effect), calendar: { ...task.calendar!, projection: { ...effect.payload.projection!, description: 'Google' },
+            sentProjection: effect.payload.sentProjection, etag: '"v1"' } };
+    } });
+    const pending = worker.drainOnce([effectId]); await started.promise;
+    await service.updateTask({ localId: task.id, changes: { title: 'B' }, context: newTaskMutationContext('ui'), effects: [...upsert] });
+    release.resolve(); assert.equal((await pending).succeeded, 1); assert.equal(lateGuard, true);
+    const after = (await db.tasks.get(task.id!))!;
+    assert.equal(after.title, 'B'); assert.equal(after.description, 'Google'); assert.equal(after.calendar?.etag, '"v1"');
+});
+
+test('old generation effects retire without a network call and cannot acknowledge the recreated block', async (t) => {
+    const db = await database(t);
+    const { task, service, effectId } = await scheduledMeeting(db);
+    await db.tasks.put({ ...task, calendar: { ...task.calendar!, suppressed: true, metadataUpdatedAt: task.calendar!.metadataUpdatedAt + 1 } });
+    const recreated = await service.queueEffects({ localId: task.id, context: newTaskMutationContext('ui'), effects: [...upsert] });
+    assert.equal(recreated.status, 'queued');
+    if (recreated.status !== 'queued') throw new Error('recreate failed');
+    for (const [id, receiptId] of [[effectId, 'old-generation'], [recreated.effectIds[0], 'recreated-generation']]) {
+        await db.agentCommandReceipts.put({ id: receiptId, commandId: crypto.randomUUID(), payloadDigest: `sha256:${'a'.repeat(64)}`,
+            producerId: 'hermes-agent', receiverId: 'test-receiver', commandExpiresAt: Date.now() + 60_000,
+            lifecycle: 'applied', effectState: 'pending', fencingToken: 1, attempts: 1, historyCount: 0,
+            result: { entityPublicId: task.publicId, revision: task.protocolRevision }, createdAt: 1, updatedAt: 1, retainUntil: Date.now() + 60_000 });
+        await db.agentProtocolEffects.update(id, { commandReceiptId: receiptId });
+    }
+    const calls: string[] = [];
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async (effect) => {
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        calls.push(effect.id);
+        const current = (await db.tasks.get(task.id!))!;
+        return { externalId: target(effect), calendar: { ...current.calendar!, projection: effect.payload.projection,
+            sentProjection: effect.payload.sentProjection, etag: '"new-generation"' } };
+    } });
+    assert.deepEqual(await worker.drainOnce(), { attempted: 2, succeeded: 1, failed: 1, retryScheduled: 0 });
+    assert.equal(calls.includes(effectId), false);
+    const retired = (await db.agentProtocolEffects.get(effectId))!;
+    assert.equal(retired.state, 'failed'); assert.equal(retired.superseded, true);
+    assert.equal(retired.lastErrorCode, 'external_effect_failed');
+    assert.equal((await db.agentCommandReceipts.get('old-generation'))?.effectState, 'failed');
+    assert.equal((await db.agentCommandReceipts.get('recreated-generation'))?.effectState, 'succeeded');
+    const results = await db.agentProtocolOutbox.where('commandReceiptId').anyOf(['old-generation', 'recreated-generation']).toArray();
+    const oldResult = results.find(row => row.commandReceiptId === 'old-generation');
+    const newResult = results.find(row => row.commandReceiptId === 'recreated-generation');
+    assert.ok(oldResult?.family === 'result'); assert.ok(newResult?.family === 'result');
+    assert.ok(oldResult.payload.state === 'applied'); assert.ok(newResult.payload.state === 'applied');
+    assert.deepEqual(oldResult.payload.effects, [{ effect_id: effectId, kind: 'calendar', state: 'failed', error_code: 'external_effect_failed' }]);
+    assert.deepEqual(newResult.payload.effects, [{ effect_id: recreated.effectIds[0], kind: 'calendar', state: 'succeeded' }]);
+    const after = (await db.tasks.get(task.id!))!;
+    assert.equal(after.calendar?.generation, 1); assert.notEqual(after.googleEventId, task.reservedGoogleEventId);
+    assert.equal(after.calendar?.etag, '"new-generation"');
+});
+
+async function legacyMeeting(db: BattlePlanDB) {
+    const { task, service, effectId } = await scheduledMeeting(db);
+    const legacy = (await db.agentProtocolEffects.get(effectId))!;
+    if (legacy.kind !== 'calendar' || legacy.operation !== 'upsert') throw new Error('upsert');
+    await db.tasks.put({ ...task, calendar: undefined });
+    await db.agentProtocolEffects.put({ ...legacy, payload: { title: task.title, description: task.description,
+        status: task.status, reservedEventId: task.reservedGoogleEventId!, date: task.date, startTime: task.startTime, duration: task.duration } });
+    await service.updateTask({ localId: task.id, changes: { title: 'Current title', description: 'Current public description', startTime: '15:30' },
+        context: newTaskMutationContext('ui') });
+    return { task: (await db.tasks.get(task.id!))!, service, effectId };
+}
+
+test('activation drains a pending legacy create from current Task only after a complete committed pull, then drains update and delete in FIFO', async (t) => {
+    const db = await database(t);
+    const { task, service, effectId } = await legacyMeeting(db);
+    const google = await googleHarness();
+    const delivered: AgentProtocolEffectRow[] = [];
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT,
+        canDeliver: effect => calendarEffectDeliveryAllowed(db, effect, ACCOUNT, 'session'),
+        execute: async (effect, guard) => { delivered.push(structuredClone(effect)); return executeGoogleExternalEffect(google.service, effect, guard); } });
+    let failTrackedGet = true;
+    const sync = new GoogleCalendarSync(db, { listCalendarEvents: async () => ({ events: [] }), getCalendarEvent: async id => {
+        assert.equal(id, task.reservedGoogleEventId); if (failTrackedGet) throw new Error('tracked GET failed'); return null;
+    } }, { now: () => Date.parse('2026-10-09T12:00:00Z'), drain: () => worker.drainOnce() });
+    await sync.setSession({ accountId: ACCOUNT, authKey: 'session', usableAuth: true, online: true, visible: true });
+    await sync.activate({ range: { startDate: '2026-09-01', endDate: '2026-10-10' }, selectedPublicIds: [task.publicId!], timeZone: 'Europe/Prague' });
+    const settings = (await readCalendarSyncSettings(db, ACCOUNT))!;
+    await writeCalendarSyncSettings(db, { ...settings, lastCheckedAt: Date.parse('2026-10-09T11:00:00Z') });
+    await assert.rejects(sync.refresh(), /tracked GET failed/);
+    assert.equal((await worker.drainOnce()).attempted, 0); assert.equal(delivered.length, 0);
+    assert.equal((await db.agentProtocolEffects.get(effectId))?.attempts, 0);
+    failTrackedGet = false;
+    await sync.refresh();
+    assert.equal(delivered.length, 2, 'legacy predecessor and activation successor both drain');
+    const first = delivered[0];
+    assert.equal(first.id, effectId); assert.ok(first.kind === 'calendar' && first.operation === 'upsert');
+    assert.equal(first.payload.projection?.title, task.title); assert.equal(first.payload.projection?.description, task.description);
+    assert.equal(first.payload.type, task.type); assert.equal(first.payload.reservedEventId, task.reservedGoogleEventId);
+    assert.equal(first.payload.calendarId, 'primary'); assert.equal(first.payload.generation, 0);
+    assert.equal(first.payload.canonicalIdentity, `public:${task.publicId}`); assert.equal(first.payload.calendarOrigin, 'local');
+    assert.equal(first.payload.googleEventId, undefined); assert.equal(first.payload.baseline, undefined);
+    assert.equal(first.payload.projection?.timing.kind, 'timed');
+    if (first.payload.projection?.timing.kind === 'timed') assert.equal(first.payload.projection.timing.start, '2026-09-20T13:30:00.000Z');
+    assert.equal(google.remote.get(task.reservedGoogleEventId!)?.summary, task.title); assert.equal(google.inserts, 1);
+    await service.updateTask({ localId: task.id, changes: { title: 'Later edit' }, context: newTaskMutationContext('ui') });
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    assert.equal(google.remote.get(task.reservedGoogleEventId!)?.summary, 'Later edit');
+    await service.archiveTask({ localId: task.id, context: newTaskMutationContext('ui') });
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    assert.equal(google.remote.get(task.reservedGoogleEventId!)?.status, 'cancelled'); assert.equal(google.remote.size, 1);
+    assert.deepEqual(delivered.map(effect => effect.sequence), [1, 2, 3, 4]);
+    assert.ok((await db.agentProtocolEffects.toArray()).every(effect => effect.state === 'succeeded'));
+});
+
+test('a modernized legacy create never adopts an unrelated resource racing into its reserved ID after the pull', async (t) => {
+    const db = await database(t);
+    const { task } = await legacyMeeting(db);
+    const google = await googleHarness();
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT,
+        canDeliver: effect => calendarEffectDeliveryAllowed(db, effect, ACCOUNT, 'session'),
+        execute: (effect, guard) => executeGoogleExternalEffect(google.service, effect, guard) });
+    const sync = new GoogleCalendarSync(db, { listCalendarEvents: async () => ({ events: [] }), getCalendarEvent: async () => null },
+        { now: () => Date.parse('2026-10-09T12:00:00Z'), drain: async () => {} });
+    await sync.setSession({ accountId: ACCOUNT, authKey: 'session', usableAuth: true, online: true, visible: true });
+    await sync.activate({ range: { startDate: '2026-09-01', endDate: '2026-10-10' }, selectedPublicIds: [task.publicId!], timeZone: 'Europe/Prague' });
+    await sync.refresh();
+    const withoutPullGate = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async () => { throw new Error('unsafe legacy call'); } });
+    assert.equal((await withoutPullGate.drainOnce()).attempted, 0, 'an enabled baseline-less legacy create requires the in-memory delivery gate');
+    await db.tasks.update(task.id!, { googleEventId: task.reservedGoogleEventId });
+    assert.equal((await worker.drainOnce()).attempted, 0, 'a linked event without a baseline cannot be treated as an unacknowledged create');
+    await db.tasks.update(task.id!, { googleEventId: undefined });
+    google.remote.set(task.reservedGoogleEventId!, { id: task.reservedGoogleEventId, summary: 'Unrelated event', etag: 'foreign-etag' });
+    assert.deepEqual(await worker.drainOnce(), { attempted: 2, succeeded: 0, failed: 2, retryScheduled: 0 });
+    assert.deepEqual(google.remote.get(task.reservedGoogleEventId!), { id: task.reservedGoogleEventId, summary: 'Unrelated event', etag: 'foreign-etag' });
+    assert.equal((await db.tasks.get(task.id!))?.googleEventId, undefined);
+    assert.ok((await db.agentProtocolEffects.toArray()).every(effect => effect.state === 'failed' && !effect.superseded));
+});
+
+test('an obsolete legacy reserved target retires after the pull instead of blocking its recreated generation', async (t) => {
+    const db = await database(t);
+    const { task, service, effectId } = await legacyMeeting(db);
+    const google = await googleHarness();
+    const called: string[] = [];
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT,
+        canDeliver: effect => calendarEffectDeliveryAllowed(db, effect, ACCOUNT, 'session'),
+        execute: async (effect, guard) => { called.push(effect.id); return executeGoogleExternalEffect(google.service, effect, guard); } });
+    const sync = new GoogleCalendarSync(db, { listCalendarEvents: async () => ({ events: [] }), getCalendarEvent: async () => null },
+        { now: () => Date.parse('2026-10-09T12:00:00Z'), drain: () => worker.drainOnce() });
+    await sync.setSession({ accountId: ACCOUNT, authKey: 'session', usableAuth: true, online: true, visible: true });
+    await sync.activate({ range: { startDate: '2026-09-01', endDate: '2026-10-10' }, selectedPublicIds: [task.publicId!], timeZone: 'Europe/Prague' });
+    const current = (await db.tasks.get(task.id!))!;
+    await db.tasks.put({ ...current, calendar: { ...current.calendar!, suppressed: true } });
+    const recreated = await service.queueEffects({ localId: task.id, context: newTaskMutationContext('ui'), effects: [...upsert] });
+    assert.ok(recreated.status === 'queued');
+    await sync.refresh();
+    assert.equal((await db.agentProtocolEffects.get(effectId))?.state, 'failed');
+    assert.equal((await db.agentProtocolEffects.get(effectId))?.superseded, true);
+    assert.equal((await db.agentProtocolEffects.get(recreated.effectIds[0]))?.state, 'succeeded');
+    assert.deepEqual(called, recreated.effectIds); assert.equal(google.inserts, 1);
+    assert.equal(google.remote.has(task.reservedGoogleEventId!), false);
+    assert.equal((await db.tasks.get(task.id!))?.calendar?.generation, 1);
+});
+
+test('modern late acknowledgement after timeout cannot replace a recovered baseline or domain content', async (t) => {
+    const db = await database(t);
+    const { task, effectId } = await scheduledMeeting(db);
+    const first = (await db.agentProtocolEffects.get(effectId))!;
+    if (first.kind !== 'calendar' || first.operation !== 'upsert') throw new Error('upsert');
+    const release = deferred<{ externalId: string; calendar: CalendarWriteAcknowledgement }>();
+    const late = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, executionTimeoutMs: 20, execute: () => release.promise });
+    assert.equal((await late.drainOnce()).retryScheduled, 1);
+    await db.agentProtocolEffects.update(effectId, { nextAttemptAt: 0 });
+    const recovered = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async (effect) => {
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        return { externalId: target(effect), calendar: { ...task.calendar!, projection: effect.payload.projection,
+            sentProjection: effect.payload.sentProjection, etag: '"recovered"' } };
+    } });
+    assert.equal((await recovered.drainOnce()).succeeded, 1);
+    release.resolve({ externalId: task.reservedGoogleEventId!, calendar: { ...task.calendar!,
+        projection: { ...first.payload.projection!, title: 'Late title' }, sentProjection: first.payload.projection, etag: '"late"' } });
+    await setImmediate();
+    assert.equal((await db.tasks.get(task.id!))?.calendar?.etag, '"recovered"');
+    assert.equal((await db.tasks.get(task.id!))?.title, 'A');
+});
+
+test('modern field acknowledgement, protocol event and pairing roll back together when success cannot commit', async (t) => {
+    const db = await database(t);
+    const { task, effectId } = await scheduledMeeting(db);
+    const beforeEvents = await db.agentProtocolEvents.count();
+    const fail = (changes: Partial<AgentProtocolEffectRow>) => { if (changes.state === 'succeeded') throw new Error('ack failure'); };
+    db.agentProtocolEffects.hook('updating', fail);
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async (effect) => {
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        return { externalId: target(effect), calendar: { ...task.calendar!, projection: { ...effect.payload.projection!, description: 'Google' },
+            sentProjection: effect.payload.sentProjection, etag: '"ack"' } };
+    } });
+    try { assert.equal((await worker.drainOnce()).retryScheduled, 1); }
+    finally { db.agentProtocolEffects.hook('updating').unsubscribe(fail); }
+    const after = (await db.tasks.get(task.id!))!;
+    assert.equal(after.description, 'Original'); assert.equal(after.calendar?.etag, undefined);
+    assert.equal(after.googleEventId, undefined); assert.deepEqual(after.protocolRevision, task.protocolRevision);
+    assert.equal(await db.agentProtocolEvents.count(), beforeEvents);
+    assert.equal((await db.agentProtocolEffects.get(effectId))?.state, 'retry_scheduled');
+});
+
+test('foreign canonical identity is a terminal inspectable failure, never a blind Calendar retry', async (t) => {
+    const db = await database(t);
+    const { effectId } = await scheduledMeeting(db);
+    let calls = 0;
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async () => {
+        calls++; throw { status: 409, code: 'calendar_identity_mismatch' };
+    } });
+    assert.equal((await worker.drainOnce()).failed, 1);
+    assert.equal((await db.agentProtocolEffects.get(effectId))?.state, 'failed');
+    assert.equal((await worker.drainOnce()).attempted, 0); assert.equal(calls, 1);
+});
+
+test('remote-deleted work block suppresses export while an unchanged meeting is archived via Google mutation', async (t) => {
+    for (const type of ['task', 'meeting'] as const) {
+        const db = await database(t);
+        const { task, service, effectId } = await scheduledMeeting(db);
+        if (type === 'task') await service.updateTask({ localId: task.id, changes: { type }, context: newTaskMutationContext('google') });
+        const current = (await db.tasks.get(task.id!))!;
+        const effect = (await db.agentProtocolEffects.get(effectId))!;
+        if (effect.kind !== 'calendar' || effect.operation !== 'upsert') throw new Error('upsert');
+        await db.tasks.put({ ...current, calendar: { ...current.calendar!, baseline: effect.payload.projection } });
+        const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT, execute: async () => ({ externalId: task.reservedGoogleEventId,
+            calendar: { ...current.calendar!, sentProjection: effect.payload.projection, deleted: true } }) });
+        const beforeEffects = await db.agentProtocolEffects.count();
+        assert.equal((await worker.drainOnce()).succeeded, 1);
+        const after = (await db.tasks.get(task.id!))!;
+        assert.equal(after.calendar?.suppressed, true);
+        assert.equal(Boolean(after.isDeleted), type === 'meeting');
+        assert.equal(after.title, 'A'); assert.equal(after.internalNotes, 'private');
+        assert.equal(await db.agentProtocolEffects.count(), beforeEffects, 'Google acknowledgement never echoes another export');
+    }
 });
 
 test('auth, scope, transient and precondition failures retry indefinitely with a capped delay', async (t) => {
@@ -415,7 +762,7 @@ async function googleHarness(options: {
         ['google_user_email', ACCOUNT]]);
     const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value),
         removeItem: (key: string) => values.delete(key) };
-    const remote = new Map<string, { etag: string; summary?: string; description?: string; status?: string }>();
+    const remote = new Map<string, { id?: string; etag: string; summary?: string; description?: string; status?: string }>();
     let version = 0;
     let inserts = 0;
     let conflicts = 0;
@@ -454,6 +801,72 @@ async function googleHarness(options: {
     await service.fetchUserInfo();
     return { service, remote, get inserts() { return inserts; }, get conflicts() { return conflicts; } };
 }
+
+test('ack baseline advance retains a queued local/Google same-field conflict and blocks the next write', async (t) => {
+    const db = await database(t);
+    const { task, service } = await scheduledMeeting(db);
+    let writes = 0;
+    const google = await googleHarness({ beforeWrite: async () => { writes++; } });
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT,
+        execute: (effect, guard) => executeGoogleExternalEffect(google.service, effect, guard) });
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    await service.updateTask({ localId: task.id, changes: { description: 'L' }, context: newTaskMutationContext('ui'), effects: [...upsert] });
+    await service.updateTask({ localId: task.id, changes: { title: 'B' }, context: newTaskMutationContext('ui'), effects: [...upsert] });
+    const remote = google.remote.get(task.reservedGoogleEventId!)!;
+    remote.summary = 'C'; remote.etag = '"remote-C"';
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    assert.equal(writes, 1);
+    const after = (await db.tasks.get(task.id!))!;
+    assert.equal(after.title, 'B'); assert.equal(after.description, 'L');
+    assert.equal(after.calendar?.conflict?.kind, 'fields');
+    assert.deepEqual(after.calendar?.conflict?.fields, ['title']);
+    assert.equal(after.calendar?.conflict?.remote?.title, 'C');
+    assert.equal(google.remote.get(task.reservedGoogleEventId!)?.summary, 'C');
+    assert.equal((await worker.drainOnce()).attempted, 0);
+});
+
+test('lost create response adoption detects a newer queued local title versus Google title conflict', async (t) => {
+    const db = await database(t);
+    const { task, service, effectId } = await scheduledMeeting(db);
+    const started = deferred(), release = deferred();
+    const google = await googleHarness({ afterInsert: async () => { started.resolve(); await release.promise; throw new Error('response lost'); } });
+    const worker = new ExternalEffectOutbox(db, { accountId: () => ACCOUNT,
+        execute: (effect, guard) => executeGoogleExternalEffect(google.service, effect, guard) });
+    const first = worker.drainOnce(); await started.promise;
+    await service.updateTask({ localId: task.id, changes: { title: 'B' }, context: newTaskMutationContext('ui'), effects: [...upsert] });
+    google.remote.get(task.reservedGoogleEventId!)!.summary = 'C';
+    release.resolve(); assert.equal((await first).retryScheduled, 1);
+    await db.agentProtocolEffects.update(effectId, { nextAttemptAt: 0 });
+    assert.equal((await worker.drainOnce()).succeeded, 1);
+    assert.equal((await db.tasks.get(task.id!))?.calendar?.conflict?.remote?.title, 'C');
+    assert.equal((await db.tasks.get(task.id!))?.title, 'B');
+    assert.equal(google.remote.get(task.reservedGoogleEventId!)?.summary, 'C');
+    assert.equal(google.inserts, 2);
+});
+
+test('two databases creating one canonical occurrence with different titles keep a conflict instead of dropping the second title', async (t) => {
+    const firstDb = await database(t), secondDb = await database(t);
+    const create = async (db: BattlePlanDB, title: string, publicId: string) => {
+        const result = await new TaskMutationService(db).createTask({ task: { title, publicId, description: 'Original',
+            suggestionOccurrenceKey: 'shared-occurrence', type: 'meeting', status: 'pending', urgency: 2,
+            date: '2026-09-20', startTime: '14:00', duration: 60 }, context: newTaskMutationContext('ui', undefined, ACCOUNT), effects: [...upsert] });
+        if (result.status !== 'applied') throw new Error('create');
+        return result.task;
+    };
+    const first = await create(firstDb, 'A', 'task_one'), second = await create(secondDb, 'B', 'task_two');
+    assert.equal(first.reservedGoogleEventId, second.reservedGoogleEventId);
+    const google = await googleHarness();
+    const worker = (db: BattlePlanDB) => new ExternalEffectOutbox(db, { accountId: () => ACCOUNT,
+        execute: (effect, guard) => executeGoogleExternalEffect(google.service, effect, guard) });
+    assert.equal((await worker(firstDb).drainOnce()).succeeded, 1);
+    assert.equal((await worker(secondDb).drainOnce()).succeeded, 0);
+    const after = (await secondDb.tasks.get(second.id!))!;
+    assert.equal(after.title, 'B');
+    assert.equal(after.calendar?.conflict?.kind, 'legacy-baseline');
+    assert.deepEqual(after.calendar?.conflict?.fields, ['title']);
+    assert.equal(google.remote.size, 1);
+    assert.equal(google.remote.get(first.reservedGoogleEventId!)?.summary, 'A');
+});
 
 test('real guarded adapter delivers queued create, edit and archive against one reserved event', async (t) => {
     const db = await database(t);

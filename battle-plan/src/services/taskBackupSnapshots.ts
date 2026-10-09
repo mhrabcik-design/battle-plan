@@ -3,6 +3,7 @@ import type { TaskDriveBackupPayload } from './taskDriveBackup.ts';
 import { filterTaskBackupSettings } from '../utils/taskBackupSettings.ts';
 import { canonicalBackupJson } from '../utils/canonicalBackupJson.ts';
 import { normalizeLegacyBackupTask } from './taskBackupCompatibility.ts';
+import { applyCalendarPairing, mergeCalendarMetadata } from './calendarMetadata.ts';
 
 function version(task: Task): number { return task.updatedAt || task.createdAt || 0; }
 
@@ -21,6 +22,7 @@ function content(task: Task): string {
     delete copy.googleId;
     delete copy.googleListId;
     delete copy.googleAccountId;
+    delete copy.calendar;
     copy.isDeleted = Boolean(copy.isDeleted);
     return canonicalBackupJson(copy);
 }
@@ -98,8 +100,11 @@ export function mergeTaskBackupSnapshots(snapshots: readonly TaskDriveBackupPayl
         // Retain each portable alias so later edits without occurrence metadata
         // remain attached to the same occurrence on either original device.
         const publicIds = [...new Set(group.map(task => task.publicId).filter(Boolean))].sort();
-        const winner = winners.map(task => ({ task, key: canonicalBackupJson(task) }))
+        const calendar = mergeCalendarMetadata(normalized.map(task => task.calendar));
+        const selected = winners.map(task => ({ task, key: canonicalBackupJson(task) }))
             .sort((a, b) => a.key.localeCompare(b.key))[0].task;
+        const acknowledged = normalized.find(task => task.googleEventId === calendar?.eventId)?.googleEventId;
+        const winner = calendar ? applyCalendarPairing(selected, calendar, acknowledged) : selected;
         if (publicIds.length) for (const publicId of publicIds) tasks.push({ ...winner, publicId });
         else tasks.push(winner);
     }

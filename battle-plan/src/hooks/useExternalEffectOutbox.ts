@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { googleService } from '../services/googleService';
@@ -11,10 +11,17 @@ export function useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth
     isOnline: boolean;
     updateSyncHealth: (key: string, patch: Partial<SyncHealth>) => void;
 }) {
-    const enabled = isOnline && hasUsableAuth(googleAuth);
+    const [visible, setVisible] = useState(document.visibilityState !== 'hidden');
+    const enabled = visible && isOnline && hasUsableAuth(googleAuth);
     const accountId = googleService.getAccountId();
     const summary = useLiveQuery(async () => summarizeExternalEffects(await db.agentProtocolEffects.toArray(), accountId), [accountId]);
     const scheduler = useRef<ReturnType<typeof createExternalEffectScheduler> | null>(null);
+
+    useEffect(() => {
+        const changed = () => setVisible(document.visibilityState !== 'hidden');
+        document.addEventListener('visibilitychange', changed);
+        return () => document.removeEventListener('visibilitychange', changed);
+    }, []);
 
     useEffect(() => {
         const instance = createExternalEffectScheduler({
@@ -44,7 +51,7 @@ export function useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth
             label: 'Kalendář a Google Tasks',
             state: summary.failed ? 'error' : summary.pending ? 'stale' : 'ok',
             detail: summary.failed ? `${summary.failed} změn Google odmítl. Opravte úkol a zkuste synchronizaci znovu.`
-                : summary.pending ? pendingDetail : 'Všechny čekající změny byly zapsány do Google.',
+                : summary.pending ? pendingDetail : 'Žádné změny nečekají na přenos do Google.',
             lastError: summary.lastError,
             lastSuccess: summary.lastSuccess === null ? null : new Date(summary.lastSuccess).toLocaleString('cs-CZ'),
         });

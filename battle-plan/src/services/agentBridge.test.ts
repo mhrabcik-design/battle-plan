@@ -49,7 +49,10 @@ const gapiMock: {
     calendarInsertCalls: [],
     calendarDeleteCalls: [],
     tasksPatchCalls: [],
-    calendarInsertImpl: async (args: unknown) => ({ result: { id: (args as { resource: { id: string } }).resource.id } }),
+    calendarInsertImpl: async (args: unknown) => ({ result: {
+        ...structuredClone((args as { resource: Record<string, unknown> }).resource),
+        etag: '"calendar-version-1"', organizer: { self: true },
+    } }),
     calendarDeleteImpl: async () => ({}),
     tasksPatchImpl: async () => ({ result: { id: 'task-1' } }),
 };
@@ -264,7 +267,10 @@ test('U3: create_task delivers its durable Calendar effect and records only the 
     assert.equal(stored!.type, 'meeting');
     assert.match(stored!.reservedGoogleEventId!, /^bp[0-9a-f]{32}$/);
     assert.equal(stored!.googleEventId, stored!.reservedGoogleEventId);
+    assert.equal(stored!.calendar?.baseline?.title, 'Standup');
+    assert.equal(stored!.calendar?.etag, '"calendar-version-1"');
     assert.ok(stored!.protocolRevision);
+    assert.equal(await db.agentProtocolEvents.count(), 1, 'unchanged public acknowledgement must not echo a domain event');
     assert.equal((await db.agentProtocolEffects.toArray())[0].state, 'succeeded');
     assert.equal(gapiMock.calendarInsertCalls.length, 1, 'calendar.events.insert should be called once');
 });
@@ -1096,4 +1102,20 @@ test('health: old applied diagnostics suppress replay after clearing and re-mirr
     await agentBridge.mirrorInbox([write]);
     assert.equal((await agentBridge.applyWrite(write)).disposition, 'applied');
     assert.equal(await db.projects.count(), 0);
+});
+
+test('readonly Calendar mutations are terminal failure receipts and never retry', async () => {
+    await resetDb();
+    const id = await db.tasks.add({ title: 'Jen čtení', type: 'meeting', date: '2026-10-05', status: 'pending', urgency: 2, createdAt: 1, updatedAt: 1,
+        calendar: { accountId: 'a', calendarId: 'primary', eventId: 'e', canonicalIdentity: 'e', origin: 'google', generation: 0, metadataUpdatedAt: 1, readonlyReason: 'recurring' } });
+    for (const action of ['update_task', 'delete_task', 'complete_task'] as const) {
+        const write = { id: `readonly-${action}`, action, created_at: 1, task_data: { id, title: 'Přepsat' } };
+        const result = await agentBridge.applyWrite(write);
+        assert.equal(result.success, false);
+        assert.equal(result.disposition, 'terminal');
+        assert.equal(result.last_error, 'calendar_task_readonly');
+        assert.ok((await db.agentInbox.get(write.id))?.applied_at);
+        assert.deepEqual(await agentBridge.applyWrite(write), result);
+    }
+    assert.equal((await db.tasks.get(id))?.title, 'Jen čtení');
 });

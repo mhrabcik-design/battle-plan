@@ -190,7 +190,7 @@ class AgentBridge {
     } catch (e) {
       // A nested Dexie validation failure aborts its parent transaction. Record
       // the terminal result only after rollback, preserving any winning receipt.
-      if (e instanceof ProjectUnavailableError || (e instanceof Error && e.message === 'worklog-not-found')) {
+      if (e instanceof ProjectUnavailableError || (e instanceof Error && ['worklog-not-found', 'calendar_task_readonly'].includes(e.message))) {
         try {
           return await db.transaction('rw', db.agentInbox, async () => {
             const existing = await db.agentInbox.get(write.id) as LegacyReceipt | undefined;

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { db, type Task } from '../db.ts';
 import type { GoogleAuthStatus, UnifiedTask } from '../types.ts';
 import { applySavedEditorStatus } from '../utils/editorInteraction.ts';
+import { ensureTaskDeadline } from '../services/taskNormalization.ts';
 
 Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -64,6 +65,59 @@ test('blank title fails without creating or overwriting a task', async () => {
     const id = await db.tasks.add(draft({ title: 'Ponechat' }));
     assert.equal((await commandsFor(draft({ id, title: ' ' })).handleSaveEdit()).status, 'failed');
     assert.equal((await db.tasks.get(id))?.title, 'Ponechat');
+});
+
+test('readonly Calendar task rejects every command with a user notice, including a newly readonly stored row', async () => {
+    const notices: string[] = [];
+    mock.method(globalThis, 'alert', (message: string) => { notices.push(message); });
+    const calendar = { accountId: 'a', calendarId: 'primary', eventId: 'e', canonicalIdentity: 'e', origin: 'google' as const, generation: 0, metadataUpdatedAt: 1, readonlyReason: 'recurring' as const };
+    const id = await db.tasks.add(draft({ title: 'Událost', date: '2026-10-05', deadline: '2026-10-05', calendar }));
+    const staleDraft = draft({ id, title: 'Změna', date: '2026-10-05', deadline: '2026-10-05' });
+    const commands = commandsFor(staleDraft);
+    assert.equal(await commands.handleToggleTask(staleDraft), null);
+    assert.equal(await commands.handleDeleteTask(staleDraft), false);
+    assert.equal(await commands.handleRescheduleTask(staleDraft, { date: '2026-10-06', deadline: '2026-10-06' }), false);
+    assert.equal((await commands.handleSaveEdit()).status, 'failed');
+    await commands.toggleSubtask(staleDraft, 'one');
+    await commands.handleSyncToGoogle(staleDraft);
+    await assert.rejects(commands.handlePrepareInvitation(staleDraft), /pouze pro čtení/);
+    assert.equal((await db.tasks.get(id))?.title, 'Událost');
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+    assert.ok(notices.some(message => message.includes('pouze pro čtení')));
+});
+
+test('confirming the existing fallback date enrolls it and a stale false draft cannot reset that choice', async () => {
+    const fallback = draft({ title: 'Pátek', date: '2026-10-09', deadline: '2026-10-09', calendarScheduleExplicit: false });
+    const id = await db.tasks.add(fallback);
+    assert.equal((await commandsFor({ ...fallback, id, calendarScheduleExplicit: true }).handleSaveEdit()).status, 'success');
+    const enrolled = (await db.tasks.get(id))!;
+    assert.equal(enrolled.calendarScheduleExplicit, true);
+    assert.equal(enrolled.deadline, fallback.deadline);
+    assert.equal((await commandsFor({ ...enrolled, title: 'Přejmenováno', calendarScheduleExplicit: false }).handleSaveEdit()).status, 'success');
+    assert.equal((await db.tasks.get(id))?.calendarScheduleExplicit, true);
+});
+
+test('clearing a selected date preserves a planner-only fallback, including the same Friday', async () => {
+    for (const originalDate of ['2026-10-20', ensureTaskDeadline({ type: 'task' }).deadline!]) {
+        const saved = draft({ title: 'Neexportovat náhradní termín', date: originalDate, deadline: originalDate, calendarScheduleExplicit: true });
+        const id = await db.tasks.add(saved);
+        const outcome = await commandsFor({ ...saved, id, date: '', deadline: '', calendarScheduleExplicit: false }).handleSaveEdit();
+        assert.equal(outcome.status, 'success');
+        const cleared = (await db.tasks.get(id))!;
+        assert.equal(cleared.calendarScheduleExplicit, false);
+        assert.ok(cleared.deadline, 'planner keeps its fallback date');
+    }
+});
+
+test('empty imported Calendar title remains public empty when private notes are saved', async () => {
+    const imported = draft({ title: '', type: 'meeting', date: '2026-10-05', startTime: '09:00', duration: 60,
+        calendar: { accountId: 'a', calendarId: 'primary', eventId: 'e', canonicalIdentity: 'e', origin: 'google', generation: 0, metadataUpdatedAt: 1,
+            timing: { kind: 'timed', start: '2026-10-05T09:00:00Z', end: '2026-10-05T10:00:00Z', timeZone: 'UTC' } } });
+    const id = await db.tasks.add(imported);
+    const outcome = await commandsFor({ ...imported, id, internalNotes: 'Soukromé' }).handleSaveEdit();
+    assert.notEqual(outcome.status, 'failed');
+    assert.equal((await db.tasks.get(id))?.title, '');
+    assert.equal((await db.tasks.get(id))?.internalNotes, 'Soukromé');
 });
 
 test('saving missing and deleted tasks fails instead of pretending the draft was saved', async () => {

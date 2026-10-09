@@ -1,6 +1,6 @@
 import type { UnifiedTask } from '../types';
+import { calendarTaskKey, calendarVisualBlock } from './calendarPresentation.ts';
 import {
-  getWeeklyVisualBlock,
   WEEKLY_CALENDAR_END_MINUTES,
   WEEKLY_CALENDAR_START_MINUTES,
 } from './calendarUtils.ts';
@@ -20,9 +20,9 @@ export type CalendarLayoutItem = CalendarInterval & {
 };
 
 export function getWeeklyVisualInterval(task: UnifiedTask): CalendarInterval {
-  const { startMinute, endMinute } = getWeeklyVisualBlock(task);
+  const { startMinute, endMinute } = calendarVisualBlock(task);
   return {
-    id: task.isGoogleTask ? `g-${task.googleId}` : `l-${task.id}`,
+    id: calendarTaskKey(task),
     startMinute: Math.max(WEEKLY_CALENDAR_START_MINUTES, Math.min(WEEKLY_CALENDAR_END_MINUTES, startMinute)),
     endMinute: Math.max(WEEKLY_CALENDAR_START_MINUTES, Math.min(WEEKLY_CALENDAR_END_MINUTES, endMinute)),
   };

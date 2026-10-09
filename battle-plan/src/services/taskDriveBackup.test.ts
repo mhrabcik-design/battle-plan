@@ -10,6 +10,7 @@ import { canonicalBackupJson } from '../utils/canonicalBackupJson.ts';
 
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null } });
 const { TaskDriveBackup } = await import('./taskDriveBackup.ts');
+const { googleService } = await import('./googleService.ts');
 
 const task = (publicId: string, overrides: Partial<Task> = {}): Task => ({
     publicId, title: publicId, type: 'task', urgency: 2, status: 'pending', createdAt: 1, updatedAt: 1, ...overrides,
@@ -70,6 +71,84 @@ test('equal content ignores device-local IDs, revisions and delivery metadata', 
     const first = task('a', { id: 1, effectSequence: 2, googleId: 'local-link-a' });
     const second = task('a', { id: 80, effectSequence: 3, googleId: 'local-link-b', protocolRevision: { revision_id: 'sha256:different', mutation_id: 'mutation', base_revision: null } });
     assert.equal(mergeTaskBackupSnapshots([snapshot([first]), snapshot([second])]).data?.tasks?.length, 1);
+});
+
+test('same-version Calendar pairing and newer suppression survive canonical snapshot winner', () => {
+    const calendar = { accountId: 'a', calendarId: 'primary', eventId: 'event', canonicalIdentity: 'public:a', origin: 'local' as const, generation: 0, metadataUpdatedAt: 2 };
+    const paired = task('a', { calendar });
+    const suppressed = task('a', { calendar: { ...calendar, suppressed: true, metadataUpdatedAt: 3 } });
+    for (const publications of [[snapshot([paired]), snapshot([task('a')]), snapshot([suppressed])], [snapshot([suppressed]), snapshot([task('a')]), snapshot([paired])]]) {
+        assert.deepEqual(mergeTaskBackupSnapshots(publications).data?.tasks?.[0].calendar, suppressed.calendar);
+    }
+    assert.throws(() => mergeTaskBackupSnapshots([snapshot([paired]), snapshot([task('a', { calendar: { ...calendar, eventId: 'ambiguous' } })])]), /Calendar/);
+});
+
+test('account switch never publishes foreign Calendar imports or pairing into the new Drive account', async (t) => {
+    const store = memoryStore();
+    let account = 'account-a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    const calendar = { accountId: 'account-a', calendarId: 'primary', eventId: 'a-event', canonicalIdentity: 'google:a-event', origin: 'google' as const, generation: 0, metadataUpdatedAt: 1 };
+    const remote = task('remote', { calendar });
+    const local = task('local', { calendar: { ...calendar, origin: 'local' }, googleEventId: 'a-event', reservedGoogleEventId: 'a-event', googleAccountId: 'account-a' });
+    const backup = new TaskDriveBackup(store.drive);
+    await backup.save({ tasks: [remote, local], settings: [{ id: 'calendar-sync:account-a', value: 'device-only' }, { id: 'google_access_token', value: 'secret' }] });
+    assert.equal(store.files[0].payload.data?.tasks?.length, 2);
+    assert.deepEqual(store.files[0].payload.data?.settings, []);
+    account = 'account-b';
+    store.files.length = 0;
+    await backup.save({ tasks: [remote, local] });
+    assert.deepEqual(store.files[0].payload.data?.tasks, [task('local')]);
+    assert.equal(JSON.stringify(store.files).includes('a-event'), false);
+});
+
+test('account switch during snapshot reads blocks publication of the previous account Calendar data', async (t) => {
+    const store = memoryStore();
+    let account = 'account-a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    let release!: () => void;
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const originalRead = store.drive.readJsonFilesWithStatus;
+    t.mock.method(store.drive, 'readJsonFilesWithStatus', async <T>(...args: Parameters<typeof originalRead>) => {
+        started();
+        await gate;
+        return originalRead<T>(...args);
+    });
+    const remote = task('remote', { calendar: { accountId: 'account-a', calendarId: 'primary', eventId: 'private-a',
+        canonicalIdentity: 'google:private-a', origin: 'google', generation: 0, metadataUpdatedAt: 1 } });
+    const saving = new TaskDriveBackup(store.drive).save({ tasks: [remote] });
+    await reading;
+    account = 'account-b';
+    release();
+    await assert.rejects(saving, /Účet Google/);
+    assert.equal(store.files.length, 0);
+});
+
+test('a late upload acknowledgement from a replaced Google session cannot report backup success', async (t) => {
+    const store = memoryStore();
+    let token = 'token-a';
+    t.mock.method(googleService, 'getAccountId', () => 'account-a');
+    t.mock.method(googleService, 'getAuthStatus', () => ({ state: 'SIGNED_IN', accessToken: token }));
+    const originalWrite = store.drive.writeJsonFile;
+    let release!: () => void;
+    let started!: () => void;
+    const uploading = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    t.mock.method(store.drive, 'writeJsonFile', async (...args: Parameters<typeof originalWrite>) => {
+        const result = await originalWrite(...args);
+        started();
+        await gate;
+        return result;
+    });
+    const backup = new TaskDriveBackup(store.drive);
+    const saving = backup.save({ tasks: [task('local')] });
+    await uploading;
+    token = 'replacement-token';
+    release();
+    await assert.rejects(saving, /Účet Google/);
+    assert.equal(await backup.save({ tasks: [task('local')] }) != null, true, 'fresh session can verify and recover the visible immutable publication');
+    assert.equal(store.files.length, 1);
 });
 
 test('same-time contradictory task edits and identities fail closed', () => {

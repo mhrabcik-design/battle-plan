@@ -245,7 +245,7 @@ function rotateRight(value: number, count: number): number {
 }
 
 // Small synchronous SHA-256 keeps structural validation usable in browsers without Node polyfills.
-function sha256Hex(bytes: Uint8Array): string {
+export function sha256Hex(bytes: Uint8Array): string {
     const constants = new Uint32Array(64);
     const initial = new Uint32Array(8);
     const isComposite = new Uint8Array(312);

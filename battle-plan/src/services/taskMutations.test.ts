@@ -5,6 +5,11 @@ import { test } from 'node:test';
 import { BattlePlanDB, type Task } from '../db.ts';
 import { AgentProtocolLedger } from './agentProtocol/ledger.ts';
 import { applyTaskEffectMetadata, calendarEffectsForLocalTask, taskMutationTables, TaskMutationService } from './taskMutations.ts';
+import { writeCalendarSyncSettings, isCalendarHistoryEnrolled } from './calendarSettings.ts';
+import { ensureTaskDeadline } from './taskNormalization.ts';
+
+const settings = { accountId: 'account-a', calendarId: 'primary', enabled: true, timeZone: 'Europe/Prague', enrolledPublicIds: [] };
+const authored = { actor: 'battleplan-user', origin: 'ui' as const, causeId: '018f6f5e-2d88-7f2a-8f90-d6ad23001001' };
 
 const CAUSES = {
     ui: '018f6f5e-2d88-7f2a-8f90-d6ad23001001',
@@ -12,6 +17,207 @@ const CAUSES = {
     hermes: '018f6f5e-2d88-7f2a-8f90-d6ad23001003',
     drive: '018f6f5e-2d88-7f2a-8f90-d6ad23001004',
 } as const;
+
+test('enabled offline account automatically exports the authored task end interval and portable identity', async (t) => {
+    const db = await database(t);
+    await db.settings.bulkPut([
+        { id: 'calendar-sync-active-account', value: 'account-a' },
+        { id: 'calendar-sync:account-a', value: JSON.stringify({ accountId: 'account-a', calendarId: 'primary', enabled: true, timeZone: 'Europe/Prague', enrolledPublicIds: [] }) },
+    ]);
+    const result = await new TaskMutationService(db).createTask({
+        task: { ...task(), publicId: 'task_portable', date: '2026-10-01', deadline: '2026-10-09', startTime: '15:00', duration: 60 },
+        context: { actor: 'battleplan-user', origin: 'ui', causeId: CAUSES.ui },
+    });
+    assert.equal(result.status, 'applied');
+    const effects = await db.agentProtocolEffects.toArray();
+    assert.equal(effects.length, 1);
+    assert.ok(effects[0].kind === 'calendar' && effects[0].operation === 'upsert');
+    assert.equal(effects[0].accountId, 'account-a');
+    assert.equal(effects[0].payload.type, 'task');
+    assert.equal(effects[0].payload.publicId, 'task_portable');
+    assert.equal(effects[0].payload.canonicalIdentity, 'public:task_portable');
+    assert.deepEqual(effects[0].payload.projection, {
+        title: 'Atomic task', description: 'Visible detail',
+        timing: { kind: 'timed', start: '2026-10-09T12:00:00.000Z', end: '2026-10-09T13:00:00.000Z', timeZone: 'Europe/Prague' },
+    });
+});
+
+test('same-version Drive pairing acknowledgement fills metadata without changing content or revision', async (t) => {
+    const db = await database(t);
+    const service = new TaskMutationService(db, { now: () => 100 });
+    const created = await service.createTask({ task: task(), context: { actor: 'battleplan-user', origin: 'ui', causeId: CAUSES.ui } });
+    assert.equal(created.status, 'applied');
+    const calendar = { accountId: 'account-a', calendarId: 'primary', eventId: 'event', canonicalIdentity: `public:${created.task.publicId}`, origin: 'local' as const, generation: 0, metadataUpdatedAt: 200 };
+    await service.importTask({ task: { ...created.task, calendar }, localId: created.task.id,
+        context: { actor: 'battleplan-drive', origin: 'drive', causeId: CAUSES.drive } });
+    const saved = await db.tasks.get(created.task.id!);
+    assert.deepEqual(saved?.calendar, calendar);
+    assert.equal(saved?.updatedAt, 100);
+    assert.deepEqual(saved?.protocolRevision, created.task.protocolRevision);
+    assert.equal(await db.agentProtocolEvents.count(), 1);
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+});
+
+test('opt-in excludes unselected history and fallback tasks, exports new/edited plans for every author, and never echoes imports', async (t) => {
+    const db = await database(t);
+    const service = new TaskMutationService(db);
+    const scheduled = { ...task(), deadline: '2026-10-09', startTime: '15:00', duration: 60 };
+    const historical = await service.createTask({ task: scheduled, context: authored });
+    assert.equal(historical.status, 'applied');
+    assert.equal(await db.agentProtocolEffects.count(), 0, 'disabled by default');
+    await writeCalendarSyncSettings(db, { ...settings, enrolledPublicIds: ['selected-history'] });
+    assert.equal(await db.agentProtocolEffects.count(), 0, 'activation does not scan/export all history');
+    assert.equal(isCalendarHistoryEnrolled(historical.task, settings), false);
+    assert.equal(isCalendarHistoryEnrolled({ publicId: 'selected-history' }, { ...settings, enrolledPublicIds: ['selected-history'] }), true);
+    for (const origin of ['ui', 'voice', 'hermes'] as const) {
+        await service.createTask({ task: scheduled, context: { ...authored, origin } });
+    }
+    await service.updateTask({ localId: historical.task.id, changes: { title: 'Authored edit of history' }, context: authored });
+    assert.equal(await db.agentProtocolEffects.count(), 4);
+    const fallback = await service.createTask({ task: ensureTaskDeadline({ ...task(), startTime: '10:00' }), context: authored });
+    assert.equal(fallback.status, 'applied');
+    await service.updateTask({ localId: fallback.task.id, changes: { duration: 30, title: 'Capture edit' }, context: authored });
+    await service.importTask({ task: { ...scheduled, publicId: 'from-drive', createdAt: 1, updatedAt: 1 }, context: { ...authored, origin: 'drive' } });
+    await service.createTask({ task: scheduled, effects: [{ kind: 'calendar', operation: 'upsert' }], context: { ...authored, origin: 'google' } });
+    assert.equal(await db.agentProtocolEffects.count(), 4, 'implicit Friday and inbound writes are not export intent');
+    await service.updateTask({ localId: fallback.task.id, changes: { deadline: '2026-10-12', startTime: '16:00' }, context: authored });
+    assert.equal(await db.agentProtocolEffects.count(), 5, 'later authored schedule enrolls the fallback row');
+});
+
+test('clearing an unselected historical schedule never exports its normalized Friday fallback', async (t) => {
+    const db = await database(t);
+    const service = new TaskMutationService(db);
+    const historical = await service.createTask({ task: { ...task(), date: '2026-10-20', deadline: '2026-10-20', calendarScheduleExplicit: true }, context: authored });
+    assert.equal(historical.status, 'applied');
+    await writeCalendarSyncSettings(db, settings);
+    const cleared = ensureTaskDeadline({ ...historical.task, date: '', deadline: '', calendarScheduleExplicit: false }, new Date('2026-10-09T12:00:00'));
+    const result = await service.updateTask({ localId: historical.task.id, changes: cleared, context: authored });
+    assert.equal(result.status, 'applied');
+    assert.equal(result.task.calendarScheduleExplicit, false);
+    assert.equal(result.task.deadline, '2026-10-09');
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+});
+
+test('two independent databases reserve one canonical occurrence target and retain assigned legacy IDs', async (t) => {
+    const first = await database(t), second = await database(t);
+    const ids: string[] = [];
+    for (const [db, publicId] of [[first, 'device-a'], [second, 'device-b']] as const) {
+        await writeCalendarSyncSettings(db, settings);
+        const result = await new TaskMutationService(db).createTask({ task: { ...task(), publicId, suggestionOccurrenceKey: 'shared', deadline: '2026-10-09', isAllDay: true }, context: authored });
+        assert.equal(result.status, 'applied');
+        ids.push(result.task.reservedGoogleEventId!);
+    }
+    assert.equal(ids[0], ids[1]);
+    const service = new TaskMutationService(first);
+    const legacy = await service.importTask({ task: { ...task(), publicId: 'legacy-linked', deadline: '2026-10-09', isAllDay: true, googleEventId: 'original-id', createdAt: 1, updatedAt: 1 }, context: { ...authored, origin: 'drive' } });
+    assert.equal(legacy.status, 'applied');
+    const updated = await service.updateTask({ localId: legacy.task.id, changes: { title: 'Edited' }, context: authored });
+    assert.equal(updated.status, 'applied');
+    assert.equal(updated.task.reservedGoogleEventId, 'original-id');
+});
+
+test('all authored writes and manual queue reject readonly rows; inbound changes are permitted', async (t) => {
+    const db = await database(t);
+    const service = new TaskMutationService(db);
+    const calendar = { accountId: 'account-a', calendarId: 'primary', eventId: 'readonly', canonicalIdentity: 'google:readonly', origin: 'google' as const, generation: 0, metadataUpdatedAt: 1, readonlyReason: 'recurring' as const };
+    const imported = await service.importTask({ task: { ...task(), publicId: 'readonly', calendar, createdAt: 1, updatedAt: 1 }, context: { ...authored, origin: 'google' } });
+    assert.equal(imported.status, 'applied');
+    for (const origin of ['ui', 'voice', 'hermes'] as const) {
+        const input = { localId: imported.task.id, context: { ...authored, origin } };
+        await assert.rejects(service.updateTask({ ...input, changes: { title: 'Forbidden' } }), /calendar_task_readonly/);
+        await assert.rejects(service.completeTask(input), /calendar_task_readonly/);
+        await assert.rejects(service.archiveTask(input), /calendar_task_readonly/);
+        await assert.rejects(service.queueEffects({ ...input, effects: [{ kind: 'calendar', operation: 'upsert' }] }), /calendar_task_readonly/);
+    }
+    await service.importTask({ task: { ...imported.task, title: 'Google changed it', updatedAt: 2 }, localId: imported.task.id, context: { ...authored, origin: 'google' } });
+    assert.equal((await db.tasks.get(imported.task.id!))?.title, 'Google changed it');
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+});
+
+test('suppression blocks automatic linked effects; explicit restoration advances target generation', async (t) => {
+    const db = await database(t);
+    await writeCalendarSyncSettings(db, settings);
+    const service = new TaskMutationService(db);
+    const calendar = { accountId: 'account-a', calendarId: 'primary', eventId: 'cancelled', canonicalIdentity: 'public:suppressed', origin: 'local' as const, generation: 0, metadataUpdatedAt: 1, suppressed: true };
+    const imported = await service.importTask({ task: { ...task(), publicId: 'suppressed', calendar, reservedGoogleEventId: 'cancelled', deadline: '2026-10-09', isAllDay: true, createdAt: 1, updatedAt: 1 }, context: { ...authored, origin: 'drive' } });
+    assert.equal(imported.status, 'applied');
+    await service.updateTask({ localId: imported.task.id, changes: { title: 'Still local', calendar: { ...calendar, suppressed: false } }, effects: [{ kind: 'calendar', operation: 'upsert' }], context: authored });
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+    await service.queueEffects({ localId: imported.task.id, effects: [{ kind: 'calendar', operation: 'upsert' }], context: authored });
+    const restored = (await db.tasks.get(imported.task.id!))!;
+    assert.equal(restored.calendar?.generation, 1);
+    assert.equal(restored.calendar?.suppressed, false);
+    assert.notEqual(restored.reservedGoogleEventId, 'cancelled');
+    assert.equal(await db.agentProtocolEffects.count(), 1);
+});
+
+test('queued edits carry previous local desired projection separately from acknowledged base', async (t) => {
+    const db = await database(t);
+    await writeCalendarSyncSettings(db, settings);
+    const service = new TaskMutationService(db);
+    const created = await service.createTask({ task: { ...task(), deadline: '2026-10-09', isAllDay: true }, context: authored });
+    assert.equal(created.status, 'applied');
+    await service.updateTask({ localId: created.task.id, changes: { description: 'Second queued intent' }, context: authored });
+    await service.updateTask({ localId: created.task.id, changes: { title: 'Third queued intent' }, context: authored });
+    const effects = (await db.agentProtocolEffects.toArray()).sort((a, b) => a.sequence - b.sequence);
+    assert.ok(effects[0].kind === 'calendar' && effects[0].operation === 'upsert');
+    assert.ok(effects[1].kind === 'calendar' && effects[1].operation === 'upsert');
+    assert.ok(effects[2].kind === 'calendar' && effects[2].operation === 'upsert');
+    assert.equal(effects[0].payload.previousProjection, undefined);
+    assert.deepEqual(effects[1].payload.previousProjection, effects[0].payload.projection);
+    assert.deepEqual(effects[2].payload.previousProjection, effects[1].payload.projection);
+    assert.equal(effects[2].payload.baseline, undefined, 'pending create is not a remote acknowledgement');
+});
+
+test('opt-in settings, task and automatically generated effect roll back together', async (t) => {
+    const db = await database(t);
+    const service = new TaskMutationService(db);
+    await assert.rejects(db.transaction('rw', taskMutationTables(db), async () => {
+        await writeCalendarSyncSettings(db, settings);
+        await service.createTask({ task: { ...task(), deadline: '2026-10-09', isAllDay: true }, context: authored });
+        assert.equal(await db.agentProtocolEffects.count(), 1);
+        throw new Error('activation-rollback');
+    }), /activation-rollback/);
+    assert.equal(await db.tasks.count(), 0);
+    assert.equal(await db.settings.count(), 0);
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+});
+
+test('a newer acknowledgement baseline survives stale editor fields and is included in the next effect', async (t) => {
+    const db = await database(t);
+    await writeCalendarSyncSettings(db, settings);
+    const service = new TaskMutationService(db);
+    const created = await service.createTask({ task: { ...task(), deadline: '2026-10-09', isAllDay: true }, context: authored });
+    assert.equal(created.status, 'applied');
+    const baseline = { title: 'Google acknowledgement', description: 'Public Google detail', timing: { kind: 'all-day' as const, startDate: '2026-10-09', endDate: '2026-10-10' } };
+    const calendar = { ...created.task.calendar!, baseline, etag: 'acknowledged-etag', timing: baseline.timing, metadataUpdatedAt: Date.now() + 1 };
+    await db.tasks.update(created.task.id!, { calendar });
+    const result = await service.updateTask({ localId: created.task.id, changes: { title: 'New authored title', calendar: created.task.calendar }, context: authored });
+    assert.equal(result.status, 'applied');
+    assert.deepEqual(result.task.calendar, calendar);
+    const effects = (await db.agentProtocolEffects.toArray()).sort((a, b) => a.sequence - b.sequence);
+    assert.ok(effects[1].kind === 'calendar' && effects[1].operation === 'upsert');
+    assert.deepEqual(effects[1].payload.baseline, baseline);
+    assert.equal(effects[1].payload.etag, 'acknowledged-etag');
+    assert.equal((await db.agentProtocolEvents.toArray()).at(-1)?.projection.calendar, undefined);
+});
+
+test('explicitly confirming the same fallback date enrolls it and a stale false draft cannot undo that choice', async (t) => {
+    const db = await database(t);
+    await writeCalendarSyncSettings(db, settings);
+    const service = new TaskMutationService(db);
+    const created = await service.createTask({ task: ensureTaskDeadline({ ...task(), startTime: '15:00' }), context: authored });
+    assert.equal(created.status, 'applied');
+    assert.equal(created.task.calendarScheduleExplicit, false);
+    assert.equal(await db.agentProtocolEffects.count(), 0);
+    const enrolled = await service.updateTask({ localId: created.task.id, changes: { date: created.task.date, deadline: created.task.deadline, calendarScheduleExplicit: true }, context: authored });
+    assert.equal(enrolled.status, 'applied');
+    assert.equal(enrolled.task.calendarScheduleExplicit, true);
+    assert.equal(await db.agentProtocolEffects.count(), 1);
+    const staleFlag = await service.updateTask({ localId: created.task.id, changes: { title: 'Later draft', calendarScheduleExplicit: false }, context: authored });
+    assert.equal(staleFlag.status, 'applied');
+    assert.equal(staleFlag.task.calendarScheduleExplicit, true);
+});
 
 function task(title = 'Atomic task'): Omit<Task, 'id' | 'publicId' | 'protocolRevision' | 'createdAt' | 'updatedAt'> {
     return { title, description: 'Visible detail', internalNotes: 'PRIVATE RAW TRANSCRIPT', type: 'task', urgency: 2, status: 'pending' };
@@ -60,7 +266,7 @@ test('pending Calendar create, edit and archive keep one target with durable ord
     const reservation = created.task.reservedGoogleEventId!;
     assert.ok(reservation);
     assert.deepEqual(effects.map((effect) => 'reservedEventId' in effect.payload ? effect.payload.reservedEventId : 'eventId' in effect.payload ? effect.payload.eventId : undefined), [reservation, reservation, reservation]);
-    assert.deepEqual(effects[0]!.payload, { title: 'Atomic task', description: 'Visible detail', internalNotes: 'PRIVATE RAW TRANSCRIPT', totalDuration: 90, status: 'pending', reservedEventId: reservation });
+    assert.deepEqual(effects[0]!.payload, { type: 'meeting', publicId: created.task.publicId, canonicalIdentity: 'occurrence:occurrence', title: 'Atomic task', description: 'Visible detail', internalNotes: 'PRIVATE RAW TRANSCRIPT', totalDuration: 90, status: 'pending', reservedEventId: reservation });
     await applyTaskEffectMetadata(db, created.task.publicId!, reservation, reservation);
     assert.equal((await db.tasks.get(created.task.id!))?.googleEventId, undefined);
 });

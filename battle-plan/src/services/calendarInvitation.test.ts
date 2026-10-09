@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { BattlePlanDB, type AgentProtocolEffectRow, type Task } from '../db.ts';
 import { TaskMutationService, newTaskMutationContext } from './taskMutations.ts';
-import { ExternalEffectOutbox } from './externalEffectOutbox.ts';
+import { ExternalEffectOutbox, type ExternalEffectExecutionResult } from './externalEffectOutbox.ts';
 import { prepareCalendarInvitation } from './calendarInvitation.ts';
 
 const ACCOUNT = 'owner@example.com';
@@ -18,8 +18,14 @@ async function setup(t: { after: (fn: () => Promise<void>) => void }, changes: P
     if (created.status !== 'applied') throw new Error('create failed');
     let account: string | null = ACCOUNT;
     const calls: AgentProtocolEffectRow[] = [];
-    let execute = async (effect: AgentProtocolEffectRow) => {
+    let execute = async (effect: AgentProtocolEffectRow): Promise<ExternalEffectExecutionResult> => {
         calls.push(effect);
+        if (effect.kind === 'calendar' && effect.operation === 'upsert' && effect.payload.projection) {
+            const saved = (await db.tasks.get(created.task.id!))!;
+            return { externalId: effect.payload.googleEventId ?? effect.payload.reservedEventId,
+                calendar: { ...saved.calendar!, projection: effect.payload.projection,
+                    sentProjection: effect.payload.sentProjection, etag: '"server-fixture"' } };
+        }
         return { externalId: effect.kind === 'calendar' && effect.operation === 'upsert'
             ? effect.payload.googleEventId ?? effect.payload.reservedEventId : undefined };
     };
@@ -128,10 +134,16 @@ test('revision changing during delivery prevents the link read', async (t) => {
     const s = await setup(t);
     s.setExecute(async (effect) => {
         await s.mutations.updateTask({ localId: s.task.id, changes: { title: 'Changed during delivery' }, context: newTaskMutationContext('ui') });
+        if (effect.kind === 'calendar' && effect.operation === 'upsert' && effect.payload.projection) {
+            const saved = (await s.db.tasks.get(s.task.id!))!;
+            return { externalId: effect.payload.reservedEventId, calendar: { ...saved.calendar!, projection: effect.payload.projection,
+                sentProjection: effect.payload.sentProjection, etag: '"server-fixture"' } };
+        }
         return { externalId: effect.kind === 'calendar' && effect.operation === 'upsert' ? effect.payload.reservedEventId : undefined };
     });
     await assert.rejects(prepareCalendarInvitation(s.task, s.dependencies));
     assert.equal(s.links.length, 0);
+    assert.equal((await s.db.agentProtocolEffects.toCollection().first())?.state, 'succeeded');
 });
 
 test('legacy timestamp detects stale saved state without a revision', async (t) => {

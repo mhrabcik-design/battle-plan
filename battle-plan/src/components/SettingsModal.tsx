@@ -5,6 +5,8 @@ import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import { OverlaySurface } from './ui/OverlaySurface';
 import type { ThemePreference } from '../utils/themePreference';
+import { CalendarSyncPanel } from './CalendarSyncPanel';
+import type { GoogleCalendarSyncControls } from '../hooks/useGoogleCalendarSync';
 
 interface SettingsModalProps {
     apiKey: string;
@@ -17,6 +19,8 @@ interface SettingsModalProps {
     themePreference: ThemePreference;
     setThemePreference: (val: ThemePreference) => void;
     googleAuth: GoogleAuthStatus;
+    calendarSync: GoogleCalendarSyncControls;
+    isOnline: boolean;
     lastSync: string | null;
     saveSettings: () => Promise<void>;
     setShowSettings: (val: boolean) => void;
@@ -33,18 +37,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     themePreference,
     setThemePreference,
     googleAuth,
+    calendarSync,
+    isOnline,
     lastSync,
     saveSettings,
     setShowSettings
 }) => {
     return (
         <OverlaySurface
-            title="Nastavení AI"
+            title="Nastavení"
             onRequestClose={() => setShowSettings(false)}
-            className="glass-card max-h-[min(90dvh,48rem)] w-full max-w-sm space-y-6 overflow-y-auto p-6 custom-scrollbar sm:p-8"
+            className="glass-card max-h-[min(90dvh,48rem)] w-full min-w-0 max-w-xl space-y-6 overflow-y-auto overflow-x-hidden p-6 custom-scrollbar sm:p-8"
         >
                 <div className="flex justify-between items-center">
-                    <h2 aria-hidden="true" className="text-2xl font-display font-bold text-white">Nastavení AI</h2>
+                    <h2 aria-hidden="true" className="text-2xl font-display font-bold text-white">Nastavení</h2>
                     <button aria-label="Zavřít nastavení" onClick={() => setShowSettings(false)} className="surface-action h-11 w-11 text-slate-400 hover:text-white">
                         <X />
                     </button>
@@ -143,6 +149,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         )}
                     </div>
                 </div>
+
+                <CalendarSyncPanel controls={calendarSync} googleAuth={googleAuth} isOnline={isOnline} />
 
                 <button
                     onClick={saveSettings}

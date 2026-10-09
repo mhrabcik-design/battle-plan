@@ -6,6 +6,7 @@ import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
 import { useDriveSyncOrchestration } from './hooks/useDriveSyncOrchestration';
 import { useTaskBackup } from './hooks/useTaskBackup';
 import { useExternalEffectOutbox } from './hooks/useExternalEffectOutbox';
+import { useGoogleCalendarSync } from './hooks/useGoogleCalendarSync';
 import { useSuggestionsBadge } from './hooks/useSuggestionsBadge';
 import { useAgentBridgePolling } from './hooks/useAgentBridgePolling';
 import { useTaskCommands } from './hooks/useTaskCommands';
@@ -312,7 +313,8 @@ const syncVisualState = deriveSyncVisualState({
     if (viewMode === 'battle') {
       return await db.tasks
         .where('status').equals('pending')
-        .and(t => t.type !== 'thought' && t.type !== 'note' && !t.isDeleted)
+        .and(t => t.type !== 'thought' && t.type !== 'note' && !t.isDeleted
+          && !(t.calendar?.recurringMaster && t.calendar.origin === 'google' && t.type === 'meeting'))
         .toArray();
     }
 
@@ -320,19 +322,14 @@ const syncVisualState = deriveSyncVisualState({
       const days = getWeekDays(weekOffset);
       const start = days[0].full;
       const end = days[6].full;
-      const all = await db.tasks
-        .where('deadline').between(start, end, true, true)
-        .or('date').between(start, end, true, true)
-        .filter(t => !t.isDeleted)
-        .distinct()
-        .toArray();
-
-      return all.filter(t => isTaskVisibleInWeek(t, start, end));
+      // A multi-day event may start before this week; indexed start-date queries miss it.
+      return await db.tasks.filter(t => isTaskVisibleInWeek(t, start, end)).toArray();
     }
 
     let collection;
     if (viewMode === 'tasks') collection = db.tasks.where('type').equals('task').and(t => !t.isDeleted);
-    else if (viewMode === 'meetings') collection = db.tasks.where('type').equals('meeting').and(t => !t.isDeleted);
+    else if (viewMode === 'meetings') collection = db.tasks.where('type').equals('meeting').and(t => !t.isDeleted
+      && !(t.calendar?.recurringMaster && t.calendar.origin === 'google'));
     else collection = db.tasks.where('type').anyOf(['thought', 'note']).and(t => !t.isDeleted);
 
     return await collection.toArray();
@@ -388,6 +385,7 @@ const syncVisualState = deriveSyncVisualState({
   });
 
   useTaskBackup({ googleAuth, ready: taskBackupReady, setLastSync, addLog, updateSyncHealth });
+  const calendarSync = useGoogleCalendarSync({ googleAuth, isOnline, ready: taskBackupReady });
 
   useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog });
   useAgentBridgePolling({ googleAuth, addLog });
@@ -993,6 +991,7 @@ const syncVisualState = deriveSyncVisualState({
                 getDeadlineColor={memoizedGetDeadlineColor}
                 formatTimeLeft={memoizedFormatTimeLeft}
                 onNotice={setNotice}
+                onRestoreCalendarBlock={calendarSync.restoreTaskBlock}
               />
               </DeferredDialog>
             )}
@@ -1019,6 +1018,8 @@ const syncVisualState = deriveSyncVisualState({
                 themePreference={themePreference}
                 setThemePreference={setThemePreference}
                 googleAuth={googleAuth}
+                calendarSync={calendarSync}
+                isOnline={isOnline}
                 lastSync={lastSync}
                 saveSettings={saveSettings}
                 setShowSettings={setShowSettings}
