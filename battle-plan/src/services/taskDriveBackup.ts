@@ -4,6 +4,7 @@ import { filterTaskBackupSettings } from '../utils/taskBackupSettings.ts';
 import { mergeTaskBackupSnapshots } from './taskBackupSnapshots.ts';
 import { canonicalBackupJson } from '../utils/canonicalBackupJson.ts';
 import { googleService } from './googleService.ts';
+import { captureGoogleAccountSession } from './googleAccountSession.ts';
 import { projectTasksForCalendarAccount } from './calendarMetadata.ts';
 
 const TASK_BACKUP_FILENAME = 'battle_plan_data.json';
@@ -36,6 +37,7 @@ export class TaskDriveBackup {
     constructor(drive: TaskBackupStore = new DriveJsonStore()) { this.drive = drive; }
 
     async save(data: TaskDriveBackupData): Promise<number | null> {
+        const session = captureGoogleAccountSession();
         const accountId = googleService.getAccountId();
         const initialized = await this.drive.init({ createFolder: true });
         if (!initialized) return null;
@@ -43,7 +45,7 @@ export class TaskDriveBackup {
         const accessToken = googleService.getAuthStatus().accessToken;
         const folderId = this.drive.currentFolderId;
         const assertCurrentAccount = () => {
-            if (googleService.getAccountId() !== accountId || googleService.getAuthStatus().accessToken !== accessToken
+            if (!session.isCurrent() || googleService.getAccountId() !== accountId || googleService.getAuthStatus().accessToken !== accessToken
                 || this.drive.currentFolderId !== folderId) {
                 this.lastPublication = undefined;
                 throw new Error('Účet Google se během zálohování změnil. Záloha čeká na novou kontrolu.');
@@ -117,13 +119,15 @@ export class TaskDriveBackup {
     }
 
     async loadDetailed(): Promise<TaskDriveBackupLoadResult> {
-        const status = await this.drive.initWithStatus({ createFolder: true });
-        if (status.code !== 'ready' && status.code !== 'folder-created') {
-            return { kind: 'store-unavailable', status };
-        }
-
+        const session = captureGoogleAccountSession();
         try {
+            const status = await this.drive.initWithStatus({ createFolder: true });
+            session.assertCurrent();
+            if (status.code !== 'ready' && status.code !== 'folder-created') {
+                return { kind: 'store-unavailable', status };
+            }
             const result = await this.readSnapshots();
+            session.assertCurrent();
             if (result.kind !== 'loaded') return result;
             return { kind: 'loaded', payload: mergeTaskBackupSnapshots(result.files.map(file => file.data)) };
         } catch (e) {

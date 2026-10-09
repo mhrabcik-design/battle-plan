@@ -52,7 +52,7 @@ test('cached registry reads download only new or changed file versions', async (
     installDriveGlobals({
         drive: { files: { list: async () => ({ result: { files } }) } },
         request: async () => { downloads++; return { result: { value: downloads } }; },
-    }, { bp_folder_id: 'folder-cache-test' });
+    }, { 'bp_folder_id:test%40example.com': 'folder-cache-test' });
     setGoogleServiceState({ accessToken: 'test', expiresAt: Date.now() + 3_600_000, userEmail: 'test@example.com' });
     const store = new DriveJsonStore();
     await store.init();
@@ -80,7 +80,8 @@ test('cached registry reads download only new or changed file versions', async (
 
 test('Drive duplicate selection preserves case-sensitive lexical ordering', async () => {
     installDriveGlobals({ drive: { files: { list: async () => ({ result: { files: [{ id: 'a' }, { id: 'Z' }] } }) } } },
-        { bp_folder_id: 'folder-order-test' });
+        { 'bp_folder_id:test%40example.com': 'folder-order-test' });
+    setGoogleServiceState({ accessToken: 'test', expiresAt: Date.now() + 3_600_000, userEmail: 'test@example.com' });
     const store = new DriveJsonStore();
     await store.init();
     assert.deepEqual(await store.findFileIds('registry.json'), ['Z', 'a']);
@@ -88,6 +89,7 @@ test('Drive duplicate selection preserves case-sensitive lexical ordering', asyn
 });
 
 type GoogleServiceInternalState = {
+    authGeneration: number;
     accessToken: string | null;
     expiresAt: number;
     userEmail: string | null;
@@ -125,6 +127,8 @@ function setGoogleServiceState(state: {
     userEmail?: string | null;
 }): void {
     const svc = googleService as unknown as GoogleServiceInternalState;
+    if ((state.accessToken !== undefined && state.accessToken !== svc.accessToken)
+        || (state.userEmail !== undefined && state.userEmail !== svc.userEmail)) svc.authGeneration++;
     if (state.accessToken !== undefined) svc.accessToken = state.accessToken;
     if (state.expiresAt !== undefined) svc.expiresAt = state.expiresAt;
     if (state.userEmail !== undefined) svc.userEmail = state.userEmail;
@@ -142,6 +146,160 @@ test('buildDriveFileMetadata puts a new file into the BattlePlan Drive folder', 
             parents: ['folder-123'],
         },
     );
+});
+
+test('Drive folder and initialization belong to the verified account, not the previous login', async () => {
+    const uploads: string[] = [];
+    installDriveGlobals({
+        drive: { files: { list: async (args: { q: string }) => ({ result: { files: args.q.includes('application/vnd.google-apps.folder')
+            ? [{ id: `folder-${googleService.getAccountId()}` }] : [] } }) } },
+        request: async (args: { body: string }) => { uploads.push(args.body); return { result: { id: 'uploaded' } }; },
+    });
+    setGoogleServiceState({ accessToken: 'account-a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+    await store.writeJsonFile('data.json', { owner: 'a' }, null, { createOnly: true });
+    setGoogleServiceState({ accessToken: 'account-b-token', userEmail: 'b@example.com' });
+    const initializedBeforeRecheck = store.initialized;
+    assert.equal(await store.init(), true);
+    await store.writeJsonFile('data.json', { owner: 'b' }, null, { createOnly: true });
+    assert.match(uploads[1], /"parents":\["folder-b@example.com"\]/);
+    assert.equal(initializedBeforeRecheck, false);
+    assert.equal(store.currentFolderId, 'folder-b@example.com');
+});
+
+test('legacy folder cache without an owner cannot authorize a new account', async () => {
+    let searches = 0;
+    installDriveGlobals({ drive: { files: { list: async () => { searches++; return { result: { files: [{ id: 'verified-b-folder' }] } }; } } } },
+        { bp_folder_id: 'old-account-a-folder' });
+    setGoogleServiceState({ accessToken: 'b-token', userEmail: 'b@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore();
+    assert.equal(await store.init(), true);
+    assert.equal(store.currentFolderId, 'verified-b-folder');
+    assert.equal(searches, 1);
+});
+
+test('late folder discovery cannot replace the newer account initialization', async () => {
+    let finishA!: (value: { result: { files: Array<{ id: string }> } }) => void;
+    installDriveGlobals({ drive: { files: { list: async () => googleService.getAccountId() === 'a@example.com'
+        ? new Promise(resolve => { finishA = resolve; }) : { result: { files: [{ id: 'folder-b' }] } } } } });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore();
+    const pendingA = store.initWithStatus();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    setGoogleServiceState({ accessToken: 'b-token', userEmail: 'b@example.com' });
+    assert.equal(await store.init(), true);
+    finishA({ result: { files: [{ id: 'folder-a' }] } });
+    const stale = await pendingA;
+    assert.notEqual(stale.code, 'ready');
+    assert.equal(store.currentFolderId, 'folder-b');
+    assert.equal(store.lastStatus.code, 'ready');
+});
+
+test('account change during a file lookup prevents uploading a previous account file id', async () => {
+    let finishLookup!: (value: { result: { files: Array<{ id: string }> } }) => void;
+    const uploads: string[] = [];
+    installDriveGlobals({
+        drive: { files: { list: async (args: { q: string }) => args.q.includes('application/vnd.google-apps.folder')
+            ? { result: { files: [{ id: `folder-${googleService.getAccountId()}` }] } }
+            : new Promise(resolve => { finishLookup = resolve; }) } },
+        request: async (args: { path: string }) => { uploads.push(args.path); return { result: { id: 'uploaded' } }; },
+    });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore(); await store.init();
+    const pending = store.writeJsonFile('data.json', { from: 'a' }).catch(() => null);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    setGoogleServiceState({ accessToken: 'b-token', userEmail: 'b@example.com' }); await store.init();
+    finishLookup({ result: { files: [{ id: 'old-a-file' }] } });
+    await pending;
+    assert.deepEqual(uploads, [], 'old lookup must not dispatch a PATCH under the new login');
+});
+
+test('late media read after account change publishes no old data and leaves the new cache intact', async () => {
+    let finishRead!: (value: { result: { owner: string } }) => void;
+    let downloads = 0;
+    installDriveGlobals({
+        drive: { files: { list: async (args: { q: string }) => ({ result: { files: args.q.includes('application/vnd.google-apps.folder')
+            ? [{ id: `folder-${googleService.getAccountId()}` }] : [{ id: 'shared-file', version: '1' }] } }) } },
+        request: async () => { downloads++; return googleService.getAccountId() === 'a@example.com'
+            ? new Promise(resolve => { finishRead = resolve; }) : { result: { owner: 'b' } }; },
+    });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore(); await store.init();
+    const pending = store.readJsonFilesWithStatus('registry.json', { cacheUnchanged: true }).catch(() => ({ kind: 'error' }));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    setGoogleServiceState({ accessToken: 'b-token', userEmail: 'b@example.com' }); await store.init();
+    const current = await store.readJsonFilesWithStatus<{ owner: string }>('registry.json', { cacheUnchanged: true });
+    finishRead({ result: { owner: 'a' } });
+    assert.notEqual((await pending).kind, 'loaded');
+    assert.equal(current.kind, 'loaded');
+    const reread = await store.readJsonFilesWithStatus<{ owner: string }>('registry.json', { cacheUnchanged: true });
+    assert.equal(reread.kind, 'loaded');
+    if (reread.kind === 'loaded') assert.equal(reread.files[0].data.owner, 'b');
+    assert.equal(downloads, 2);
+});
+
+test('logout invalidates initialized state and prevents direct JSON writes and trash operations', async () => {
+    const requests: string[] = [];
+    installDriveGlobals({ drive: { files: { list: async () => ({ result: { files: [{ id: 'folder-a' }] } }) } },
+        request: async (args: { path: string }) => { requests.push(args.path); return { result: { id: 'uploaded' } }; } });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore(); await store.init();
+    setGoogleServiceState({ accessToken: null, userEmail: null });
+    await store.writeJsonFile('data.json', {}, 'old-a-file').catch(() => null);
+    await store.trashFile('old-a-file').catch(() => {});
+    assert.deepEqual(requests, []);
+    assert.equal(store.initialized, false);
+    assert.equal(store.currentFolderId, null);
+});
+
+test('account-owned folder caches survive reload without adopting a different account folder', async () => {
+    let searches = 0;
+    installDriveGlobals({ drive: { files: { list: async () => {
+        searches++;
+        return { result: { files: [{ id: `folder-${googleService.getAccountId()}` }] } };
+    } } } });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    await new DriveJsonStore().init();
+    setGoogleServiceState({ accessToken: 'b-token', userEmail: 'b@example.com' });
+    await new DriveJsonStore().init();
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com' });
+    const reloaded = new DriveJsonStore();
+    await reloaded.init();
+    assert.equal(searches, 2);
+    assert.equal(reloaded.currentFolderId, 'folder-a@example.com');
+});
+
+test('overlapping folder initialization in one session creates only one folder', async () => {
+    let searches = 0;
+    let creations = 0;
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    installDriveGlobals({
+        drive: { files: { list: async () => { searches++; await gate; return { result: { files: [] } }; } } },
+        request: async () => { creations++; return { result: { id: 'created-folder' } }; },
+    });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore();
+    const pending = Promise.all([store.init({ createFolder: true }), store.init({ createFolder: true })]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    finish();
+    assert.deepEqual(await pending, [true, true]);
+    assert.equal(searches, 1);
+    assert.equal(creations, 1);
+});
+
+test('A to B to A before init resumes still invalidates the old initialization', async () => {
+    let searches = 0;
+    installDriveGlobals({ drive: { files: { list: async () => { searches++; return { result: { files: [{ id: 'folder-a' }] } }; } } } });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com', expiresAt: Date.now() + 3_600_000 });
+    const store = new DriveJsonStore();
+    const pending = store.initWithStatus();
+    setGoogleServiceState({ accessToken: 'b-token', userEmail: 'b@example.com' });
+    setGoogleServiceState({ accessToken: 'a-token', userEmail: 'a@example.com' });
+    assert.equal((await pending).code, 'auth-unavailable');
+    assert.equal(searches, 0, 'old init must not discover a folder under a new session');
+    assert.equal(await store.init(), true);
 });
 
 test('buildDriveFileMetadata does not move existing Drive files on update', () => {
@@ -187,7 +345,7 @@ test('DriveJsonStore escapes Drive query values and rejects failed uploads', asy
         },
         request: async () => ({ status: 500, statusText: 'Nope' }),
     }, {
-        bp_folder_id: "folder'\\id",
+        'bp_folder_id:user%40example.com': "folder'\\id",
         google_access_token: 'token-123',
     });
 
@@ -217,7 +375,7 @@ test('DriveJsonStore sends an If-Match precondition for conditional journal upda
             return { status: 200, result: { id: 'file-123' }, headers: { ETag: '"etag-8"' } };
         },
     }, {
-        bp_folder_id: 'folder-123',
+        'bp_folder_id:user%40example.com': 'folder-123',
         google_access_token: 'token-123',
     });
     setGoogleServiceState({
@@ -243,7 +401,7 @@ test('DriveJsonStore create-only JSON writes use POST without a conditional head
             return { status: 200, result: { id: 'created-snapshot' } };
         },
     }, {
-        bp_folder_id: 'folder-123',
+        'bp_folder_id:user%40example.com': 'folder-123',
         google_access_token: 'token-123',
     });
     setGoogleServiceState({
@@ -288,7 +446,7 @@ test('DriveJsonStore lists every duplicate JSON page deterministically and trash
             return { status: 200, result: { id: 'file-a' } };
         },
     }, {
-        bp_folder_id: 'folder-123',
+        'bp_folder_id:user%40example.com': 'folder-123',
         google_access_token: 'token-123',
     });
     setGoogleServiceState({
@@ -349,7 +507,7 @@ test('U4: fresh token (state SIGNED_IN) — getAccessToken returns the live toke
             },
         },
         request: async () => ({ status: 200, result: { id: 'file-existing' } }),
-    }, { bp_folder_id: 'folder-existing' });
+    }, { 'bp_folder_id:user%40example.com': 'folder-existing' });
 
     setGoogleServiceState({
         accessToken: 'fresh-live-token',
@@ -377,7 +535,7 @@ test('U4: expired token (state REFRESH_PENDING), refresh succeeds — getAccessT
             },
         },
         request: async () => ({ status: 200, result: { id: 'file-existing' } }),
-    }, { bp_folder_id: 'folder-existing' });
+    }, { 'bp_folder_id:user%40example.com': 'folder-existing' });
 
     setGoogleServiceState({
         accessToken: 'expired-token',
@@ -408,7 +566,7 @@ test('concurrent Drive initialization shares one silent refresh flight', async (
                 list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
             },
         },
-    }, { bp_folder_id: 'folder-existing' });
+    }, { 'bp_folder_id:user%40example.com': 'folder-existing' });
 
     setGoogleServiceState({
         accessToken: 'expired-token',
@@ -444,7 +602,7 @@ test('U4: expired token, refresh fails — init returns false (graceful failure)
                 list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
             },
         },
-    }, { bp_folder_id: 'folder-existing' });
+    }, { 'bp_folder_id:user%40example.com': 'folder-existing' });
 
     setGoogleServiceState({
         accessToken: 'expired-token',
@@ -471,11 +629,11 @@ test('U4: readJsonFile — REFRESH_PENDING + refresh failure throws AuthUnavaila
                 },
             },
         },
-    }, { bp_folder_id: 'folder-existing' });
+    }, { 'bp_folder_id:user%40example.com': 'folder-existing' });
 
     setGoogleServiceState({
         accessToken: 'expired-token',
-        expiresAt: Date.now() - 5 * 60 * 1000,
+        expiresAt: Date.now() + 60 * 60 * 1000,
         userEmail: 'user@example.com',
     });
 
@@ -483,8 +641,8 @@ test('U4: readJsonFile — REFRESH_PENDING + refresh failure throws AuthUnavaila
     svc.trySilentRefresh = async () => false;
 
     const store = new DriveJsonStore();
-    (store as unknown as { isInitialized: boolean; folderId: string | null }).isInitialized = true;
-    (store as unknown as { isInitialized: boolean; folderId: string | null }).folderId = 'folder-existing';
+    assert.equal(await store.init(), true);
+    setGoogleServiceState({ expiresAt: Date.now() - 5 * 60 * 1000 });
 
     await assert.rejects(
         () => store.readJsonFile<{ hello: string }>('data.json'),
@@ -499,7 +657,7 @@ test('U4: state is SIGNED_OUT — init returns false without calling refresh', a
                 list: async () => ({ result: { files: [{ id: 'folder-existing', name: 'Anu-BattlePlan' }] } }),
             },
         },
-    }, { bp_folder_id: 'folder-existing' });
+    }, { 'bp_folder_id:user%40example.com': 'folder-existing' });
 
     setGoogleServiceState({
         accessToken: null,
@@ -611,7 +769,7 @@ test('DriveJsonStore readJsonFileWithStatus reads JSON and strong ETags from the
             if (response && typeof response === 'object' && 'reject' in response) throw response.reject;
             return response;
         },
-    }, { bp_folder_id: 'folder-existing' });
+    }, { 'bp_folder_id:user%40example.com': 'folder-existing' });
 
     setGoogleServiceState({
         accessToken: 'fresh-live-token',

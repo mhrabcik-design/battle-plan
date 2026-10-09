@@ -3,6 +3,8 @@ import { agentBridge, shouldAcknowledgeApplyWrite } from '../services/agentBridg
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
 import { createProtocolPollingCoordinator } from '../services/agentProtocol/pollingCoordinator.ts';
+import { captureGoogleAccountSession } from '../services/googleAccountSession.ts';
+import { googleService } from '../services/googleService.ts';
 
 const coordinator = createProtocolPollingCoordinator();
 type Bridge = Pick<typeof agentBridge, 'init' | 'initialized' | 'fetchPendingWrites' | 'mirrorInbox' | 'applyWrite' | 'recordInboxResult' | 'markApplied'>;
@@ -13,21 +15,23 @@ interface UseAgentBridgePollingArgs {
 }
 
 export function createAgentBridgePoller(bridge: Bridge, addLog: UseAgentBridgePollingArgs['addLog']) {
+    const session = captureGoogleAccountSession();
     let cancelled = false;
     const poll = () => coordinator.run('legacy-agent-bridge', async () => {
-        if (cancelled) return;
+        if (cancelled || !session.isCurrent()) return;
         await bridge.init();
-        if (cancelled || !bridge.initialized) return;
+        if (cancelled || !session.isCurrent() || !bridge.initialized) return;
 
         const writes = await bridge.fetchPendingWrites();
-        if (cancelled) return;
+        if (cancelled || !session.isCurrent()) return;
         if (writes.length > 0) {
           // U5: mirror the inbox file into db.agentInbox before applying so
           // the diagnostics surface can read pending writes via useLiveQuery.
           await bridge.mirrorInbox(writes);
+          if (!session.isCurrent()) return;
         }
         if (writes.length === 0) return;
-        if (cancelled) return;
+        if (cancelled || !session.isCurrent()) return;
 
         addLog(`Anu: ${writes.length} nových zápisů ke zpracování`);
 
@@ -35,8 +39,9 @@ export function createAgentBridgePoller(bridge: Bridge, addLog: UseAgentBridgePo
         let appliedCount = 0;
         let terminalCount = 0;
         for (const w of writes) {
-          if (cancelled) break;
+          if (cancelled || !session.isCurrent()) break;
           const result = await bridge.applyWrite(w);
+          if (!session.isCurrent()) return;
           if (shouldAcknowledgeApplyWrite(result)) {
             acknowledged.push(w.id);
           }
@@ -49,30 +54,34 @@ export function createAgentBridgePoller(bridge: Bridge, addLog: UseAgentBridgePo
           } else {
             await bridge.recordInboxResult(w.id, false, result.last_error);
           }
+          if (!session.isCurrent()) return;
         }
 
-        if (acknowledged.length > 0) {
+        if (session.isCurrent() && acknowledged.length > 0) {
           // Finish acknowledgements for mutations already applied before a
           // teardown, but do not begin another mutation or update stale UI.
           await bridge.markApplied(acknowledged);
         }
-        if (!cancelled && appliedCount > 0) {
+        if (!cancelled && session.isCurrent() && appliedCount > 0) {
           addLog(`Anu: ${appliedCount} zápisů úspěšně aplikováno`);
         }
-        if (!cancelled && terminalCount > 0) {
+        if (!cancelled && session.isCurrent() && terminalCount > 0) {
           addLog(`Anu: ${terminalCount} neplatných zápisů odmítnuto`, 'error');
         }
     }).catch((error) => {
-        if (!cancelled) console.error('Agent bridge failed', error);
+        if (!cancelled && session.isCurrent()) console.error('Agent bridge failed', error);
     });
     return { poll, stop: () => { cancelled = true; } };
 }
 
 export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePollingArgs) {
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
+  const authGeneration = googleService.getAuthGeneration();
+  const accountId = googleService.getAccountId();
 
   useEffect(() => {
-    if (!hasUsableAuthValue) return;
+    if (!hasUsableAuthValue || authGeneration !== googleService.getAuthGeneration()
+      || accountId !== googleService.getAccountId()) return;
     const poller = createAgentBridgePoller(agentBridge, addLog);
     const checkAgentWrites = poller.poll;
 
@@ -97,5 +106,5 @@ export function useAgentBridgePolling({ googleAuth, addLog }: UseAgentBridgePoll
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', handleVisibility);
     };
-  }, [hasUsableAuthValue, addLog]);
+  }, [hasUsableAuthValue, googleAuth.accessToken, authGeneration, accountId, addLog]);
 }

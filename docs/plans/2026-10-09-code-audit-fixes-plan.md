@@ -10,11 +10,11 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Voice recording ends when users stop or leave it, saved work uses the intended local date, deleted tasks stay deleted, and the weekly view stays consistent across midnight.
-- **Means:** Repair four existing behavior boundaries using current patterns (KTD1–KTD4).
+- **Objective:** Voice recording ends when users stop or leave it, saved work uses the intended local date, deleted tasks stay deleted, the weekly view stays consistent across midnight, and Drive operations cannot cross Google account sessions.
+- **Means:** Repair existing behavior boundaries using current patterns (KTD1–KTD4) and verified account/session guards.
 - **Authority:** User request to inspect and improve the code, repository instructions, then this plan.
 - **Execution profile:** Small independent fixes with regression proof before production edits; the root agent owns integration and final verification.
-- **Stop conditions:** An unexpected data migration or change to authentication/account ownership requires a separate scoped decision.
+- **Stop conditions:** An unexpected data migration or product change to local data ownership requires a separate scoped decision. The user's follow-up explicitly includes the confirmed Drive cache/account bug.
 - **Delivery:** Local branch `codex/code-audit-2026-10-09`; no deployment in this work.
 
 ---
@@ -23,7 +23,7 @@ execution: code
 
 ### Summary
 
-Close the confirmed recorder resource leaks, local-date mistakes, unsafe task deletion retention, and weekly rollover mismatch.
+Close the confirmed recorder resource leaks, local-date mistakes, unsafe task deletion retention, weekly rollover mismatch, and Drive account cache reuse.
 Preserve existing domain behavior and make each fix reviewable through focused regression coverage.
 
 ### Problem Frame
@@ -51,10 +51,15 @@ These failures arise from resource ownership and date/data lifecycle boundaries 
 
 - R6. The weekly header, grid, task query, today marker, and keyboard movement agree on the local reference day, including Sunday-to-Monday rollover.
 
+**Drive account sessions**
+
+- R7. Folder IDs, JSON read caches, service file IDs and in-flight operations belong to the verified Google account/session. Logout, re-consent and A → B → A invalidate old operations before further remote writes or local/UI effects.
+- R8. An account change inside a Drive import transaction rolls back that transaction; a newly signed-in account can initialize and fetch independently. Ordinary teardown in the same session still acknowledges already applied agent mutations.
+
 ### Scope Boundaries
 
-- Included: the four confirmed behavior areas and the solution documentation contradicted by R5.
-- Deferred to follow-up work: Drive account switching and ownership fences across all IO/cache initialization; bundle optimization and broader redesign.
+- Included: the confirmed behavior areas, Drive account/session ownership and their solution documentation.
+- Deferred to follow-up work: bundle optimization and broader redesign.
 - Considered and not built: a tombstone compaction protocol. The existing merge semantics provide no safe acknowledgement boundary, so removal cannot satisfy R5.
 - Dependency upgrades, external account operations, and deployment are outside this delivery.
 
@@ -195,6 +200,14 @@ The weekly-history document currently claims stale tombstones can be cleaned; U3
 
 ---
 
+## Unit 5 — Drive account cache and asynchronous ownership
+
+**Approach:** Namespace persistent folder cache by verified account and use the existing OAuth generation for in-memory ownership. Ignore legacy ownerless folder cache. Guard the full read/merge/write chain in task backup, WorkLogs, suggestions, registry and legacy agent bridge; fence local transactions before commit and discard stale UI callbacks. Retain existing shared local data semantics and Drive readiness diagnostics.
+
+**Test scenarios:** Account A → B, logout, same-account new login and A → B → A; overlapping initialization; late folder/media reads and late publication acknowledgement; new-session independent fetch with old cleanup; transactional rollback; UI hydration before settings writes, badge refresh and voice/decision continuations. Use controlled external I/O and actual source callbacks/database operations.
+
+**Limit:** Already dispatched external requests cannot be undone. Tests must prove no subsequent request or success result is admitted under a replacement session. Live Google OAuth/account switching requires real credentials and is not simulated as a passing transport check.
+
 ## Verification Contract
 
 Run from `battle-plan/` after focused regressions pass.
@@ -217,7 +230,7 @@ State clearly if genuine microphone permission or authenticated multi-device Dri
 
 ## Definition of Done
 
-R1–R6 hold, the four units have focused regression evidence, and every applicable verification gate passes.
+R1–R8 hold, the units have focused regression evidence, and every applicable verification gate passes.
 The final diff contains only these fixes, meaningful tests, and their plan/solution documentation; abandoned experiments are removed.
 Document the non-trivial lifecycle/deletion/date lessons in `docs/solutions/` and report exact verification limits.
 The user receives a concise change summary and reviewable local result; deployment remains a separate action.

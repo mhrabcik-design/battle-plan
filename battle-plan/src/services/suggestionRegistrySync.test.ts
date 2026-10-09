@@ -13,7 +13,134 @@ import {
 } from './suggestionRegistrySync.ts';
 import type { AgentSuggestion } from './suggestionsSync.ts';
 
+Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null } });
+const { googleService } = await import('./googleService.ts');
+
 const databases: BattlePlanDB[] = [];
+
+function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+}
+
+test('new account registry refresh does not share an old account read or its cleanup', async (t) => {
+    let account = 'account-a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    const localRegistry = createRegistry();
+    const oldRegistry = createRegistry();
+    await oldRegistry.recordDecision(suggestion({ id: 'proposal-old' }), { kind: 'rejected' }, 1_000);
+    const oldSnapshot = await oldRegistry.exportSnapshot();
+    const newRegistry = createRegistry();
+    await newRegistry.recordDecision(suggestion({ id: 'proposal-new', title: 'Nový účet' }), { kind: 'accepted' }, 1_100);
+    const newSnapshot = await newRegistry.exportSnapshot();
+    const oldStarted = deferred();
+    const oldRelease = deferred();
+    const newStarted = deferred();
+    const newRelease = deferred();
+    t.after(() => { oldRelease.resolve(); newRelease.resolve(); });
+    const store = new FakeRegistryStore();
+    store.readJsonFilesWithStatus = async <T>() => {
+        const owner = account;
+        store.readCount++;
+        if (owner === 'account-a') { oldStarted.resolve(); await oldRelease.promise; }
+        else { newStarted.resolve(); await newRelease.promise; }
+        return { kind: 'loaded', files: [{ fileId: owner, data: structuredClone(owner === 'account-a' ? oldSnapshot : newSnapshot) as T }] };
+    };
+    const sync = new SuggestionRegistrySync(localRegistry, store);
+    const oldRefresh = sync.fetchAndMerge();
+    await oldStarted.promise;
+    account = 'account-b';
+    const newRefresh = sync.fetchAndMerge();
+    // Allow the new call to enter its read without waiting forever on a broken shared flight.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(store.readCount, 2);
+    await newStarted.promise;
+    oldRelease.resolve();
+    assert.equal((await oldRefresh).kind, 'error');
+    const overlappingNewRefresh = sync.fetchAndMerge();
+    newRelease.resolve();
+    assert.equal((await newRefresh).kind, 'loaded');
+    assert.equal((await overlappingNewRefresh).kind, 'loaded');
+    assert.equal(store.readCount, 2, 'old cleanup must not remove the new account flight');
+    const local = await localRegistry.exportSnapshot();
+    assert.deepEqual(local.decisions.map((row) => row.suggestionId), ['proposal-new']);
+});
+
+test('registry publication stops when the account changes during snapshot export', async (t) => {
+    let account = 'account-a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    const registry = createRegistry();
+    const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
+    const started = deferred();
+    const release = deferred();
+    const exportSnapshot = registry.exportSnapshot.bind(registry);
+    let exports = 0;
+    t.mock.method(registry, 'exportSnapshot', async () => {
+        const result = await exportSnapshot();
+        if (++exports === 2) { started.resolve(); await release.promise; }
+        return result;
+    });
+    const store = new FakeRegistryStore();
+    const publication = new SuggestionRegistrySync(registry, store).publishPending();
+    await started.promise;
+    account = 'account-b';
+    release.resolve();
+    assert.equal((await publication).kind, 'error');
+    assert.equal(store.writeCount, 0, 'the old snapshot must never be sent to the new account');
+    assert.equal((await exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt, undefined);
+});
+
+test('registry fetch rolls back a local merge if account ownership changes inside its transaction', async (t) => {
+    let account = 'account-a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    const remoteRegistry = createRegistry();
+    await remoteRegistry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
+    const store = new FakeRegistryStore();
+    store.data = await remoteRegistry.exportSnapshot();
+    const localRegistry = createRegistry();
+    const database = databases.at(-1)!;
+    const put = database.suggestionSubjects.put.bind(database.suggestionSubjects);
+    t.mock.method(database.suggestionSubjects, 'put', async (...args: Parameters<typeof put>) => {
+        const result = await put(...args);
+        account = 'account-b';
+        return result;
+    });
+
+    const result = await new SuggestionRegistrySync(localRegistry, store).fetchAndMerge();
+
+    assert.equal(result.kind, 'error');
+    const snapshot = await localRegistry.exportSnapshot();
+    assert.equal(snapshot.subjects.length, 0);
+    assert.equal(snapshot.occurrences.length, 0);
+    assert.equal(snapshot.decisions.length, 0);
+});
+
+test('registry verification from an old login cannot mark decisions published after A to B to A', async (t) => {
+    let account = 'account-a';
+    let generation = 1;
+    t.mock.method(googleService, 'getAccountId', () => account);
+    t.mock.method(googleService, 'getAuthGeneration', () => generation);
+    const registry = createRegistry();
+    const decision = await registry.recordDecision(suggestion(), { kind: 'rejected' }, 1_000);
+    const store = new FakeRegistryStore();
+    const started = deferred();
+    const release = deferred();
+    const read = store.readJsonFilesWithStatus.bind(store);
+    store.readJsonFilesWithStatus = async <T>() => {
+        const result = await read<T>();
+        if (store.readCount === 2) { started.resolve(); await release.promise; }
+        return result;
+    };
+    const publication = new SuggestionRegistrySync(registry, store).publishPending();
+    await started.promise;
+    account = 'account-b'; generation++;
+    account = 'account-a'; generation++;
+    release.resolve();
+    assert.equal((await publication).kind, 'error');
+    assert.equal(store.writeCount, 1);
+    assert.equal((await registry.exportSnapshot()).decisions.find((row) => row.id === decision.id)?.publishedAt, undefined);
+});
 
 test('overlapping page and badge registry refreshes share one remote read', async () => {
     const registry = createRegistry();

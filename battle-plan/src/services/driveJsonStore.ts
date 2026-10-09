@@ -1,5 +1,6 @@
 import { AuthUnavailableError, googleService } from './googleService.ts';
 import { isAuthUnavailable } from '../types.ts';
+import { captureGoogleAccountSession, type GoogleAccountSession } from './googleAccountSession.ts';
 import {
     DRIVE_PROTOCOL_PROPERTIES,
     type DriveProtocolApi,
@@ -398,6 +399,8 @@ export class DriveJsonStore {
     private readonly readCache = new Map<string, Map<string, { version: string; value: DriveJsonRead<unknown> }>>();
     private folderId: string | null = null;
     private isInitialized = false;
+    private session: GoogleAccountSession | null = null;
+    private initInFlight: { session: GoogleAccountSession; promise: Promise<DriveStoreStatus> } | null = null;
     private lastStatusValue: DriveStoreStatus = { code: 'folder-missing', message: 'Drive store není inicializovaný' };
     private readonly folderName: string;
     private readonly folderCacheKey: string;
@@ -413,11 +416,7 @@ export class DriveJsonStore {
     }
 
     async initWithStatus(options: { createFolder?: boolean } = {}): Promise<DriveStoreStatus> {
-        if (this.isInitialized) {
-            this.lastStatusValue = { code: 'ready', message: 'Drive store je inicializovaný' };
-            return this.lastStatusValue;
-        }
-
+        this.invalidateChangedSession();
         const client = this.getClient();
         if (!client?.drive) {
             console.warn('DriveJsonStore: GAPI Drive client not available');
@@ -425,9 +424,14 @@ export class DriveJsonStore {
             return this.lastStatusValue;
         }
 
+        const accountBeforeAuth = googleService.getAccountId();
+        const generationBeforeAuth = googleService.getAuthGeneration();
+        const refreshing = googleService.getAuthState() === 'REFRESH_PENDING';
+        const authSession = captureGoogleAccountSession();
         try {
             await this.getAccessToken();
         } catch (e) {
+            if (!authSession.isCurrent()) return this.changedSessionStatus();
             if (e instanceof AuthUnavailableError) {
                 console.warn('DriveJsonStore: Not signed in');
                 this.lastStatusValue = { code: 'auth-unavailable', message: e.message };
@@ -435,8 +439,39 @@ export class DriveJsonStore {
             }
             throw e;
         }
+        const generationAfterAuth = googleService.getAuthGeneration();
+        // Initialization may normalize one silent refresh for the same account.
+        // Other transitions, including A -> B -> A, belong to another operation.
+        if (accountBeforeAuth !== googleService.getAccountId()
+            || (generationBeforeAuth !== generationAfterAuth
+                && (!refreshing || generationAfterAuth !== generationBeforeAuth + 1))) {
+            return this.changedSessionStatus();
+        }
+        this.invalidateChangedSession();
+        if (this.isInitialized) {
+            this.lastStatusValue = { code: 'ready', message: 'Drive store je inicializovaný' };
+            return this.lastStatusValue;
+        }
+        if (this.initInFlight?.session.isCurrent()) {
+            const status = await this.initInFlight.promise;
+            return status.code === 'folder-missing' && options.createFolder ? this.initWithStatus(options) : status;
+        }
+        const session = captureGoogleAccountSession();
+        this.session = session;
+        const promise = this.initializeFolder(client, session, options).finally(() => {
+            if (this.initInFlight?.promise === promise) this.initInFlight = null;
+        });
+        this.initInFlight = { session, promise };
+        return promise;
+    }
 
-        const cached = localStorage.getItem(this.folderCacheKey);
+    private async initializeFolder(client: GapiClient, session: GoogleAccountSession, options: { createFolder?: boolean }): Promise<DriveStoreStatus> {
+        if (!client.drive) return { code: 'drive-client-unavailable', message: 'Google Drive klient není dostupný' };
+        const accountId = googleService.getAccountId();
+        if (!accountId) return this.changedSessionStatus();
+        // A legacy unscoped key has no verified owner and must be rediscovered.
+        const cacheKey = `${this.folderCacheKey}:${encodeURIComponent(accountId)}`;
+        const cached = localStorage.getItem(cacheKey);
         if (cached) {
             this.folderId = cached;
             this.isInitialized = true;
@@ -451,16 +486,19 @@ export class DriveJsonStore {
                 fields: 'files(id, name)',
                 pageSize: 1,
             });
+            session.assertCurrent();
             if (r.result.files?.[0]) {
                 this.folderId = r.result.files[0].id;
-                localStorage.setItem(this.folderCacheKey, this.folderId);
+                localStorage.setItem(cacheKey, this.folderId);
                 this.isInitialized = true;
                 this.lastStatusValue = { code: 'ready', message: 'Drive složka nalezena' };
                 return this.lastStatusValue;
             }
             if (options.createFolder) {
-                this.folderId = await this.createFolder(client);
-                localStorage.setItem(this.folderCacheKey, this.folderId);
+                const folderId = await this.createFolder(client);
+                session.assertCurrent();
+                this.folderId = folderId;
+                localStorage.setItem(cacheKey, this.folderId);
                 this.isInitialized = true;
                 this.lastStatusValue = { code: 'folder-created', message: 'Drive složka vytvořena' };
                 return this.lastStatusValue;
@@ -469,14 +507,17 @@ export class DriveJsonStore {
             this.lastStatusValue = { code: 'folder-missing', message: `Drive složka /${this.folderName}/ nebyla nalezena` };
             return this.lastStatusValue;
         } catch (e) {
+            if (!session.isCurrent()) return this.changedSessionStatus();
             console.error('DriveJsonStore: Failed to initialize folder', e);
             this.lastStatusValue = { code: 'init-error', message: e instanceof Error ? e.message : String(e) };
             return this.lastStatusValue;
         }
     }
 
-    private async findFiles(name: string): Promise<DriveFileMeta[]> {
-        if (!this.isInitialized || !this.folderId) return [];
+    private async findFiles(name: string, context = this.operationContext()): Promise<DriveFileMeta[]> {
+        if (!context) return [];
+        await this.getAccessToken();
+        context.session.assertCurrent();
         const client = this.getClient();
         if (!client?.drive) return [];
         const files: DriveFileMeta[] = [];
@@ -484,12 +525,13 @@ export class DriveJsonStore {
         let pageToken: string | undefined;
         do {
             const listR = await client.drive.files.list({
-                q: `name='${escapeDriveQueryValue(name)}' and '${escapeDriveQueryValue(this.folderId)}' in parents and trashed=false`,
+                q: `name='${escapeDriveQueryValue(name)}' and '${escapeDriveQueryValue(context.folderId)}' in parents and trashed=false`,
                 spaces: 'drive',
                 fields: 'files(id, name, version), nextPageToken',
                 pageSize: 1000,
                 ...(pageToken ? { pageToken } : {}),
             });
+            context.session.assertCurrent();
             files.push(...(listR.result.files ?? []));
             pageToken = listR.result.nextPageToken;
             if (pageToken && seenPageTokens.has(pageToken)) {
@@ -515,22 +557,25 @@ export class DriveJsonStore {
     }
 
     async readJsonFileWithStatus<T>(name: string): Promise<DriveJsonReadResult<T>> {
-        if (!this.isInitialized || !this.folderId) {
+        const context = this.operationContext();
+        if (!context) {
             return { kind: 'store-unavailable', status: this.lastStatusValue };
         }
-        const fileId = await this.findFileId(name);
+        const fileId = (await this.findFiles(name, context))[0]?.id;
+        context.session.assertCurrent();
         if (!fileId) return { kind: 'missing-file' };
 
-        return this.readJsonFileByIdWithStatus<T>(fileId);
+        return this.readJsonById<T>(fileId, context);
     }
 
     async readJsonFilesWithStatus<T>(name: string, options: { cacheUnchanged?: boolean } = {}): Promise<DriveJsonReadManyResult<T>> {
-        if (!this.isInitialized || !this.folderId) {
+        const context = this.operationContext();
+        if (!context) {
             return { kind: 'store-unavailable', status: this.lastStatusValue };
         }
         // Opt-in for registry snapshots only. Mutable writers still read fresh content and ETags.
-        if (options.cacheUnchanged) await this.getAccessToken();
-        const files = await this.findFiles(name);
+        const files = await this.findFiles(name, context);
+        context.session.assertCurrent();
         const cache = this.readCache.get(name) ?? new Map<string, { version: string; value: DriveJsonRead<unknown> }>();
         if (options.cacheUnchanged) {
             const ids = new Set(files.map((file) => file.id));
@@ -543,12 +588,14 @@ export class DriveJsonStore {
             if (file.version && cached?.version === file.version) {
                 return { kind: 'loaded', ...structuredClone(cached.value) as DriveJsonRead<T> };
             }
-            const result = await this.readJsonFileByIdWithStatus<T>(file.id);
+            const result = await this.readJsonById<T>(file.id, context);
+            context.session.assertCurrent();
             if (options.cacheUnchanged && result.kind === 'loaded' && file.version) {
                 cache.set(file.id, { version: file.version, value: structuredClone(result) });
             } else if (options.cacheUnchanged) cache.delete(file.id);
             return result;
         }));
+        context.session.assertCurrent();
         const failed = results.find((result) => result.kind !== 'loaded');
         if (failed) return failed;
         return {
@@ -561,10 +608,16 @@ export class DriveJsonStore {
     }
 
     async readJsonFileByIdWithStatus<T>(fileId: string): Promise<DriveJsonReadResult<T>> {
-        if (!this.isInitialized || !this.folderId) {
+        const context = this.operationContext();
+        if (!context) {
             return { kind: 'store-unavailable', status: this.lastStatusValue };
         }
+        return this.readJsonById<T>(fileId, context);
+    }
+
+    private async readJsonById<T>(fileId: string, context: { folderId: string; session: GoogleAccountSession }): Promise<DriveJsonReadResult<T>> {
         await this.getAccessToken();
+        context.session.assertCurrent();
         const client = this.getClient();
         if (!client) return { kind: 'error', message: 'GAPI client není dostupný' };
 
@@ -575,6 +628,7 @@ export class DriveJsonStore {
                 headers: {},
                 body: '',
             });
+            context.session.assertCurrent();
             const data = responseObject<T>(response, 'Drive JSON media read');
             const etag = getStrongDriveResponseEtag(response);
             return { kind: 'loaded', fileId, data, ...(etag ? { etag } : {}) };
@@ -584,7 +638,10 @@ export class DriveJsonStore {
     }
 
     async trashFile(fileId: string): Promise<void> {
-        if (!this.isInitialized || !this.folderId) throw new Error('Drive store není inicializovaný');
+        const context = this.operationContext();
+        if (!context) throw new Error('Drive store není inicializovaný');
+        await this.getAccessToken();
+        context.session.assertCurrent();
         const client = this.getClient();
         if (!client) throw new Error('GAPI client není dostupný');
         const response = await client.request({
@@ -593,6 +650,7 @@ export class DriveJsonStore {
             headers: { 'Content-Type': JSON_MIME_TYPE },
             body: JSON.stringify({ trashed: true }),
         });
+        context.session.assertCurrent();
         ensureDriveRequestOk(response, 'Drive JSON duplicate cleanup');
     }
 
@@ -602,11 +660,15 @@ export class DriveJsonStore {
         fileId: string | null = null,
         options: { ifMatch?: string; createOnly?: boolean } = {},
     ): Promise<DriveJsonWrite | null> {
-        if (!this.isInitialized || !this.folderId) return null;
+        const context = this.operationContext();
+        if (!context) return null;
+        await this.getAccessToken();
+        context.session.assertCurrent();
         const client = this.getClient();
         if (!client) return null;
-        const targetFileId = options.createOnly ? null : fileId ?? await this.findFileId(name);
-        const metadata = buildDriveFileMetadata(name, JSON_MIME_TYPE, this.folderId, targetFileId);
+        const targetFileId = options.createOnly ? null : fileId ?? (await this.findFiles(name, context))[0]?.id ?? null;
+        context.session.assertCurrent();
+        const metadata = buildDriveFileMetadata(name, JSON_MIME_TYPE, context.folderId, targetFileId);
         const body = buildMultipartJsonBody(metadata, payload);
         const response = await client.request({
             path: targetFileId
@@ -619,6 +681,7 @@ export class DriveJsonStore {
             },
             body,
         });
+        context.session.assertCurrent();
         ensureDriveRequestOk(response, 'Drive JSON upload');
         const etag = getDriveResponseEtag(response);
         return {
@@ -628,9 +691,11 @@ export class DriveJsonStore {
     }
 
     async uploadBlob(name: string, blob: Blob, mimeType: string): Promise<DriveJsonWrite | null> {
-        if (!this.isInitialized || !this.folderId) return null;
+        const context = this.operationContext();
+        if (!context) return null;
         const accessToken = await this.getAccessToken();
-        const metadata = buildDriveFileMetadata(name, mimeType, this.folderId, null);
+        context.session.assertCurrent();
+        const metadata = buildDriveFileMetadata(name, mimeType, context.folderId, null);
         const body = buildMultipartBlobBody(metadata, blob, mimeType);
         const resp = await fetch(
             `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`,
@@ -643,24 +708,48 @@ export class DriveJsonStore {
                 body,
             },
         );
+        context.session.assertCurrent();
         if (!resp.ok) {
             console.error(`DriveJsonStore: blob upload failed: ${resp.status} ${resp.statusText}`);
             return null;
         }
         const result = await resp.json() as { id?: string };
+        context.session.assertCurrent();
         return { fileId: result.id ?? null };
     }
 
     get initialized(): boolean {
+        this.invalidateChangedSession();
         return this.isInitialized;
     }
 
     get currentFolderId(): string | null {
+        this.invalidateChangedSession();
         return this.folderId;
     }
 
     get lastStatus(): DriveStoreStatus {
+        this.invalidateChangedSession();
         return this.lastStatusValue;
+    }
+
+    private changedSessionStatus(): DriveStoreStatus {
+        return { code: 'auth-unavailable', message: 'Přihlášení Google se během synchronizace změnilo.' };
+    }
+
+    private invalidateChangedSession() {
+        if (!this.session || this.session.isCurrent()) return;
+        this.session = null;
+        this.initInFlight = null;
+        this.isInitialized = false;
+        this.folderId = null;
+        this.readCache.clear();
+        this.lastStatusValue = this.changedSessionStatus();
+    }
+
+    private operationContext() {
+        if (!this.initialized || !this.folderId || !this.session) return null;
+        return { folderId: this.folderId, session: this.session };
     }
 
     private getClient(): GapiClient | null {

@@ -380,6 +380,10 @@ class GoogleService {
         return this.verifiedAccount?.token === this.accessToken ? this.verifiedAccount.accountId : null;
     }
 
+    getAuthGeneration(): number {
+        return this.authGeneration;
+    }
+
     private dispatchAuthChange() {
         const status = this.getAuthStatus();
         if (

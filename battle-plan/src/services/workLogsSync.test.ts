@@ -44,11 +44,42 @@ const { mergeCloudToLocal, mergeLocalToCloud, mergeLocalToCloudDetailed, WorkLog
 };
 after(async () => vite.close());
 
+test('worklog publication stops before writing when the account changes during snapshot read', async (t) => {
+    const { googleService } = await vite.ssrLoadModule('/src/services/googleService.ts') as typeof import('./googleService.ts');
+    let account = 'a'; t.mock.method(googleService, 'getAccountId', () => account);
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const store = new FakeImmutableWorkLogsStore();
+    const read = store.readJsonFilesWithStatus.bind(store);
+    store.readJsonFilesWithStatus = async name => { await gate; return read(name); };
+    const sync = new WorkLogsSync(store); await sync.init();
+    const pending = sync.saveAllDetailed({ workLogs: [], projects: [], workLogDeletionTombstones: [] });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    account = 'b'; finish(); await pending;
+    assert.equal(store.writes.length, 0, 'payload read under A must not be published under B');
+});
+
 async function resetDb(): Promise<void> {
     await db.workLogs.clear();
     await db.projects.clear();
     await db.workLogDeletionTombstones.clear();
 }
+
+test('account change during Drive project merge rolls back the database transaction', async (t) => {
+    await resetDb();
+    const { googleService } = await vite.ssrLoadModule('/src/services/googleService.ts') as typeof import('./googleService.ts');
+    let account = 'a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    const changeAccount = () => { account = 'b'; };
+    db.projects.hook('creating', changeAccount);
+    try {
+        await assert.rejects(mergeCloudToLocal([], [{ name: 'Private A', isActive: true, color: 'slate', createdAt: 1, updatedAt: 1 }]), /Přihlášení Google/);
+        assert.equal(await db.projects.count(), 0);
+        assert.equal(await db.workLogs.count(), 0);
+    } finally {
+        db.projects.hook('creating').unsubscribe(changeAccount);
+    }
+});
 
 function withoutProjectPublicId(project: Project | undefined): Omit<Project, 'publicId'> | undefined {
     if (!project) return undefined;

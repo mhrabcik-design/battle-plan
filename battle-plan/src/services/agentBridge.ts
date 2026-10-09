@@ -1,4 +1,5 @@
 import { googleService } from './googleService.ts';
+import { captureGoogleAccountSession } from './googleAccountSession.ts';
 import { normalizeEntity } from './semanticEngine.ts';
 import type { AgentInboxRow, Project, Setting, Task, WorkLog } from '../db.ts';
 import { db } from '../db.ts';
@@ -136,20 +137,25 @@ function replayResult(existing: LegacyReceipt | undefined, write: AgentWrite): A
 }
 
 class AgentBridge {
+  private session = captureGoogleAccountSession();
   private fileId: string | null = null;
   private isInitialized = false;
   private readonly drive = new DriveJsonStore();
 
   async init(options: { createFolder?: boolean } = {}): Promise<void> {
-    if (this.isInitialized) return;
-    this.isInitialized = await this.drive.init({ createFolder: options.createFolder ?? true });
+    if (this.initialized) return;
+    const session = this.session;
+    const initialized = await this.drive.init({ createFolder: options.createFolder ?? true });
+    if (session.isCurrent()) this.isInitialized = initialized;
   }
 
   async fetchPendingWrites(): Promise<AgentWrite[]> {
-    if (!this.isInitialized) return [];
+    if (!this.initialized) return [];
 
+    const session = this.session;
     try {
       const loaded = await this.drive.readJsonFile<PendingWritesFile>(PENDING_FILE);
+      session.assertCurrent();
       if (!loaded) return [];
       this.fileId = loaded.fileId;
       const writes: AgentWrite[] = (loaded.data.writes ?? []).filter(
@@ -163,6 +169,7 @@ class AgentBridge {
   }
 
   async applyWrite(input: AgentWrite): Promise<ApplyWriteResult> {
+    const session = captureGoogleAccountSession();
     // Snapshot before waiting for another tab. Network delivery follows commit.
     const write = structuredClone(input);
     try {
@@ -171,10 +178,13 @@ class AgentBridge {
         ...taskMutationTables(db), db.agentInbox, db.projects, db.workLogs,
         db.settings, db.workLogDeletionTombstones,
       ], async () => {
+        session.assertCurrent();
         const existing = await db.agentInbox.get(write.id) as LegacyReceipt | undefined;
+        session.assertCurrent();
         const replay = replayResult(existing, write);
         if (replay) return replay;
         const outcome = await this.executeWrite(write, effects);
+        session.assertCurrent();
         const row: LegacyReceipt = {
           id: write.id, action: write.action, entity_type: this.inferEntityType(write.action),
           payload: write, received_at: existing?.received_at ?? Date.now(),
@@ -183,17 +193,22 @@ class AgentBridge {
             ? { applied_at: Date.now(), execution_result: outcome } : {}),
         };
         await db.agentInbox.put(row);
+        session.assertCurrent();
         return outcome;
       });
+      session.assertCurrent();
       await this.deliverTaskEffects(effects);
       return result;
     } catch (e) {
+      if (!session.isCurrent()) return retryableWrite('Přihlášení Google se během zpracování změnilo.');
       // A nested Dexie validation failure aborts its parent transaction. Record
       // the terminal result only after rollback, preserving any winning receipt.
       if (e instanceof ProjectUnavailableError || (e instanceof Error && ['worklog-not-found', 'calendar_task_readonly'].includes(e.message))) {
         try {
           return await db.transaction('rw', db.agentInbox, async () => {
+            session.assertCurrent();
             const existing = await db.agentInbox.get(write.id) as LegacyReceipt | undefined;
+            session.assertCurrent();
             const replay = replayResult(existing, write);
             if (replay) return replay;
             const outcome = terminalWrite(e.message);
@@ -203,6 +218,7 @@ class AgentBridge {
               applied_at: Date.now(), last_error: outcome.last_error, execution_result: outcome,
             };
             await db.agentInbox.put(row);
+            session.assertCurrent();
             return outcome;
           });
         } catch (receiptError) {
@@ -446,10 +462,12 @@ class AgentBridge {
   }
 
   async markApplied(writeIds: string[]): Promise<void> {
-    if (!this.fileId || writeIds.length === 0) return;
+    if (!this.initialized || !this.fileId || writeIds.length === 0) return;
 
+    const session = this.session;
     try {
       const loaded = await this.drive.readJsonFile<PendingWritesFile>(PENDING_FILE);
+      session.assertCurrent();
       if (!loaded) return;
       this.fileId = loaded.fileId;
       const data = loaded.data;
@@ -462,6 +480,7 @@ class AgentBridge {
 
       const updatedData = { ...data, writes };
       await this.drive.writeJsonFile(PENDING_FILE, updatedData, this.fileId);
+      session.assertCurrent();
 
     } catch (e) {
       console.error('AgentBridge: markApplied failed', e);
@@ -471,7 +490,9 @@ class AgentBridge {
   // Mirror the inbox into db.agentInbox so the diagnostics surface can read
   // pending writes via useLiveQuery. U5. Idempotent on re-read.
   async mirrorInbox(writes: AgentWrite[]): Promise<void> {
+    const session = captureGoogleAccountSession();
     await db.transaction('rw', db.agentInbox, async () => {
+      session.assertCurrent();
       for (const w of writes) {
         // Preserve the original payload and any atomically committed receipt.
         if (await db.agentInbox.get(w.id)) continue;
@@ -480,6 +501,7 @@ class AgentBridge {
           payload: w, received_at: Date.now(), applied_at: w.applied_at,
         });
       }
+      session.assertCurrent();
     });
   }
 
@@ -499,7 +521,9 @@ class AgentBridge {
   // Mark a single inbox row as applied (or failed). U5. Called by useAgentBridgePolling
   // after applyWrite runs.
   async recordInboxResult(id: string, applied: boolean, lastError?: string): Promise<void> {
+    const session = captureGoogleAccountSession();
     await db.transaction('rw', db.agentInbox, async () => {
+      session.assertCurrent();
       const row = await db.agentInbox.get(id);
       if (!row || row.applied_at) return;
       await db.agentInbox.put({
@@ -507,6 +531,7 @@ class AgentBridge {
         applied_at: applied ? Date.now() : row.applied_at,
         last_error: lastError,
       });
+      session.assertCurrent();
     });
   }
 
@@ -521,7 +546,14 @@ class AgentBridge {
     });
   }
 
-  get initialized(): boolean { return this.isInitialized; }
+  get initialized(): boolean {
+    if (!this.session.isCurrent()) {
+      this.session = captureGoogleAccountSession();
+      this.isInitialized = false;
+      this.fileId = null;
+    }
+    return this.isInitialized;
+  }
 }
 
 export const agentBridge = new AgentBridge();

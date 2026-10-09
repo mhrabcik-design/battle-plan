@@ -5,6 +5,7 @@ import {
 } from './driveJsonStore.ts';
 import type { ProposalPayload } from './agentProtocol/contracts.ts';
 import { getErrorMessage } from '../utils/errors.ts';
+import { captureGoogleAccountSession } from './googleAccountSession.ts';
 
 export interface AgentSuggestion extends Partial<Pick<
   ProposalPayload,
@@ -82,6 +83,7 @@ export type SuggestionsStore = Pick<
 >;
 
 export class SuggestionsSync {
+  private session = captureGoogleAccountSession();
   private suggestionsInFlight: Promise<SuggestionsFetchResult> | null = null;
   private repliesInFlight: Promise<RepliesFetchResult> | null = null;
   private suggestionsFileId: string | null = null;
@@ -95,8 +97,10 @@ export class SuggestionsSync {
   }
 
   async init(): Promise<void> {
-    if (this.isInitialized) return;
-    this.isInitialized = await this.drive.init({ createFolder: true });
+    if (this.initialized) return;
+    const session = this.session;
+    const initialized = await this.drive.init({ createFolder: true });
+    if (session.isCurrent()) this.isInitialized = initialized;
   }
 
   async fetchSuggestions(): Promise<AgentSuggestion[]> {
@@ -105,19 +109,25 @@ export class SuggestionsSync {
   }
 
   async fetchSuggestionsDetailed(): Promise<SuggestionsFetchResult> {
+    this.invalidateChangedSession();
     if (!this.suggestionsInFlight) {
-      this.suggestionsInFlight = this.readSuggestions().finally(() => { this.suggestionsInFlight = null; });
+      const pending = this.readSuggestions().finally(() => {
+        if (this.suggestionsInFlight === pending) this.suggestionsInFlight = null;
+      });
+      this.suggestionsInFlight = pending;
     }
     return this.suggestionsInFlight;
   }
 
   private async readSuggestions(): Promise<SuggestionsFetchResult> {
-    if (!this.isInitialized) {
+    if (!this.initialized) {
       return { kind: 'store-unavailable', status: this.drive.lastStatus, suggestions: [] };
     }
 
+    const session = this.session;
     try {
       const result = await this.drive.readJsonFileWithStatus<SuggestionsFile>(SUGGESTIONS_FILENAME);
+      session.assertCurrent();
       if (result.kind === 'missing-file') return { kind: 'missing-file', suggestions: [] };
       if (result.kind === 'store-unavailable') return { ...result, suggestions: [] };
       if (result.kind === 'error') return { ...result, suggestions: [] };
@@ -135,8 +145,12 @@ export class SuggestionsSync {
   }
 
   async fetchRepliesDetailed(suggestionId?: string): Promise<RepliesFetchResult> {
+    this.invalidateChangedSession();
     if (!this.repliesInFlight) {
-      this.repliesInFlight = this.readReplies().finally(() => { this.repliesInFlight = null; });
+      const pending = this.readReplies().finally(() => {
+        if (this.repliesInFlight === pending) this.repliesInFlight = null;
+      });
+      this.repliesInFlight = pending;
     }
     const result = await this.repliesInFlight;
     return suggestionId
@@ -145,12 +159,14 @@ export class SuggestionsSync {
   }
 
   private async readReplies(): Promise<RepliesFetchResult> {
-    if (!this.isInitialized) {
+    if (!this.initialized) {
       return { kind: 'store-unavailable', status: this.drive.lastStatus, replies: [] };
     }
 
+    const session = this.session;
     try {
       const result = await this.drive.readJsonFileWithStatus<RepliesFile>(REPLIES_FILENAME);
+      session.assertCurrent();
       if (result.kind === 'missing-file') return { kind: 'missing-file', replies: [] };
       if (result.kind === 'store-unavailable') return { ...result, replies: [] };
       if (result.kind === 'error') return { ...result, replies: [] };
@@ -168,11 +184,13 @@ export class SuggestionsSync {
     suggestionId: string,
     updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null; title?: string; description?: string }
   ): Promise<{ success: boolean }> {
-    if (!this.isInitialized || !this.suggestionsFileId) {
+    if (!this.initialized || !this.suggestionsFileId) {
       return { success: false };
     }
+    const session = this.session;
     try {
       const loaded = await this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME);
+      session.assertCurrent();
       if (!loaded) return { success: false };
       this.suggestionsFileId = loaded.fileId;
       const data = loaded.data;
@@ -204,11 +222,13 @@ export class SuggestionsSync {
     suggestionId: string,
     status: 'open' | 'accepted' | 'rejected' | 'deferred' | 'converted'
   ): Promise<{ success: boolean }> {
-    if (!this.isInitialized || !this.suggestionsFileId) {
+    if (!this.initialized || !this.suggestionsFileId) {
       return { success: false };
     }
+    const session = this.session;
     try {
       const loaded = await this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME);
+      session.assertCurrent();
       if (!loaded) return { success: false };
       this.suggestionsFileId = loaded.fileId;
       const data = loaded.data;
@@ -224,14 +244,16 @@ export class SuggestionsSync {
   }
 
   async deleteSuggestion(suggestionId: string): Promise<SuggestionDeleteResult> {
-    if (!this.isInitialized || !this.suggestionsFileId) {
+    if (!this.initialized || !this.suggestionsFileId) {
       return { success: false, suggestions: false };
     }
+    const session = this.session;
     try {
       const [loadedSuggestions, loadedReplies] = await Promise.all([
         this.drive.readJsonFile<SuggestionsFile>(SUGGESTIONS_FILENAME),
         this.drive.readJsonFile<RepliesFile>(REPLIES_FILENAME),
       ]);
+      session.assertCurrent();
       if (!loadedSuggestions) return { success: false, suggestions: false };
       this.suggestionsFileId = loadedSuggestions.fileId;
       const nextSuggestions = (loadedSuggestions.data.suggestions ?? []).filter((s) => s.id !== suggestionId);
@@ -240,6 +262,7 @@ export class SuggestionsSync {
         suggestions: nextSuggestions,
         last_updated: Date.now(),
       });
+      session.assertCurrent();
       if (!suggestionsResult.success) return { success: false, suggestions: false };
       if (loadedReplies) {
         this.repliesFileId = loadedReplies.fileId;
@@ -249,6 +272,7 @@ export class SuggestionsSync {
           replies: nextReplies,
           last_updated: Date.now(),
         });
+        session.assertCurrent();
         return {
           success: repliesResult.success,
           suggestions: true,
@@ -263,10 +287,11 @@ export class SuggestionsSync {
   }
 
   async addReply(reply: Omit<AgentSuggestionReply, 'id' | 'created_at'>): Promise<{ success: boolean; id?: string }> {
-    if (!this.isInitialized) {
+    if (!this.initialized) {
       return { success: false };
     }
 
+    const session = this.session;
     const newReply: AgentSuggestionReply = {
       ...reply,
       id: `rpl_${new Date().toISOString().replace(/[:.]/g, '-')}_${Math.random().toString(36).slice(2, 6)}`,
@@ -275,7 +300,9 @@ export class SuggestionsSync {
 
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
+        session.assertCurrent();
         const loaded = await this.drive.readJsonFilesWithStatus<RepliesFile>(REPLIES_FILENAME);
+        session.assertCurrent();
         if (loaded.kind === 'store-unavailable' || loaded.kind === 'error') return { success: false };
         const files = loaded.kind === 'loaded' ? loaded.files : [];
         const canonical = files[0];
@@ -297,13 +324,16 @@ export class SuggestionsSync {
               ? { ifMatch: canonical.etag }
               : { createOnly: true },
           );
+          session.assertCurrent();
         } catch (error) {
+          session.assertCurrent();
           if (error && typeof error === 'object' && 'status' in error && error.status === 412) continue;
           throw error;
         }
         if (!saved) continue;
 
         const verification = await this.drive.readJsonFilesWithStatus<RepliesFile>(REPLIES_FILENAME);
+        session.assertCurrent();
         if (verification.kind !== 'loaded') continue;
         const verifiedCanonical = verification.files[0];
         const remoteIds = new Set((verifiedCanonical.data.replies ?? []).map((item) => item.id));
@@ -315,6 +345,7 @@ export class SuggestionsSync {
 
         for (const duplicate of verification.files.slice(1)) {
           await this.drive.trashFile(duplicate.fileId);
+          session.assertCurrent();
         }
         this.repliesFileId = verifiedCanonical.fileId;
         this.knownReplyIds.add(newReply.id);
@@ -328,11 +359,13 @@ export class SuggestionsSync {
   }
 
   async uploadVoiceReply(suggestionId: string, blob: Blob): Promise<{ success: boolean; fileId?: string }> {
-    if (!this.isInitialized) return { success: false };
+    if (!this.initialized) return { success: false };
 
+    const session = this.session;
     try {
       const safeName = `voice-reply-${suggestionId}-${Date.now()}.webm`;
       const uploaded = await this.drive.uploadBlob(safeName, blob, 'audio/webm');
+      session.assertCurrent();
       return uploaded?.fileId ? { success: true, fileId: uploaded.fileId } : { success: false };
     } catch (e) {
       console.error('SuggestionsSync: uploadVoiceReply failed', e);
@@ -340,15 +373,19 @@ export class SuggestionsSync {
     }
   }
 
-  get initialized(): boolean { return this.isInitialized; }
-  get status(): DriveStoreStatus { return this.drive.lastStatus; }
-  get hasKnownReplies(): boolean { return this.knownReplyIds.size > 0; }
+  get initialized(): boolean { this.invalidateChangedSession(); return this.isInitialized; }
+  get status(): DriveStoreStatus { this.invalidateChangedSession(); return this.drive.lastStatus; }
+  get hasKnownReplies(): boolean { this.invalidateChangedSession(); return this.knownReplyIds.size > 0; }
   markRepliesKnown(replyIds: string[]): void {
+    this.invalidateChangedSession();
     for (const id of replyIds) this.knownReplyIds.add(id);
   }
 
   private async writeSuggestions(data: SuggestionsFile): Promise<{ success: boolean }> {
+    const session = this.session;
+    session.assertCurrent();
     const saved = await this.drive.writeJsonFile(SUGGESTIONS_FILENAME, data, this.suggestionsFileId);
+    session.assertCurrent();
     if (!saved) return { success: false };
     if (saved.fileId) {
       this.suggestionsFileId = saved.fileId;
@@ -357,12 +394,26 @@ export class SuggestionsSync {
   }
 
   private async writeReplies(data: RepliesFile): Promise<{ success: boolean }> {
+    const session = this.session;
+    session.assertCurrent();
     const saved = await this.drive.writeJsonFile(REPLIES_FILENAME, data, this.repliesFileId);
+    session.assertCurrent();
     if (!saved) return { success: false };
     if (saved.fileId) {
       this.repliesFileId = saved.fileId;
     }
     return { success: true };
+  }
+
+  private invalidateChangedSession(): void {
+    if (this.session.isCurrent()) return;
+    this.session = captureGoogleAccountSession();
+    this.isInitialized = false;
+    this.suggestionsFileId = null;
+    this.repliesFileId = null;
+    this.knownReplyIds.clear();
+    this.suggestionsInFlight = null;
+    this.repliesInFlight = null;
   }
 }
 

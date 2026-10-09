@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { db } from '../db';
 import { googleService } from '../services/googleService';
+import { captureGoogleAccountSession, type GoogleAccountSession } from '../services/googleAccountSession';
 import { mergeCloudToLocal, mergeLocalToCloud, type MergeResult, workLogsSync } from '../services/workLogsSync';
 import { taskDriveBackup } from '../services/taskDriveBackup';
 import { mergeTasksFromDrive } from '../services/taskMerge.ts';
@@ -41,14 +42,20 @@ export function useDriveSyncOrchestration({
 }: UseDriveSyncOrchestrationArgs) {
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
   const accessToken = googleAuth.accessToken;
-  const [hydrated, setHydrated] = useState<{ accessToken: string | null } | null>(null);
+  const authGeneration = googleService.getAuthGeneration();
+  const accountId = googleService.getAccountId();
+  const [hydrated, setHydrated] = useState<{ accessToken: string | null; session: GoogleAccountSession } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let running = false;
+    const session = captureGoogleAccountSession();
+    const isActive = () => !cancelled && session.isCurrent()
+      && googleService.getAuthGeneration() === authGeneration
+      && googleService.getAccountId() === accountId;
     if (!hasUsableAuthValue) {
       queueMicrotask(() => {
-        if (cancelled) return;
+        if (!isActive()) return;
         setHydrated(null);
         updateSyncHealth('tasks', { state: 'idle', detail: 'Čeká na Google přihlášení' });
         updateSyncHealth('worklogs', { state: 'idle', detail: 'Čeká na Google přihlášení' });
@@ -57,13 +64,13 @@ export function useDriveSyncOrchestration({
     }
 
     const checkSync = async () => {
-      if (cancelled || running) return;
+      if (!isActive() || running) return;
       running = true;
       try {
         const status = googleService.getAuthStatus();
         if (status.state === 'REFRESH_PENDING') {
           const success = await googleService.runRefresh();
-          if (cancelled) return;
+          if (!isActive()) return;
           if (success) {
             setGoogleAuth(googleService.getAuthStatus());
           }
@@ -76,33 +83,39 @@ export function useDriveSyncOrchestration({
         // fetch does not block the rest of the sync.
         try {
           const lists = await googleService.getTaskLists();
-          if (cancelled) return;
+          if (!isActive()) return;
           setGoogleTaskLists(lists);
         } catch (e) {
-          if (cancelled) return;
+          if (!isActive()) return;
           console.error('Google Tasks list fetch failed', e);
           setGoogleTaskLists([]);
         }
         const { result: taskBackup, ready } = await hydrateTaskBackup(
           () => taskDriveBackup.loadDetailed(),
           async (payload) => {
+            if (!isActive()) return;
             const payloadData = payload.data ?? {};
             const cloudTimestamp = payload.timestamp || 0;
 
             const { tasks: driveTasks, settings: driveSettings } = payloadData;
 
             if (driveSettings) {
-              for (const s of filterTaskBackupSettings(driveSettings)) {
-                await db.settings.put(s);
-                if (cancelled) return;
+              const portableSettings = filterTaskBackupSettings(driveSettings);
+              await db.transaction('rw', db.settings, async () => {
+                session.assertCurrent();
+                for (const setting of portableSettings) await db.settings.put(setting);
+                session.assertCurrent();
+              });
+              if (!isActive()) return;
+              for (const s of portableSettings) {
                 if (s.id === 'gemini_model') setSelectedModel(s.value);
                 if (s.id === 'ui_scale') setUiScale(Number(s.value));
               }
             }
 
             if (driveTasks && Array.isArray(driveTasks)) {
-              const changesMade = await mergeTasksFromDrive(driveTasks);
-              if (cancelled) return;
+              const changesMade = await mergeTasksFromDrive(driveTasks, session.assertCurrent);
+              if (!isActive()) return;
 
               if (changesMade) {
                 addLog(`Synchronizace: Staženy novější změny z cloudu.`);
@@ -131,10 +144,10 @@ export function useDriveSyncOrchestration({
               });
             }
           },
-          () => !cancelled && !isAuthUnavailable(googleService.getAuthStatus().state),
+          () => isActive() && !isAuthUnavailable(googleService.getAuthStatus().state),
         );
-        if (cancelled || isAuthUnavailable(googleService.getAuthStatus().state)) return;
-        if (ready) setHydrated({ accessToken });
+        if (!isActive() || isAuthUnavailable(googleService.getAuthStatus().state)) return;
+        if (ready) setHydrated({ accessToken, session });
         if (taskBackup.kind !== 'loaded') {
           updateSyncHealth('tasks', taskBackupHealth(taskBackup));
           const recoverable = taskBackup.kind === 'error'
@@ -147,10 +160,10 @@ export function useDriveSyncOrchestration({
           return;
         }
         await workLogsSync.init();
-        if (cancelled) return;
+        if (!isActive()) return;
         if (workLogsSync.initialized) {
           const workLogsResult = await workLogsSync.loadAllDetailed();
-          if (cancelled) return;
+          if (!isActive()) return;
           const wl = workLogsResult.data;
           if (workLogsResult.kind === 'store-unavailable') {
             updateSyncHealth('worklogs', driveUnavailableHealth(workLogsResult.status));
@@ -166,7 +179,7 @@ export function useDriveSyncOrchestration({
               wl.projects,
               wl.workLogDeletionTombstones,
             );
-            if (cancelled) return;
+            if (!isActive()) return;
             if (mergeResult.workLogsAdded > 0 || mergeResult.workLogsUpdated > 0 ||
                 mergeResult.projectsAdded > 0 || mergeResult.projectsUpdated > 0) {
               addLog(
@@ -181,11 +194,9 @@ export function useDriveSyncOrchestration({
               lastError: null,
             });
           } else {
-            const localCounts = {
-              workLogs: await db.workLogs.count(),
-              projects: await db.projects.count(),
-            };
-            if (cancelled) return;
+            const [workLogs, projects] = await Promise.all([db.workLogs.count(), db.projects.count()]);
+            const localCounts = { workLogs, projects };
+            if (!isActive()) return;
             const missingStatus = getMissingWorkLogsFileStatus(localCounts);
             updateSyncHealth('worklogs', {
               state: missingStatus.state,
@@ -194,7 +205,7 @@ export function useDriveSyncOrchestration({
             });
             if (hasLocalWorkLogsData(localCounts)) {
               const created = await mergeLocalToCloud();
-              if (cancelled) return;
+              if (!isActive()) return;
               updateSyncHealth('worklogs', created
                 ? {
                     state: 'ok',
@@ -216,7 +227,7 @@ export function useDriveSyncOrchestration({
           updateSyncHealth('worklogs', driveUnavailableHealth(workLogsSync.status));
         }
       } catch (e) {
-        if (cancelled) return;
+        if (!isActive()) return;
         console.error("Auto-sync check failed", e);
         const failure = autoSyncFailureHealth(e);
         updateSyncHealth(failure.key, failure.patch);
@@ -241,8 +252,8 @@ export function useDriveSyncOrchestration({
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSync);
     };
-  }, [hasUsableAuthValue, accessToken, setGoogleAuth, setGoogleTaskLists, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
+  }, [hasUsableAuthValue, accessToken, authGeneration, accountId, setGoogleAuth, setGoogleTaskLists, setSelectedModel, setUiScale, setLastSync, addLog, updateSyncHealth]);
 
-  return { taskBackupReady: hasUsableAuthValue && hydrated !== null && hydrated.accessToken === accessToken };
+  return { taskBackupReady: hasUsableAuthValue && hydrated !== null && hydrated.accessToken === accessToken && hydrated.session.isCurrent() };
 }
 

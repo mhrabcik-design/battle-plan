@@ -8,6 +8,7 @@ import type {
     DriveJsonStore,
     DriveStoreStatus,
 } from './driveJsonStore.ts';
+import type { GoogleAccountSession } from './googleAccountSession.ts';
 import {
     suggestionRegistry,
     type SuggestionRegistry,
@@ -16,6 +17,11 @@ import {
 
 const REGISTRY_FILENAME = 'agent-suggestion-decisions.json';
 const MAX_PUBLISH_ATTEMPTS = 3;
+
+async function captureAccountSession(): Promise<GoogleAccountSession> {
+    const { captureGoogleAccountSession } = await import('./googleAccountSession.ts');
+    return captureGoogleAccountSession();
+}
 
 export type SuggestionRegistryFile = SuggestionRegistrySnapshot;
 
@@ -171,7 +177,7 @@ function parseRegistryFile(value: unknown): SuggestionRegistryFile {
 }
 
 export class SuggestionRegistrySync {
-    private fetchInFlight: Promise<SuggestionRegistrySyncResult> | null = null;
+    private fetchInFlight: { session: GoogleAccountSession; promise: Promise<SuggestionRegistrySyncResult> } | null = null;
     private readonly registry: SuggestionRegistry;
     private readonly store: SuggestionRegistryStore;
 
@@ -183,9 +189,12 @@ export class SuggestionRegistrySync {
         this.store = store;
     }
 
-    private async initStore(): Promise<SuggestionRegistryUnavailableResult | null> {
+    private async initStore(session: GoogleAccountSession): Promise<SuggestionRegistryUnavailableResult | null> {
         try {
-            if (await this.store.init({ createFolder: true })) return null;
+            session.assertCurrent();
+            const initialized = await this.store.init({ createFolder: true });
+            session.assertCurrent();
+            if (initialized) return null;
             const status = this.store.lastStatus;
             return { kind: 'store-unavailable', ...(status ? { status } : {}) };
         } catch (error) {
@@ -193,35 +202,42 @@ export class SuggestionRegistrySync {
         }
     }
 
-    private async convergeRemote(pendingIds: readonly string[]): Promise<SuggestionRegistrySyncResult> {
+    private async convergeRemote(pendingIds: readonly string[], session: GoogleAccountSession): Promise<SuggestionRegistrySyncResult> {
         try {
             for (let attempt = 0; attempt < MAX_PUBLISH_ATTEMPTS; attempt++) {
+                session.assertCurrent();
                 const read = await this.store.readJsonFilesWithStatus<unknown>(REGISTRY_FILENAME);
+                session.assertCurrent();
                 if (read.kind === 'store-unavailable' || read.kind === 'error') return read;
                 if (read.kind === 'missing-file' && pendingIds.length === 0) return { kind: 'missing-file' };
                 const files = read.kind === 'loaded' ? read.files : [];
                 const remoteIds = new Set<string>();
                 for (const file of files) {
                     const remoteSnapshot = parseRegistryFile(file.data);
-                    await this.registry.mergeSnapshot(remoteSnapshot);
+                    await this.registry.mergeSnapshot(remoteSnapshot, undefined, session.assertCurrent);
+                    session.assertCurrent();
                     for (const decision of remoteSnapshot.decisions) remoteIds.add(decision.id);
                 }
                 if (pendingIds.length === 0) return { kind: 'loaded' };
                 if (pendingIds.every((id) => remoteIds.has(id))) {
-                    await this.registry.markPublished(pendingIds);
+                    await this.registry.markPublished(pendingIds, undefined, session.assertCurrent);
+                    session.assertCurrent();
                     return { kind: 'published', decisionCount: pendingIds.length };
                 }
 
                 const snapshot = await this.registry.exportSnapshot();
+                session.assertCurrent();
                 const saved = await this.store.writeJsonFile(
                     REGISTRY_FILENAME,
                     snapshot,
                     null,
                     { createOnly: true },
                 );
+                session.assertCurrent();
                 if (!saved) continue;
 
                 const verification = await this.store.readJsonFilesWithStatus<unknown>(REGISTRY_FILENAME);
+                session.assertCurrent();
                 if (verification.kind !== 'loaded') continue;
                 const verifiedIds = new Set<string>();
                 const verifiedSnapshots: SuggestionRegistryFile[] = [];
@@ -232,10 +248,12 @@ export class SuggestionRegistrySync {
                 }
                 if (pendingIds.some((id) => !verifiedIds.has(id))) continue;
                 for (const verifiedSnapshot of verifiedSnapshots) {
-                    await this.registry.mergeSnapshot(verifiedSnapshot);
+                    await this.registry.mergeSnapshot(verifiedSnapshot, undefined, session.assertCurrent);
+                    session.assertCurrent();
                 }
 
-                await this.registry.markPublished(pendingIds);
+                await this.registry.markPublished(pendingIds, undefined, session.assertCurrent);
+                session.assertCurrent();
                 return { kind: 'published', decisionCount: pendingIds.length };
             }
             return { kind: 'error', message: 'Zápis registru rozhodnutí se nepodařilo ověřit.' };
@@ -245,31 +263,47 @@ export class SuggestionRegistrySync {
     }
 
     async fetchAndMerge(): Promise<SuggestionRegistrySyncResult> {
-        if (this.fetchInFlight) return this.fetchInFlight;
-        this.fetchInFlight = this.fetchRemote().finally(() => { this.fetchInFlight = null; });
-        return this.fetchInFlight;
+        try {
+            const session = await captureAccountSession();
+            session.assertCurrent();
+            if (this.fetchInFlight?.session.isCurrent()) return this.fetchInFlight.promise;
+            const promise = this.fetchRemote(session).finally(() => {
+                if (this.fetchInFlight?.promise === promise) this.fetchInFlight = null;
+            });
+            this.fetchInFlight = { session, promise };
+            return promise;
+        } catch (error) {
+            return { kind: 'error', message: getErrorMessage(error) };
+        }
     }
 
-    private async fetchRemote(): Promise<SuggestionRegistrySyncResult> {
-        const unavailable = await this.initStore();
+    private async fetchRemote(session: GoogleAccountSession): Promise<SuggestionRegistrySyncResult> {
+        const unavailable = await this.initStore(session);
         if (unavailable) return unavailable;
-        return this.convergeRemote([]);
+        return this.convergeRemote([], session);
     }
 
     async publishPending(): Promise<SuggestionRegistryPublishResult> {
-        const unavailable = await this.initStore();
-        if (unavailable) return unavailable;
-        const initial = await this.registry.exportSnapshot();
-        const pendingIds = initial.decisions
-            .filter((decision) => decision.publishedAt == null)
-            .map((decision) => decision.id);
-        if (pendingIds.length === 0) return { kind: 'nothing-pending' };
+        try {
+            const session = await captureAccountSession();
+            const unavailable = await this.initStore(session);
+            if (unavailable) return unavailable;
+            session.assertCurrent();
+            const initial = await this.registry.exportSnapshot();
+            session.assertCurrent();
+            const pendingIds = initial.decisions
+                .filter((decision) => decision.publishedAt == null)
+                .map((decision) => decision.id);
+            if (pendingIds.length === 0) return { kind: 'nothing-pending' };
 
-        const result = await this.convergeRemote(pendingIds);
-        if (result.kind === 'loaded' || result.kind === 'missing-file') {
-            return { kind: 'error', message: 'Registr rozhodnutí vrátil neplatný stav publikace.' };
+            const result = await this.convergeRemote(pendingIds, session);
+            if (result.kind === 'loaded' || result.kind === 'missing-file') {
+                return { kind: 'error', message: 'Registr rozhodnutí vrátil neplatný stav publikace.' };
+            }
+            return result;
+        } catch (error) {
+            return { kind: 'error', message: getErrorMessage(error) };
         }
-        return result;
     }
 }
 
