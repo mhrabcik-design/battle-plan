@@ -20,9 +20,11 @@ import {
 } from '../utils/calendarUtils';
 import { getCalendarDensity, getWeeklyVisualInterval, layoutCalendarIntervals } from '../utils/weeklyCalendarLayout';
 import { calendarTaskKey, calendarTaskLabel, calendarTaskOrigin, calendarIntervalLabel, isCalendarAllDay, isCalendarReadonly, isOutsideWorkingHours, openReadonlyCalendarTask, projectCalendarDays } from '../utils/calendarPresentation';
+import { toLocalIsoDate } from '../utils/monthCalendar';
 
 interface WeeklyCalendarProps {
     weekOffset: number;
+    days: ReturnType<typeof getWeekDays>;
     tasks: UnifiedTask[];
     rowHeight: number;
     calendarHours: number[];
@@ -70,6 +72,7 @@ const taskKey = calendarTaskKey;
 
 export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     weekOffset,
+    days,
     tasks,
     rowHeight,
     calendarHours,
@@ -110,7 +113,6 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
     const [busyTask, setBusyTask] = useState<string | null>(null);
     const [announcement, setAnnouncement] = useState('');
     const [dayWidth, setDayWidth] = useState(160);
-    const days = useMemo(() => getWeekDays(weekOffset), [weekOffset]);
     const projectedTasks = useMemo(() => projectCalendarDays(tasks, days.map(day => day.full)), [tasks, days]);
     const tasksByKey = useMemo(() => new Map(projectedTasks.map(task => [taskKey(task), task])), [projectedTasks]);
     const dayDataByDate = useMemo(() => {
@@ -477,7 +479,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
             if (point) schedulePointerFrame(point.x, point.y);
         });
         return () => cancelAnimationFrame(frame);
-    }, [allDayLaneHeight, captureDropLaneGeometry, dayWidth, schedulePointerFrame, tasks, weekOffset]);
+    }, [allDayLaneHeight, captureDropLaneGeometry, dayWidth, days, schedulePointerFrame, tasks, weekOffset]);
 
     const keyboardTargetFor = (task: UnifiedTask): WeeklyDropTarget => {
         const interval = getWeeklyVisualInterval(task);
@@ -506,7 +508,7 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
         const date = new Date(`${current.date}T12:00:00`);
         if (event.key === 'ArrowLeft') date.setDate(date.getDate() - 1);
         if (event.key === 'ArrowRight') date.setDate(date.getDate() + 1);
-        const dateValue = date.toISOString().slice(0, 10);
+        const dateValue = toLocalIsoDate(date);
         const blockTopMinutes = current.lane === 'timed'
             ? (current.blockTopMinutes ?? startHour * 60) + (event.key === 'ArrowUp' ? -15 : event.key === 'ArrowDown' ? 15 : 0)
             : undefined;

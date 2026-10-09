@@ -53,6 +53,8 @@ A complete domain state written as a new Drive file and accepted only after a re
 
 Immutable Drive Snapshots avoid unsafe browser-side replacement when Drive does not expose a concurrency validator. Their domain service still owns identity, merge, deletion, ambiguity, and compaction rules.
 
+A record missing from an Immutable Drive Snapshot does not prove deletion. A deletion marker remains necessary while an older snapshot or an offline device can still supply the live record; elapsed time and a general sync success do not establish that the specific deletion is safe to forget.
+
 ### Agent Collaboration Protocol
 A versioned, paired message contract through which an external agent can propose work, request allowlisted domain mutations, receive explicit outcomes, and consume safe BattlePlan change events.
 

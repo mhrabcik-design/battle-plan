@@ -6,6 +6,7 @@ import { db, type Task } from '../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDuration, normalizeClockTime, parseDuration } from '../utils/calendarUtils';
 import type { EditorSaveOutcome } from '../hooks/useTaskCommands';
+import type { RecorderOptions } from '../hooks/useAudioRecorder';
 import { applySavedEditorStatus, getEditorCloseIntent, getEditorTaskSnapshot } from '../utils/editorInteraction';
 import { OverlaySurface } from './ui/OverlaySurface';
 import { buildTaskEmail } from '../utils/taskSharing';
@@ -16,8 +17,9 @@ interface FocusEditorProps {
     setEditingTask: React.Dispatch<React.SetStateAction<UnifiedTask | null>>;
     activeVoiceUpdateId: number | null;
     isRecording: boolean;
+    hasRecordingSession: () => boolean;
     stopRecording: () => void;
-    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void | Promise<void>;
+    startRecording: (options: RecorderOptions) => Promise<boolean>;
     setActiveVoiceUpdateId: (id: number | null) => void;
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
     handleDeleteTask: (task: UnifiedTask) => Promise<boolean>;
@@ -39,6 +41,7 @@ export function FocusEditor({
     setEditingTask,
     activeVoiceUpdateId,
     isRecording,
+    hasRecordingSession,
     stopRecording,
     startRecording,
     setActiveVoiceUpdateId,
@@ -75,6 +78,7 @@ export function FocusEditor({
     const currentSnapshot = getEditorTaskSnapshot(editingTask);
     const isDirty = getEditorTaskSnapshot(initialTask) !== currentSnapshot;
     const isBusy = isSaving || isDeleting || isTogglingTask || isPreparingInvitation || isRestoring;
+    const isVoiceBusy = hasRecordingSession() && activeVoiceUpdateId === editingTask.id;
     const invalidStartTime = !editingTask.isAllDay && Boolean(editingTask.startTime?.trim()) && normalizeClockTime(editingTask.startTime ?? '') === null;
     const hasSavedIdentity = Boolean(editingTask.id || (editingTask.isGoogleTask && editingTask.googleId));
     const shareDisabled = isBusy || isDirty || !hasSavedIdentity || isRecording;
@@ -90,11 +94,13 @@ export function FocusEditor({
         return () => cancelAnimationFrame(frame);
     }, []);
 
+    const hasEditorRecording = () => hasRecordingSession() && activeVoiceUpdateIdRef.current === editingTask.id;
+
     const requestClose = () => {
         if (mutationRef.current) return;
         if (readonlyTask) { setEditingTask(null); return; }
         const intent = getEditorCloseIntent({
-            recording: isRecording && activeVoiceUpdateId === editingTask.id,
+            recording: hasEditorRecording(),
             dirty: isDirty,
         });
         if (intent === 'stop-recording') {
@@ -106,7 +112,7 @@ export function FocusEditor({
     };
 
     const deleteTask = async () => {
-        if (mutationRef.current || !hasSavedIdentity) return;
+        if (mutationRef.current || hasEditorRecording() || !hasSavedIdentity) return;
         mutationRef.current = true;
         setIsDeleting(true);
         setEditorError(null);
@@ -122,7 +128,7 @@ export function FocusEditor({
     };
 
     const saveTask = async () => {
-        if (mutationRef.current) return;
+        if (mutationRef.current || hasEditorRecording()) return;
         mutationRef.current = true;
         setIsSaving(true);
         setEditorError(null);
@@ -250,14 +256,25 @@ export function FocusEditor({
                                     if (activeVoiceUpdateId === editingTask.id) {
                                         stopRecording();
                                     } else {
-                                        activeVoiceUpdateIdRef.current = editingTask.id!;
-                                        setActiveVoiceUpdateId(editingTask.id!);
-                                        void Promise.resolve(startRecording({
+                                        let accepted = false;
+                                        const resetTarget = () => {
+                                            if (accepted && activeVoiceUpdateIdRef.current === editingTask.id) {
+                                                activeVoiceUpdateIdRef.current = null;
+                                                setActiveVoiceUpdateId(null);
+                                            }
+                                        };
+                                        void startRecording({
+                                            onAccepted: () => {
+                                                accepted = true;
+                                                activeVoiceUpdateIdRef.current = editingTask.id!;
+                                                setActiveVoiceUpdateId(editingTask.id!);
+                                            },
                                             enableFeedback: true,
                                             onSilence: () => stopRecording(),
                                             silenceThreshold: -45,
                                             silenceDuration: 4000
-                                        })).catch((err: unknown) => {
+                                        }).then(started => { if (!started) resetTarget(); }).catch((err: unknown) => {
+                                            resetTarget();
                                             console.error('Focus voice recording failed', err);
                                         });
                                     }
@@ -509,9 +526,9 @@ export function FocusEditor({
                 {/* EDITOR FOOTER */}
                 <div className="grid grid-cols-1 gap-3 border-t border-slate-800 bg-slate-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:flex md:items-center md:justify-between md:px-12">
                     {hasSavedIdentity ? <button
-                        disabled={(isRecording && activeVoiceUpdateId === editingTask.id) || isBusy}
+                        disabled={isVoiceBusy || isBusy}
                         onClick={() => { void deleteTask(); }}
-                        className={`surface-action min-h-11 px-4 text-xs uppercase md:px-6 md:text-sm ${isRecording && activeVoiceUpdateId === editingTask.id ? 'cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-600' : 'border-red-500/20 bg-red-600/10 text-red-400 hover:bg-red-600 hover:text-white'}`}
+                        className={`surface-action min-h-11 px-4 text-xs uppercase md:px-6 md:text-sm ${isVoiceBusy ? 'cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-600' : 'border-red-500/20 bg-red-600/10 text-red-400 hover:bg-red-600 hover:text-white'}`}
                     >
                         {isDeleting ? 'Mažu…' : 'Odstranit záznam'}
                     </button> : <button type="button" disabled={isBusy} onClick={requestClose} className="surface-action min-h-11 border-slate-700 bg-slate-800 px-4 text-sm text-slate-300 hover:bg-slate-700">Zrušit</button>}
@@ -543,7 +560,7 @@ export function FocusEditor({
 
                         <button
                             onClick={() => { void saveTask(); }}
-                            disabled={isBusy}
+                            disabled={isBusy || isVoiceBusy}
                             aria-busy={isSaving}
                             className="surface-action min-w-0 gap-2 border-indigo-500/40 bg-indigo-600 px-6 text-xs uppercase text-white shadow-xl shadow-indigo-600/30 hover:bg-indigo-500 disabled:cursor-wait disabled:opacity-60 md:px-10"
                         >

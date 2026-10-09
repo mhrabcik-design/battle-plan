@@ -10,6 +10,7 @@ import {
 import { getErrorMessage } from '../utils/errors.ts';
 import { getSystemPrompt } from './semanticEngine.ts';
 import { buildAppContext } from './appContext.ts';
+import { toLocalIsoDate } from '../utils/monthCalendar.ts';
 export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
 export const AVAILABLE_GEMINI_MODELS = [
     DEFAULT_GEMINI_MODEL,
@@ -142,7 +143,7 @@ export class GeminiService {
             console.log(`REST API using model: ${modelId}`);
 
             const nowObj = new Date();
-            const today = nowObj.toISOString().split('T')[0];
+            const today = toLocalIsoDate(nowObj);
             const now = nowObj.toTimeString().split(' ')[0];
             const dayNames = ["neděle", "pondělí", "úterý", "středa", "čtvrtek", "pátek", "sobota"];
             const dayName = dayNames[nowObj.getDay()];

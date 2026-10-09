@@ -8,4 +8,3 @@ export const isTaskVisibleInWeek = (task: Task, start: string, end: string): boo
     const scheduledDate = task.type === 'task' ? task.deadline : task.date;
     return !!scheduledDate && scheduledDate >= start && scheduledDate <= end;
 };
-
