@@ -7,7 +7,7 @@ import { calendarChangedFields, rebaseCalendarProjection, reconcileCalendarProje
 import { CALENDAR_ACTIVE_ACCOUNT_SETTING, readCalendarSyncSettings, writeCalendarSyncSettings } from './calendarSettings.ts';
 import { invalidateCalendarPull, markCalendarPullReady, setCalendarDeliverySession } from './calendarDeliveryGate.ts';
 import { ExternalEffectOutbox } from './externalEffectOutbox.ts';
-import { projectTaskForProtocol, TaskMutationService, taskMutationTables, type TaskMutationContext } from './taskMutations.ts';
+import { newTaskMutationContext, projectTaskForProtocol, TaskMutationService, taskMutationTables, type TaskMutationContext } from './taskMutations.ts';
 import { canonicalBackupJson } from '../utils/canonicalBackupJson.ts';
 import type { CalendarListOptions, CalendarListResult, CalendarReadScope, CalendarWriteGuard } from './googleService.ts';
 
@@ -58,7 +58,7 @@ const shared = new WeakMap<BattlePlanDB, SharedState>();
 const inactive: CalendarSyncSession = { accountId: null, authKey: null, usableAuth: false, online: false, visible: false };
 const activeEffect = (state: string) => ['pending', 'retry_scheduled', 'running'].includes(state);
 const context = (accountId: string, origin: TaskMutationContext['origin'] = 'google'): TaskMutationContext =>
-    ({ actor: origin === 'google' ? 'battleplan-google' : 'battleplan-user', origin, causeId: crypto.randomUUID(), googleAccountId: accountId });
+    newTaskMutationContext(origin, origin === 'google' ? 'battleplan-google' : 'battleplan-user', accountId);
 const same = (a: unknown, b: unknown) => canonicalBackupJson(a) === canonicalBackupJson(b);
 const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -216,14 +216,21 @@ export class GoogleCalendarSync {
     async getStatus(): Promise<CalendarSyncStatus> {
         const accountId = this.state.session.accountId ?? (await this.db.settings.get(CALENDAR_ACTIVE_ACCOUNT_SETTING))?.value ?? null;
         const settings = accountId ? await readCalendarSyncSettings(this.db, accountId) : undefined;
-        const [tasks, effects] = await Promise.all([this.db.tasks.toArray(), this.db.agentProtocolEffects.toArray()]);
+        const [tasks, pending] = await Promise.all([this.db.tasks.toArray(), this.db.agentProtocolEffects
+            .where('state').anyOf(['pending', 'retry_scheduled', 'running'])
+            .and(effect => effect.kind === 'calendar' && effect.accountId === accountId).count()]);
         const enabled = settings?.enabled === true;
         const session = this.state.session;
-        const phase = !enabled ? 'disabled' : !session.online ? 'offline' : !session.accountId || !session.usableAuth || !session.authKey
-            ? 'auth-required' : !session.visible ? 'hidden' : this.state.flight ? 'checking' : this.state.error ? 'error' : 'ready';
+        let phase: CalendarSyncStatus['phase'] = 'ready';
+        if (!enabled) phase = 'disabled';
+        else if (!session.online) phase = 'offline';
+        else if (!session.accountId || !session.usableAuth || !session.authKey) phase = 'auth-required';
+        else if (!session.visible) phase = 'hidden';
+        else if (this.state.flight) phase = 'checking';
+        else if (this.state.error) phase = 'error';
         return { accountId, enabled, phase, error: this.state.error, timeZone: settings?.timeZone ?? browserZone(),
             lastCheckedAt: settings?.lastCheckedAt ?? null,
-            pending: effects.filter(effect => effect.kind === 'calendar' && effect.accountId === accountId && activeEffect(effect.state)).length,
+            pending,
             conflicts: tasks.filter(task => task.calendar?.accountId === accountId && task.calendar.conflict) };
     }
 

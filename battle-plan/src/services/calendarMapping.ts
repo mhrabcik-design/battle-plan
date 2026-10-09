@@ -12,8 +12,10 @@ function civilDateAfter(date: string): string {
     return new Date(Date.parse(`${date}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }
 
-function zonedParts(timestamp: number, timeZone: string): { date: string; time: string; civil: number } {
-    const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(timestamp);
+const zonedFormatter = (timeZone: string) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+
+function zonedParts(timestamp: number, timeZone: string, formatter = zonedFormatter(timeZone)): { date: string; time: string; civil: number } {
+    const parts = formatter.formatToParts(timestamp);
     const value = (key: string) => parts.find(part => part.type === key)!.value;
     const date = `${value('year')}-${value('month')}-${value('day')}`;
     const time = `${value('hour')}:${value('minute')}`;
@@ -21,10 +23,11 @@ function zonedParts(timestamp: number, timeZone: string): { date: string; time: 
 }
 
 function zonedTimestamp(date: string, clock: string, timeZone: string): number | null {
+    const formatter = zonedFormatter(timeZone);
     const civil = Date.parse(`${date}T${clock}:00Z`);
     let instant = civil;
-    for (let attempt = 0; attempt < 3; attempt++) instant += civil - zonedParts(instant, timeZone).civil;
-    const resolved = zonedParts(instant, timeZone);
+    for (let attempt = 0; attempt < 3; attempt++) instant += civil - zonedParts(instant, timeZone, formatter).civil;
+    const resolved = zonedParts(instant, timeZone, formatter);
     // A nonexistent DST wall time has no interval that matches the user's plan.
     return resolved.date === date && resolved.time === clock ? instant : null;
 }

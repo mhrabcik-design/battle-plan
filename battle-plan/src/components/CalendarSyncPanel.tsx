@@ -8,12 +8,12 @@ import type { CalendarSyncPreview } from '../services/googleCalendarSync';
 import type { CalendarPublicProjection } from '../services/calendarModel';
 import { toCalendarProjection } from '../services/calendarMapping';
 import { calendarProjectionLabel, calendarTaskLabel } from '../utils/calendarPresentation';
+import { toLocalIsoDate } from '../utils/monthCalendar';
 
-const civilDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const shiftDate = (date: string, amount: number) => {
     const value = new Date(`${date}T12:00:00`);
     value.setDate(value.getDate() + amount);
-    return Number.isFinite(value.getTime()) ? civilDate(value) : '';
+    return Number.isFinite(value.getTime()) ? toLocalIsoDate(value) : '';
 };
 const buttonClass = 'surface-action min-h-11 w-full gap-2 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50';
 const phaseLabels = { disabled: 'Vypnuto', offline: 'Čeká na připojení k internetu', 'auth-required': 'Obnovte Google přihlášení',
@@ -35,7 +35,7 @@ export function CalendarSyncPanel({ controls, googleAuth, isOnline }: {
 }) {
     const { status } = controls;
     const [range, setRange] = useState(() => {
-        const today = civilDate(new Date());
+        const today = toLocalIsoDate(new Date());
         return { startDate: shiftDate(today, -30), endDate: shiftDate(today, 179) };
     });
     const [preview, setPreview] = useState<CalendarSyncPreview | null>(null);
