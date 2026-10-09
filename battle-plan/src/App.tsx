@@ -42,7 +42,7 @@ import {
   getUrgencyColor,
   type WeeklyEdgeDirection,
 } from './utils/calendarUtils';
-import { isTaskCleanupCandidate, isTaskVisibleInWeek } from './utils/taskHistory';
+import { isTaskVisibleInWeek } from './utils/taskHistory';
 import { getTaskGridPresentation, sortTasksActiveFirst } from './utils/taskListPresentation';
 import { buildInfo } from './utils/buildInfo';
 import { workLogsBackupHealth } from './utils/driveSyncDiagnostics';
@@ -232,24 +232,6 @@ const syncVisualState = deriveSyncVisualState({
     syncHealth,
     isProcessing: isTaskCommandProcessing,
 });
-
-  useEffect(() => {
-    const cleanup = async () => {
-      try {
-        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-        const toDelete = await db.tasks
-          .where('updatedAt').below(thirtyDaysAgo)
-          .filter(t => isTaskCleanupCandidate(t, thirtyDaysAgo))
-          .primaryKeys();
-        if (toDelete.length > 0) {
-          await db.tasks.bulkDelete(toDelete);
-        }
-      } catch (e) {
-        console.error("Cleanup failed", e);
-      }
-    };
-    cleanup();
-  }, []);
 
   useEffect(() => {
     const initGoogle = async () => {

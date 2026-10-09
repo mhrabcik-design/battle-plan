@@ -3,8 +3,27 @@ import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 import { db, type Task } from '../db.ts';
 import { mergeTasksFromDrive } from './taskMerge.ts';
+import { newTaskMutationContext, TaskMutationService } from './taskMutations.ts';
 
 const task = (overrides: Partial<Task> = {}): Task => ({ title: 'Work', type: 'task', urgency: 2, status: 'pending', createdAt: 10, updatedAt: 10, ...overrides });
+
+test('an offline deletion older than the former retention limit still defeats a stale Drive import', async () => {
+    await db.tasks.clear();
+    const deletedAt = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    const live = task({ publicId: 'task_offline_deleted', createdAt: deletedAt - 1000, updatedAt: deletedAt - 1000 });
+    const id = await db.tasks.add(live);
+    const service = new TaskMutationService(db, { now: () => deletedAt });
+    const deletion = await service.archiveTask({ localId: id, context: newTaskMutationContext('ui') });
+    assert.equal(deletion.status, 'applied');
+
+    assert.equal(await mergeTasksFromDrive([{ ...live, id: 999 }]), false);
+    const rows = await db.tasks.toArray();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, id);
+    assert.equal(rows[0].isDeleted, true);
+    assert.equal(rows[0].updatedAt, deletedAt);
+    assert.equal(await mergeTasksFromDrive([live]), false, 'repeated stale imports preserve deletion');
+});
 
 beforeEach(async () => {
     await db.agentProtocolEvents.clear();

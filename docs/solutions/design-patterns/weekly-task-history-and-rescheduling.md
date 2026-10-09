@@ -10,7 +10,7 @@ Týdenní přehled potřebuje současně přímé plánování, reaktivní loká
 - Čistý převod rozlišuje význam času: schůzka na `startTime` začíná, blok úkolu na něm končí.
 - Doménový command uloží lokální změnu právě jednou po dropu a teprve potom provede volitelný vzdálený update.
 - Splnění mění `status` stejného řádku. Týdenní query ho nefiltruje a cleanup jej nemaže jen kvůli stáří.
-- Soft delete má přednost před historií dokončení; staré tombstones lze čistit přes indexovaný retenční dotaz.
+- Soft delete má přednost před historií dokončení. Tombstones zůstávají uložené bez časového limitu: absence v neměnném Drive snapshotu neznamená smazání. Bez trvalého potvrzení jednotlivých smazání a protokolu bezpečné kompaktace je nelze fyzicky odstranit ani po úspěšném syncu.
 
 ## Google hranice
 
