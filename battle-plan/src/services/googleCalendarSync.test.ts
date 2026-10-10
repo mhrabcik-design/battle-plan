@@ -94,6 +94,56 @@ async function seed(f: Awaited<ReturnType<typeof fixture>>, overrides: Partial<T
     assert.equal(result.status, 'applied'); return result.task;
 }
 
+test('large batches of unowned cancellations and missing targets commit before draining all 61 queued plans', async t => {
+    const f = await fixture(t, false);
+    await f.db.tasks.bulkAdd(Array.from({ length: 61 }, (_, i): Task => ({
+        publicId: `task_pending_${i}`, title: `Pending plan ${i}`, type: 'meeting', urgency: 2, status: 'pending',
+        date: '2026-10-09', startTime: '15:00', duration: 60, createdAt: 1, updatedAt: 1, internalNotes: 'Private',
+    })));
+    await f.service.activate('Europe/Prague');
+    const queued = await f.db.agentProtocolEffects.toArray();
+    assert.equal(queued.length, 61);
+    f.f.events = [
+        ...Array.from({ length: 120 }, (_, i): GoogleCalendarEvent => ({ id: `unowned-cancelled-${i}`, status: 'cancelled' })),
+        event('new', 'Imported after cancellations'),
+    ];
+    await f.service.refresh();
+    assert.equal(await f.db.tasks.count(), 62);
+    assert.equal((await f.db.tasks.where('publicId').equals('task_pending_0').first())?.internalNotes, 'Private');
+    assert.deepEqual(await f.db.agentProtocolEffects.toArray(), queued, 'observation preserves every pending intent');
+    assert.equal((await readCalendarSyncSettings(f.db, 'a'))?.lastCheckedAt, NOW);
+    assert.equal((await f.service.getStatus()).phase, 'ready');
+    assert.equal(f.f.drains, 1);
+    assert.equal(await calendarEffectDeliveryAllowed(f.db, queued[0], 'a', 'session'), true);
+    const events = await f.db.agentProtocolEvents.count();
+    await f.service.refresh();
+    assert.equal(await f.db.tasks.count(), 62);
+    assert.equal(await f.db.agentProtocolEvents.count(), events, 'repeated observation does not duplicate imported events');
+    assert.deepEqual(await f.db.agentProtocolEffects.toArray(), queued);
+});
+
+test('a late invalid identity rolls back the entire import even after a large batch of skipped cancellations', async t => {
+    const f = await fixture(t); const task = await seed(f);
+    await f.mutations.updateTask({ publicId: task.publicId, changes: { description: 'Local change' }, context: authored() });
+    const tasks = await f.db.tasks.toArray(), effects = await f.db.agentProtocolEffects.toArray();
+    const events = await f.db.agentProtocolEvents.toArray(), outbox = await f.db.agentProtocolOutbox.toArray();
+    const settings = await readCalendarSyncSettings(f.db, 'a');
+    f.f.events = [
+        event('new', 'Must roll back'),
+        ...Array.from({ length: 120 }, (_, i): GoogleCalendarEvent => ({ id: `unowned-cancelled-${i}`, status: 'cancelled' })),
+        { ...event(), extendedProperties: { private: calendarPrivateIdentity({ accountId: 'a', calendarId: 'primary',
+            eventId: 'event', canonicalIdentity: 'public:task_wrong', generation: 0, type: 'task', origin: 'local' }) } },
+    ];
+    await assert.rejects(f.service.refresh(), /Událost změnila svou Calendar identitu/);
+    assert.deepEqual(await f.db.tasks.toArray(), tasks);
+    assert.deepEqual(await f.db.agentProtocolEffects.toArray(), effects);
+    assert.deepEqual(await f.db.agentProtocolEvents.toArray(), events);
+    assert.deepEqual(await f.db.agentProtocolOutbox.toArray(), outbox);
+    assert.deepEqual(await readCalendarSyncSettings(f.db, 'a'), settings);
+    assert.equal(f.f.drains, 0);
+    assert.equal(await calendarEffectDeliveryAllowed(f.db, effects[0], 'a', 'session'), false);
+});
+
 test('complete read includes tracked events outside window; failed tracked GET applies no partial list', async t => {
     const f = await fixture(t); const task = await seed(f);
     f.f.events = [event('new', 'New')];
