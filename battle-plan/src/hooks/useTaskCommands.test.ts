@@ -32,6 +32,7 @@ const draft = (changes: Partial<UnifiedTask> = {}): UnifiedTask => ({
 function commandsFor(editingTask: UnifiedTask | null, googleAuth: GoogleAuthStatus = { state: 'SIGNED_OUT', accessToken: null }) {
     let commands!: ReturnType<typeof useTaskCommands>;
     function Probe() {
+        // eslint-disable-next-line react-hooks/globals -- Synchronous SSR test capture; no UI reads this variable.
         commands = useTaskCommands({
             googleAuth, editingTask,
             setEditingTask: () => {}, refreshGoogleTasks: async () => {}, setIsProcessing: () => {},
