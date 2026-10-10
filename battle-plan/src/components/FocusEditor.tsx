@@ -139,7 +139,6 @@ export function FocusEditor({
                 return;
             }
             setEditingTask(null);
-            if (outcome.status === 'success-sync-warning') onNotice(outcome.message);
         } catch (error) {
             setEditorError(error instanceof Error ? error.message : 'Změny se nepodařilo uložit.');
         } finally {

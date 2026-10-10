@@ -14,7 +14,14 @@ export function useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth
     const [visible, setVisible] = useState(document.visibilityState !== 'hidden');
     const enabled = visible && isOnline && hasUsableAuth(googleAuth);
     const accountId = googleService.getAccountId();
-    const summary = useLiveQuery(async () => summarizeExternalEffects(await db.agentProtocolEffects.toArray(), accountId), [accountId]);
+    const summaries = useLiveQuery(async () => {
+        const effects = await db.agentProtocolEffects.toArray();
+        return {
+            all: summarizeExternalEffects(effects, accountId),
+            calendar: summarizeExternalEffects(effects.filter(effect => effect.kind === 'calendar'), accountId),
+        };
+    }, [accountId]);
+    const summary = summaries?.all;
     const scheduler = useRef<ReturnType<typeof createExternalEffectScheduler> | null>(null);
 
     useEffect(() => {
@@ -56,4 +63,6 @@ export function useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth
             lastSuccess: summary.lastSuccess === null ? null : new Date(summary.lastSuccess).toLocaleString('cs-CZ'),
         });
     }, [summary, enabled, updateSyncHealth]);
+
+    return summaries?.calendar;
 }

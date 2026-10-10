@@ -24,6 +24,8 @@ import { mergeLocalToCloudDetailed } from './services/workLogsSync';
 import type { ViewMode, UnifiedTask, GoogleAuthStatus, GoogleTaskList } from './types';
 import { hasUsableAuth as checkUsableAuth } from './types';
 import { Sidebar } from './components/Sidebar';
+import { CalendarSyncIndicator } from './components/CalendarSyncIndicator';
+import { getCalendarSyncIndicator } from './utils/calendarSyncIndicator';
 import { syncIconFor } from './components/syncIcon';
 import { deriveSyncVisualState } from './utils/syncVisualState';
 import { TaskCard } from './components/TaskCard';
@@ -182,7 +184,7 @@ function App() {
   }, [addLog, updateSyncHealth]);
 
   useAgentProtocolDeviceIdentity({ onSettled: observeAgentProtocolIdentity });
-  useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth });
+  const calendarEffects = useExternalEffectOutbox({ googleAuth, isOnline, updateSyncHealth });
 
   useEffect(() => {
     let cancelled = false;
@@ -383,6 +385,8 @@ const syncVisualState = deriveSyncVisualState({
 
   useTaskBackup({ googleAuth, ready: taskBackupReady, setLastSync, addLog, updateSyncHealth });
   const calendarSync = useGoogleCalendarSync({ googleAuth, isOnline, ready: taskBackupReady });
+  const calendarIndicator = getCalendarSyncIndicator({ status: calendarSync.status, effects: calendarEffects,
+    accountId: googleService.getAccountId(), isOnline, authenticated: hasUsableAuth });
 
   useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog });
   useAgentBridgePolling({ googleAuth, addLog });
@@ -620,6 +624,7 @@ const syncVisualState = deriveSyncVisualState({
         suggestionsBadge={suggestionsBadge}
         appVersion={buildInfo.version}
         syncState={syncVisualState}
+        calendarIndicator={calendarIndicator}
       />
 
       {/* MAIN CONTENT AREA */}
@@ -732,6 +737,8 @@ const syncVisualState = deriveSyncVisualState({
                 <div className={`w-2 h-2 rounded-full ${isAiActive ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-800 border border-white/5'}`} />
               </div>
             </div>
+
+            <CalendarSyncIndicator indicator={calendarIndicator} onOpenSettings={() => setShowSettings(true)} />
 
             <nav aria-label="Hlavní navigace" className="mobile-nav-rail flex items-center backdrop-blur-md p-1.5 rounded-2xl border border-white/5 shadow-xl overflow-x-auto">
               {NAV_ITEMS.map((item) => {
@@ -1017,6 +1024,7 @@ const syncVisualState = deriveSyncVisualState({
                 setThemePreference={setThemePreference}
                 googleAuth={googleAuth}
                 calendarSync={calendarSync}
+                calendarIndicator={calendarIndicator}
                 isOnline={isOnline}
                 lastSync={lastSync}
                 saveSettings={saveSettings}

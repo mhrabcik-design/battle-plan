@@ -14,17 +14,12 @@ import { buildTaskEmail } from '../utils/taskSharing.ts';
 import { prepareCalendarInvitation } from '../services/calendarInvitation.ts';
 import { CALENDAR_READONLY_NOTICE, isCalendarReadonly, calendarTaskOrigin } from '../utils/calendarPresentation.ts';
 
-const SYNC_PENDING_MSG = 'Změna je uložená lokálně, ale synchronizace s Googlem zatím není dokončená.';
-
-async function deliverEffects(effectIds: readonly string[]): Promise<boolean> {
-  if (!effectIds.length) return true;
+async function deliverEffects(effectIds: readonly string[]): Promise<void> {
+  if (!effectIds.length) return;
   try {
     await drainGoogleExternalEffects(effectIds);
-    const effects = await db.agentProtocolEffects.bulkGet([...effectIds]);
-    return effects.every(effect => effect?.state === 'succeeded');
   } catch (error) {
     console.error('Task synchronization remains queued', error);
-    return false;
   }
 }
 
@@ -54,7 +49,6 @@ interface UseTaskCommandsArgs {
 
 export type EditorSaveOutcome =
   | { status: 'success' }
-  | { status: 'success-sync-warning'; message: string }
   | { status: 'failed'; message: string };
 
 export function useTaskCommands({
@@ -161,7 +155,7 @@ export function useTaskCommands({
     if (!task.id) return null;
     const change = await saveWeeklySchedule(db, task.id, patch, expected, { publicId: task.publicId, context: uiMutationContext() });
     if (!change) return null;
-    if (!await deliverEffects(change.effectIds)) alert(SYNC_PENDING_MSG);
+    await deliverEffects(change.effectIds);
     return change;
   }, [googleAuth, refreshGoogleTasks]);
 
@@ -224,7 +218,7 @@ export function useTaskCommands({
         });
       });
       if (result?.status !== 'applied') return false;
-      if (!await deliverEffects(result.effectIds)) alert(SYNC_PENDING_MSG);
+      await deliverEffects(result.effectIds);
     } else return false;
     return true;
   }, [googleAuth, refreshGoogleTasks]);
@@ -279,7 +273,7 @@ export function useTaskCommands({
         });
         if (result?.status === 'stale') return { status: 'failed', message: 'Záznam se mezitím změnil. Otevřete jej znovu; rozepsané změny nebyly uloženy.' };
         if (result?.status !== 'applied') return { status: 'failed', message: 'Záznam už není dostupný. Změny nebyly uloženy.' };
-        if (!await deliverEffects(result.effectIds)) return { status: 'success-sync-warning', message: SYNC_PENDING_MSG };
+        await deliverEffects(result.effectIds);
       }
       return { status: 'success' };
     };
@@ -298,7 +292,7 @@ export function useTaskCommands({
         localId: task.id, publicId: task.publicId, context: uiMutationContext(),
         effects: [{ kind: 'calendar', operation: 'upsert' }],
       });
-      if (result.status === 'queued' && !await deliverEffects(result.effectIds)) alert(SYNC_PENDING_MSG);
+      if (result.status === 'queued') await deliverEffects(result.effectIds);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       alert(msg === 'calendar_task_readonly' ? CALENDAR_READONLY_NOTICE : msg || "Chyba při synchronizaci s Googlem");

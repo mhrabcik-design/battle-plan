@@ -136,7 +136,8 @@ test('new thought stays undated and new meeting keeps its chosen date', async ()
     assert.equal(rows[1].date, '2026-10-02');
 });
 
-test('calendar failure after a local create returns a warning and keeps exactly one saved meeting', async () => {
+test('calendar failure after a local create succeeds quietly and keeps exactly one saved meeting for retry', async () => {
+    const notices = mock.method(globalThis, 'alert', () => {});
     mock.method(googleService, 'getAccountId', () => 'user@example.com');
     mock.method(googleService, 'getAuthStatus', () => ({ state: 'SIGNED_IN', accessToken: 'test' }));
     const sync = mock.method(googleService, 'addToCalendar', async (task: Task): Promise<string | null> => {
@@ -146,7 +147,8 @@ test('calendar failure after a local create returns a warning and keeps exactly 
     const log = mock.method(console, 'error', () => {});
     try {
         const outcome = await commandsFor(draft({ type: 'meeting', date: '2026-10-02' }), { state: 'SIGNED_IN', accessToken: 'test' }).handleSaveEdit();
-        assert.equal(outcome.status, 'success-sync-warning');
+        assert.equal(outcome.status, 'success');
+        assert.equal(notices.mock.calls.length, 0);
         assert.equal(await db.tasks.count(), 1);
         assert.equal(sync.mock.calls.length, 1);
         assert.ok(sync.mock.calls[0].arguments[0].reservedGoogleEventId);
@@ -303,10 +305,12 @@ test('completion of a current editor draft still permits saving its unsaved text
 });
 
 test('editing a linked meeting while signed out commits its change and durable Calendar effect', async () => {
+    const notices = mock.method(globalThis, 'alert', () => {});
     const id = await db.tasks.add(draft({ type: 'meeting', googleEventId: 'existing-event', date: '2026-10-02' }));
     const original = (await db.tasks.get(id))!;
     const outcome = await commandsFor({ ...original, title: 'Offline edit' }).handleSaveEdit();
-    assert.equal(outcome.status, 'success-sync-warning');
+    assert.equal(outcome.status, 'success');
+    assert.equal(notices.mock.calls.length, 0);
     assert.equal((await db.tasks.get(id))?.title, 'Offline edit');
     assert.equal(await db.agentProtocolEvents.count(), 1);
     const effects = await db.agentProtocolEffects.toArray();
@@ -314,6 +318,22 @@ test('editing a linked meeting while signed out commits its change and durable C
     assert.equal(effects[0].kind, 'calendar');
     assert.equal(effects[0].operation, 'upsert');
     assert.notEqual(effects[0].state, 'succeeded');
+});
+
+test('offline reschedule, explicit sync and deletion keep pending effects without synchronization alerts', async () => {
+    const notices = mock.method(globalThis, 'alert', () => {});
+    const id = await db.tasks.add(draft({ type: 'meeting', googleEventId: 'linked-event', date: '2026-10-02' }));
+    const original = (await db.tasks.get(id))!;
+    const commands = commandsFor(original);
+    assert.equal(await commands.handleRescheduleTask(original, { date: '2026-10-03', deadline: '2026-10-03' }), true);
+    assert.equal((await db.tasks.get(id))?.date, '2026-10-03');
+    await commands.handleSyncToGoogle((await db.tasks.get(id))!);
+    assert.equal(await commands.handleDeleteTask((await db.tasks.get(id))!), true);
+    assert.equal((await db.tasks.get(id))?.isDeleted, true);
+    const effects = await db.agentProtocolEffects.toArray();
+    assert.ok(effects.some(effect => effect.operation === 'delete'));
+    assert.ok(effects.every(effect => effect.state !== 'succeeded'));
+    assert.equal(notices.mock.calls.length, 0);
 });
 
 

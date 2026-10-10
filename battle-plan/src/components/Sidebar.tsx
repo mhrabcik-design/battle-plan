@@ -3,6 +3,8 @@ import { CheckCircle2, Settings, FileText } from 'lucide-react';
 import type { ViewMode } from '../types';
 import type { SyncVisualState } from '../types';
 import { syncIconFor } from './syncIcon';
+import { CalendarSyncIndicator } from './CalendarSyncIndicator';
+import type { CalendarIndicator } from '../utils/calendarSyncIndicator';
 
 interface SidebarProps {
     viewMode: ViewMode;
@@ -14,6 +16,7 @@ interface SidebarProps {
     suggestionsBadge: number;
     appVersion: string;
     syncState?: SyncVisualState;
+    calendarIndicator: CalendarIndicator;
 }
 
 export function Sidebar({
@@ -26,6 +29,7 @@ export function Sidebar({
     suggestionsBadge,
     appVersion,
     syncState = 'ok',
+    calendarIndicator,
 }: SidebarProps) {
     const { Icon: SyncIcon, tone: syncTone, spin: syncSpin } = syncIconFor(syncState);
     return (
@@ -81,6 +85,8 @@ export function Sidebar({
                                 </span>
                             </div>
                         </div>
+
+                        <CalendarSyncIndicator indicator={calendarIndicator} onOpenSettings={() => setShowSettings(true)} />
 
                         <button
                             onClick={() => setShowSettings(true)}
