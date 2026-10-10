@@ -7,6 +7,7 @@ import { OverlaySurface } from './ui/OverlaySurface';
 import type { ThemePreference } from '../utils/themePreference';
 import { CalendarSyncPanel } from './CalendarSyncPanel';
 import type { GoogleCalendarSyncControls } from '../hooks/useGoogleCalendarSync';
+import type { CalendarIndicator } from '../utils/calendarSyncIndicator';
 
 interface SettingsModalProps {
     apiKey: string;
@@ -20,6 +21,7 @@ interface SettingsModalProps {
     setThemePreference: (val: ThemePreference) => void;
     googleAuth: GoogleAuthStatus;
     calendarSync: GoogleCalendarSyncControls;
+    calendarIndicator: CalendarIndicator;
     isOnline: boolean;
     lastSync: string | null;
     saveSettings: () => Promise<void>;
@@ -38,6 +40,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setThemePreference,
     googleAuth,
     calendarSync,
+    calendarIndicator,
     isOnline,
     lastSync,
     saveSettings,
@@ -150,7 +153,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                 </div>
 
-                <CalendarSyncPanel controls={calendarSync} googleAuth={googleAuth} isOnline={isOnline} />
+                <CalendarSyncPanel controls={calendarSync} googleAuth={googleAuth} isOnline={isOnline} indicator={calendarIndicator} />
 
                 <button
                     onClick={saveSettings}

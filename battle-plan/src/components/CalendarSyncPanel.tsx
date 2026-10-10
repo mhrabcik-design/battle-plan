@@ -7,9 +7,8 @@ import type { GoogleCalendarSyncControls } from '../hooks/useGoogleCalendarSync'
 import type { CalendarPublicProjection } from '../services/calendarModel';
 import { toCalendarProjection } from '../services/calendarMapping';
 import { calendarProjectionLabel, calendarTaskLabel } from '../utils/calendarPresentation';
+import type { CalendarIndicator } from '../utils/calendarSyncIndicator';
 const buttonClass = 'surface-action min-h-11 w-full gap-2 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-50';
-const phaseLabels = { disabled: 'Vypnuto', offline: 'Čeká na připojení k internetu', 'auth-required': 'Obnovte Google přihlášení',
-    hidden: 'Čeká na otevřenou aplikaci', checking: 'Kontroluji Kalendář…', ready: 'Kalendář je aktuální', error: 'Kontrola se nepodařila' };
 
 function ConflictVersion({ label, projection, deleted, timeZone }: { label: string; projection?: CalendarPublicProjection; deleted: boolean; timeZone: string }) {
     return <div className="min-w-0 space-y-2 rounded-xl border border-white/10 bg-white/5 p-3 text-sm">
@@ -22,8 +21,9 @@ function ConflictVersion({ label, projection, deleted, timeZone }: { label: stri
     </div>;
 }
 
-export function CalendarSyncPanel({ controls, googleAuth, isOnline }: {
+export function CalendarSyncPanel({ controls, googleAuth, isOnline, indicator }: {
     controls: GoogleCalendarSyncControls; googleAuth: GoogleAuthStatus; isOnline: boolean;
+    indicator: CalendarIndicator;
 }) {
     const { status } = controls;
     const [busy, setBusy] = useState(false);
@@ -56,10 +56,11 @@ export function CalendarSyncPanel({ controls, googleAuth, isOnline }: {
             <span className="min-w-0 break-words text-sm font-semibold text-slate-200">Synchronizovat s Google Kalendářem</span>
         </label>
         {!isOnline && <p role="status" className="text-sm text-amber-400">Jste offline. Změny čekají na připojení.</p>}
-        <p role="status" className="text-sm font-semibold text-slate-300">{status ? phaseLabels[status.phase] : 'Načítám stav Kalendáře…'}</p>
+        <p role="status" className="calendar-sync-indicator text-sm font-semibold" data-state={indicator.state}>{indicator.label}</p>
+        <p className="text-xs text-slate-400">{indicator.detail}</p>
         {status && <dl className="space-y-1 text-xs text-slate-400">
                 <div><dt className="inline">Poslední kontrola: </dt><dd className="inline">{status.lastCheckedAt ? new Date(status.lastCheckedAt).toLocaleString('cs-CZ') : 'Zatím neproběhla'}</dd></div>
-                <div><dt className="inline">Čekající změny: </dt><dd className="inline">{status.pending}</dd></div>
+                <div><dt className="inline">Čekající změny: </dt><dd className="inline">{indicator.pending}</dd></div>
                 <div><dt className="inline">Konflikty: </dt><dd className="inline">{status.conflicts.length}</dd></div>
             </dl>}
         {status?.enabled && <>

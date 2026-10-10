@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+@layer components {
+  .calendar-sync-indicator { color: var(--text-muted); }
+  .calendar-sync-indicator[data-state='pending'] { color: #fbbf24; }
+  .calendar-sync-indicator[data-state='syncing'] { color: #93c5fd; }
+  .calendar-sync-indicator[data-state='synced'] { color: #34d399; }
+  .calendar-sync-indicator[data-state='error'] { color: #f87171; }
+  html[data-theme='light'] .calendar-sync-indicator[data-state='pending'] { color: #92400e; }
+  html[data-theme='light'] .calendar-sync-indicator[data-state='syncing'] { color: #1d4ed8; }
+  html[data-theme='light'] .calendar-sync-indicator[data-state='synced'] { color: #047857; }
+  html[data-theme='light'] .calendar-sync-indicator[data-state='error'] { color: #b91c1c; }
+}
+
 @theme {
   /* Office-inspired Palette */
   --color-office-blue: #0078D4;

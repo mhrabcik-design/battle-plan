@@ -446,6 +446,7 @@ export function summarizeExternalEffects(effects: AgentProtocolEffectRow[], acco
         && (latestSuccess.get(`${effect.entityPublicId}\0${effect.kind}`) ?? 0) <= effect.sequence);
     return {
         pending: pending.length, failed: failed.length,
+        running: pending.filter(effect => effect.state === 'running').length,
         accountBlocked: pending.filter((effect) => !effect.accountId || effect.accountId !== accountId).length,
         lastError: failed[0]?.lastErrorMessage ?? pending.find((effect) => effect.lastErrorMessage)?.lastErrorMessage ?? null,
         lastSuccess: effects.reduce<number | null>((latest, effect) => effect.state === 'succeeded'
