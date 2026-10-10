@@ -67,6 +67,20 @@ const taskDraft: Omit<Task, 'id' | 'publicId' | 'suggestionSubjectId' | 'suggest
     updatedAt: 1_000,
 };
 
+test('a changed session rolls back suggestion conversion together with its task and journal', async () => {
+    const database = createDatabase();
+    const registry = new SuggestionRegistry(database);
+    let current = true;
+    database.tasks.hook('creating', () => { current = false; });
+    const assertCurrent = () => { if (!current) throw new Error('Google session changed'); };
+    await assert.rejects(registry.convertToTask(suggestion(), taskDraft, 1_000, assertCurrent), /Google session changed/);
+    assert.equal(await database.tasks.count(), 0);
+    assert.equal(await database.suggestionSubjects.count(), 0);
+    assert.equal(await database.suggestionOccurrences.count(), 0);
+    assert.equal(await database.suggestionDecisions.count(), 0);
+    assert.equal(await database.agentProtocolEvents.count(), 0);
+});
+
 test('a terminal legacy decision suppresses the same occurrence under a new proposal id', async () => {
     const database = createDatabase();
     const registry = new SuggestionRegistry(database);

@@ -12,14 +12,17 @@ async function portableTask(task: Task): Promise<Task> {
     return { ...task, publicId: `task_legacy_${hex}` };
 }
 
-export async function mergeTasksFromDrive(tasks: Task[]): Promise<boolean> {
+export async function mergeTasksFromDrive(tasks: Task[], assertCurrent?: () => void): Promise<boolean> {
+    assertCurrent?.();
     // Hash before entering IndexedDB: awaiting WebCrypto inside a transaction
     // lets the browser close that transaction before the following write.
     // Normalize only after hashing: older imports used the original type/urgency.
     const portableTasks = (await Promise.all(structuredClone(tasks).map(portableTask)))
         .map(normalizeLegacyBackupTask);
+    assertCurrent?.();
     let changed = false;
     await db.transaction('rw', taskMutationTables(db), async () => {
+        assertCurrent?.();
         for (const cloudTask of portableTasks) {
             const [byPublicId, byOccurrence] = await Promise.all([
                 db.tasks.where('publicId').equals(cloudTask.publicId!).first(),
@@ -50,6 +53,7 @@ export async function mergeTasksFromDrive(tasks: Task[]): Promise<boolean> {
             else if (result.status === 'unchanged' && result.metadataChanged) changed = true;
             else if (result.status !== 'unchanged') throw new Error(`Task import failed: ${result.status}`);
         }
+        assertCurrent?.();
     });
     return changed;
 }

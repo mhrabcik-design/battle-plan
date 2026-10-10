@@ -5,6 +5,7 @@ import {
     formatTimeLeft,
     getDeadlineColor,
     getAvailableWorkingMinutes,
+    getWeekDays,
     parseDuration,
     getWeeklyResizePatch,
     getWeeklyEdgeDirection,
@@ -24,6 +25,28 @@ const task = (overrides: Partial<UnifiedTask>): UnifiedTask => ({
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
+});
+
+test('week dates and today marker follow the explicit local clock across midnight', () => {
+    const sunday = getWeekDays(0, new Date(2026, 9, 11, 23, 59));
+    const monday = getWeekDays(0, new Date(2026, 9, 12, 0, 1));
+    assert.equal(sunday[0].full, '2026-10-05');
+    assert.equal(sunday.find(day => day.isToday)?.full, '2026-10-11');
+    assert.equal(monday[0].full, '2026-10-12');
+    assert.equal(monday.find(day => day.isToday)?.full, '2026-10-12');
+    const thursday = getWeekDays(0, new Date(2026, 9, 8, 23, 59));
+    const friday = getWeekDays(0, new Date(2026, 9, 9, 0, 1));
+    assert.equal(thursday[0].full, friday[0].full);
+    assert.equal(thursday.find(day => day.isToday)?.full, '2026-10-08');
+    assert.equal(friday.find(day => day.isToday)?.full, '2026-10-09');
+});
+
+test('week offsets remain civil dates through DST and a year boundary', () => {
+    const afterDst = getWeekDays(0, new Date(2026, 9, 26, 0, 1));
+    assert.equal(afterDst[0].full, '2026-10-26');
+    assert.equal(afterDst[6].full, '2026-11-01');
+    assert.equal(getWeekDays(-1, new Date(2026, 9, 26, 0, 1))[0].full, '2026-10-19');
+    assert.equal(getWeekDays(1, new Date(2026, 11, 31, 23, 59))[0].full, '2027-01-04');
 });
 
 test('timed meeting stores the dropped block start and preserves duration', () => {

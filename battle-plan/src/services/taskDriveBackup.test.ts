@@ -17,6 +17,44 @@ const task = (publicId: string, overrides: Partial<Task> = {}): Task => ({
 });
 const snapshot = (tasks: Task[], timestamp = 1): TaskDriveBackupPayload => ({ timestamp, data: { tasks } });
 
+test('task backup load rejects old snapshots after the verified account changes', async (t) => {
+    let account = 'a'; t.mock.method(googleService, 'getAccountId', () => account);
+    const store = memoryStore();
+    store.files.push({ id: 'old-a', name: 'battle_plan_data.json', payload: snapshot([task('private-a')]) });
+    const read = store.drive.readJsonFilesWithStatus.bind(store.drive);
+    store.drive.readJsonFilesWithStatus = async <T>(name: string) => { const result = await read<T>(name); account = 'b'; return result; };
+    const result = await new TaskDriveBackup(store.drive).loadDetailed();
+    assert.notEqual(result.kind, 'loaded');
+});
+
+test('backup initialization cannot adopt a later A to B to A session', async (t) => {
+    let generation = 1;
+    t.mock.method(googleService, 'getAccountId', () => 'a');
+    t.mock.method(googleService, 'getAuthGeneration', () => generation);
+    const store = memoryStore();
+    store.drive.init = async () => { generation += 2; return true; };
+    await assert.rejects(new TaskDriveBackup(store.drive).save({ tasks: [task('a-only')] }), /Účet Google/);
+    assert.equal(store.files.length, 0);
+});
+
+test('task import rolls back the task and revision if account ownership changes inside the transaction', async (t) => {
+    await db.tasks.clear();
+    await db.agentProtocolEvents.clear();
+    let account = 'a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    const { captureGoogleAccountSession } = await import('./googleAccountSession.ts');
+    const session = captureGoogleAccountSession();
+    const changeAccount = () => { account = 'b'; };
+    db.tasks.hook('creating', changeAccount);
+    try {
+        await assert.rejects(mergeTasksFromDrive([task('private-a')], session.assertCurrent), /Přihlášení Google/);
+        assert.equal(await db.tasks.count(), 0);
+        assert.equal(await db.agentProtocolEvents.count(), 0);
+    } finally {
+        db.tasks.hook('creating').unsubscribe(changeAccount);
+    }
+});
+
 function memoryStore() {
     const files: { id: string; name: string; payload: TaskDriveBackupPayload }[] = [];
     let corruptRead = false;

@@ -1,3 +1,13 @@
+---
+module: Calendar planning and task history
+date: 2026-10-09
+last_updated: 2026-10-09
+problem_type: design_pattern
+component: frontend
+severity: high
+tags: [calendar, task-history, offline-deletion, immutable-snapshots]
+---
+
 # Týdenní přesouvání a trvalá historie úkolů
 
 ## Kontext
@@ -10,7 +20,7 @@ Týdenní přehled potřebuje současně přímé plánování, reaktivní loká
 - Čistý převod rozlišuje význam času: schůzka na `startTime` začíná, blok úkolu na něm končí.
 - Doménový command uloží lokální změnu právě jednou po dropu a teprve potom provede volitelný vzdálený update.
 - Splnění mění `status` stejného řádku. Týdenní query ho nefiltruje a cleanup jej nemaže jen kvůli stáří.
-- Soft delete má přednost před historií dokončení; staré tombstones lze čistit přes indexovaný retenční dotaz.
+- Soft delete má přednost před historií dokončení. Tombstones zůstávají uložené bez časového limitu: absence v neměnném Drive snapshotu neznamená smazání. Bez trvalého potvrzení jednotlivých smazání a protokolu bezpečné kompaktace je nelze fyzicky odstranit ani po úspěšném syncu.
 
 ## Google hranice
 
@@ -20,7 +30,9 @@ Lokální stav zůstává autoritativní, když volitelný Google update selže,
 
 ## Ověření
 
-Nejvyšší hodnotu mají testy čistého převodu času, retention predikátu, stránkování Tasks a civilní datumové aritmetiky. Reálný prohlížeč navíc ověřuje click-versus-drag, zrušení dropu, historické zobrazení a dokončení z detailu.
+Nejvyšší hodnotu mají testy čistého převodu času, viditelnosti historie, stránkování Tasks a civilní datumové aritmetiky. `battle-plan/src/services/taskMerge.test.ts` ověřuje smazání starší než 30 dní skutečným doménovým commandem a opakovaný import starší živé kopie. Reálný prohlížeč navíc ověřuje click-versus-drag, zrušení dropu, historické zobrazení a dokončení z detailu.
+
+Oprava retention je zatím lokální změna na pracovní větvi. Regresní browser scénář potvrdil zachování starého tombstone po restartu i potlačení živé kopie při následném importu. Stáří záznamu ani obecný úspěch syncu nedokazují, že všechny starší snapshoty a všechna offline zařízení znají konkrétní smazání.
 
 ## Vrácení posledního gesta (2026-09-10)
 

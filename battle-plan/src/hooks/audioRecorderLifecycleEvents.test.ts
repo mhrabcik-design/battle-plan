@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import type { useAudioRecorder as RecorderHook } from './useAudioRecorder.ts';
+import { recorderHarness } from './audioRecorderTestHarness.ts';
+
+test('browser-initiated stop consumes final chunks and releases every recording resource', async () => {
+    const env = recorderHarness();
+    const { useAudioRecorder } = env.load<{ useAudioRecorder: typeof RecorderHook }>(new URL('./useAudioRecorder.ts', import.meta.url));
+    const hook = env.render(useAudioRecorder);
+    const pending = hook.startRecording({ onSilence: () => {} });
+    const stream = new env.FakeStream();
+    env.requests[0].resolve(stream);
+    await pending;
+    const recorder = env.recorders[0];
+    recorder.ondataavailable?.({ data: new Blob(['device stopped']) });
+    recorder.state = 'inactive';
+    recorder.onstop?.();
+    const result = env.render(useAudioRecorder);
+    assert.equal(result.isRecording, false);
+    assert.equal(await result.audioBlob?.text(), 'device stopped');
+    assert.equal(result.audioBlob?.type, 'audio/mp4');
+    assert.deepEqual(stream.tracks.map(track => track.stops), [1, 1]);
+    assert.ok(env.contexts.every(context => context.closes === 1));
+    assert.equal(env.frames.size, 0);
+    assert.equal(env.timers.size, 0);
+    assert.equal(await hook.startRecording(), false, 'the final audio still owns its target');
+    hook.clearAudio();
+    assert.equal(hook.hasRecordingSession(), false);
+    env.unmount();
+});

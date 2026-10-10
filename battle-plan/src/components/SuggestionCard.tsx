@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   Clock,
   Paperclip,
@@ -21,6 +21,7 @@ import {
   type SuggestionResolution,
 } from '../services/suggestionRegistry';
 import { MonthDatePicker } from './ui/MonthDatePicker';
+import { useAudioRecorder } from '../hooks/useAudioRecorder';
 
 interface SuggestionCardProps {
   suggestion: AgentSuggestion;
@@ -114,8 +115,8 @@ export function SuggestionCard({
   const [textValue, setTextValue] = useState('');
   const [showDeferPicker, setShowDeferPicker] = useState(false);
   const [deferDate, setDeferDate] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
-  const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
+  const sendingVoiceRef = useRef(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
   const [priorityInput, setPriorityInput] = useState<'high' | 'medium' | 'low'>(suggestion.context.priority);
@@ -156,32 +157,29 @@ export function SuggestionCard({
   };
 
   const startVoice = async () => {
+    if (isProcessing || sendingVoiceRef.current) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
-      const chunks: Blob[] = [];
-      rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-      rec.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        stream.getTracks().forEach((t) => t.stop());
-        setIsRecording(false);
-        setRecorder(null);
-        await onVoiceReply(blob);
-      };
-      rec.start();
-      setRecorder(rec);
-      setIsRecording(true);
+      await startRecording();
     } catch (e) {
       console.error('Voice recording failed', e);
       alert('Nelze přistoupit k mikrofonu. Zkontroluj oprávnění.');
     }
   };
 
-  const stopVoice = () => {
-    if (recorder && recorder.state === 'recording') {
-      recorder.stop();
-    }
-  };
+  useEffect(() => {
+    if (!audioBlob || sendingVoiceRef.current) return;
+    sendingVoiceRef.current = true;
+    void (async () => {
+      try {
+        await onVoiceReply(audioBlob);
+      } catch (error) {
+        console.error('Voice reply failed', error);
+      } finally {
+        clearAudio();
+        sendingVoiceRef.current = false;
+      }
+    })();
+  }, [audioBlob, clearAudio, onVoiceReply]);
 
   const playVoice = (replyId: string) => {
     if (playingVoiceId === replyId && audioElement) {
@@ -508,7 +506,7 @@ export function SuggestionCard({
           </button>
           <button
             type="button"
-            onClick={isRecording ? stopVoice : startVoice}
+            onClick={isRecording ? stopRecording : startVoice}
             disabled={isProcessing}
             aria-pressed={isRecording}
             className={`flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--text-secondary)] disabled:opacity-40 ${isRecording ? 'bg-red-500/15' : 'hover:bg-[var(--surface-2)]'}`}

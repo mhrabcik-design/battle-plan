@@ -33,6 +33,66 @@ class MissingRepliesStore implements SuggestionsStore {
   async uploadBlob(): Promise<DriveJsonWrite | null> { return null; }
 }
 
+test('new account refresh does not share a pending suggestions read or retain old file ownership', async (t) => {
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null } });
+  const { SuggestionsSync } = await import('./suggestionsSync.ts');
+  const { googleService } = await import('./googleService.ts');
+  let account = 'a'; t.mock.method(googleService, 'getAccountId', () => account);
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  const store = new MissingRepliesStore();
+  let reads = 0, inits = 0;
+  store.init = async () => { inits++; return true; };
+  store.readJsonFileWithStatus = async <T>() => {
+    const owner = account; reads++;
+    if (owner === 'a') await gate;
+    return { kind: 'loaded', fileId: owner, data: { suggestions: [{ id: owner }] } as T };
+  };
+  const sync = new SuggestionsSync(store); await sync.init();
+  const old = sync.fetchSuggestionsDetailed();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  account = 'b'; await sync.init();
+  const current = sync.fetchSuggestionsDetailed();
+  await new Promise<void>(resolve => setImmediate(resolve)); finish();
+  const [stale, fresh] = await Promise.all([old, current]);
+  assert.equal(reads, 2);
+  assert.equal(inits, 2);
+  assert.notEqual(stale.kind, 'loaded');
+  assert.equal(fresh.suggestions[0]?.id, 'b');
+});
+
+test('reply creation stops before writing if its initial read belongs to an old account', async (t) => {
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null } });
+  const { SuggestionsSync } = await import('./suggestionsSync.ts');
+  const { googleService } = await import('./googleService.ts');
+  let account = 'a';
+  t.mock.method(googleService, 'getAccountId', () => account);
+  const store = new MissingRepliesStore();
+  store.readJsonFilesWithStatus = async () => { account = 'b'; return { kind: 'missing-file' }; };
+  const sync = new SuggestionsSync(store);
+  await sync.init();
+  const result = await sync.addReply({ suggestion_id: 'private-a', type: 'text', content: 'A-only', action: null });
+  assert.equal(result.success, false);
+  assert.equal(store.writtenPayload, null);
+});
+
+test('reply ownership and known reply ids reset on a new login', async (t) => {
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null } });
+  const { SuggestionsSync } = await import('./suggestionsSync.ts');
+  const { googleService } = await import('./googleService.ts');
+  let account = 'a';
+  t.mock.method(googleService, 'getAccountId', () => account);
+  const sync = new SuggestionsSync(new MissingRepliesStore());
+  await sync.init();
+  sync.markRepliesKnown(['reply-a']);
+  assert.equal(sync.hasKnownReplies, true);
+  account = 'b';
+  assert.equal(sync.hasKnownReplies, false);
+  assert.equal(sync.initialized, false);
+  await sync.init();
+  assert.equal(sync.initialized, true);
+});
+
 test('the first reply creates the replies file instead of reporting a false success', async () => {
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,

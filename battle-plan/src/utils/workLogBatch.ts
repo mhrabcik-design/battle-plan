@@ -90,6 +90,7 @@ export const getWorkLogRowIssues = (input: {
     peopleCount?: number;
     hoursPerPerson?: number | string;
     requirePeople?: boolean;
+    maxDate?: string;
 }): string[] => {
     const issues: string[] = [];
     const hours = parseDecimalHours(input.hours);
@@ -100,8 +101,14 @@ export const getWorkLogRowIssues = (input: {
     if (input.projectSelected === false) {
         issues.push('Vyber projekt.');
     }
-    if (!input.date || !dateRegex.test(input.date)) {
+    // UTC is used only to round-trip a civil date without local DST effects.
+    const calendarDate = input.date && dateRegex.test(input.date)
+        ? new Date(`${input.date}T12:00:00Z`)
+        : null;
+    if (!calendarDate || Number.isNaN(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== input.date) {
         issues.push('Vyber platné datum práce.');
+    } else if (input.maxDate && input.date && input.date > input.maxDate) {
+        issues.push('Datum práce nesmí být v budoucnosti.');
     }
     if (input.requirePeople !== false && peopleCount < 1) {
         issues.push('Doplň lidi.');

@@ -71,6 +71,37 @@ function fakeBridge() {
     };
 }
 
+for (const phase of ['fetch', 'apply'] as const) {
+    test(`account switch during bridge ${phase} prevents later mutations and acknowledgement in the new account`, async (t) => {
+        const { googleService } = await vite.ssrLoadModule('/src/services/googleService.ts') as typeof import('../services/googleService.ts');
+        let account = 'a'; t.mock.method(googleService, 'getAccountId', () => account);
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const bridge = fakeBridge();
+        if (phase === 'fetch') bridge.fetchPendingWrites = async () => { await gate; return [write]; };
+        else bridge.applyWrite = async () => { await gate; return { success: true, disposition: 'applied' }; };
+        const poller = createAgentBridgePoller(bridge, () => {});
+        const pending = poller.poll();
+        await new Promise<void>(resolve => setImmediate(resolve));
+        account = 'b'; finish(); await pending; poller.stop();
+        assert.deepEqual(bridge.applied, []);
+        assert.deepEqual(bridge.recorded, []);
+        assert.deepEqual(bridge.acknowledged, []);
+    });
+}
+
+test('same-account teardown still acknowledges a mutation already applied', async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const bridge = fakeBridge();
+    bridge.applyWrite = async () => { await gate; return { success: true, disposition: 'applied' }; };
+    const poller = createAgentBridgePoller(bridge, () => {});
+    const pending = poller.poll();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    poller.stop(); finish(); await pending;
+    assert.deepEqual(bridge.acknowledged, [['write-1']]);
+});
+
 test('overlapping interval, visibility and focus polls share the complete fetch/apply/ack pass', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });

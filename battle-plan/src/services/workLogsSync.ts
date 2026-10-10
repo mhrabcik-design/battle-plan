@@ -9,6 +9,7 @@ import { comparableWorkLog, getSyncTimestamp, getWorkLogSyncKey, mergeWorkLogSna
 import { DriveJsonStore, type DriveStoreStatus } from './driveJsonStore';
 import { normalizeProjectName } from './projectCatalog';
 import { getErrorMessage } from '../utils/errors';
+import { captureGoogleAccountSession, type GoogleAccountSession } from './googleAccountSession.ts';
 import {
     buildProjectIdentityIndex,
     normalizeProjectAliases,
@@ -224,6 +225,7 @@ type WorkLogsStore = Pick<
 >;
 
 export class WorkLogsSync {
+    private session = captureGoogleAccountSession();
     private isInitialized = false;
     private readonly drive: WorkLogsStore;
 
@@ -232,8 +234,12 @@ export class WorkLogsSync {
     }
 
     async init(): Promise<void> {
-        if (this.isInitialized) return;
-        this.isInitialized = await this.drive.init({ createFolder: true });
+        if (this.initialized) return;
+        this.isInitialized = false;
+        this.session = captureGoogleAccountSession();
+        const session = this.session;
+        const initialized = await this.drive.init({ createFolder: true });
+        if (session.isCurrent()) this.isInitialized = initialized;
     }
 
     /**
@@ -245,15 +251,17 @@ export class WorkLogsSync {
     }
 
     async loadAllDetailed(localTombstones: WorkLogDeletionTombstone[] = []): Promise<WorkLogsLoadResult> {
-        if (!this.isInitialized) {
+        if (!this.initialized) {
             return { kind: 'store-unavailable', status: this.drive.lastStatus, data: emptyWorkLogsLoadData() };
         }
 
+        const session = this.session;
         try {
             const [result, tombstoneResult] = await Promise.all([
                 this.drive.readJsonFilesWithStatus<WorkLogsFile>(WORKLOGS_FILENAME),
                 this.drive.readJsonFilesWithStatus<WorkLogDeletionTombstonesFile>(WORKLOG_TOMBSTONES_FILENAME),
             ]);
+            session.assertCurrent();
             if (tombstoneResult.kind === 'store-unavailable') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
             if (tombstoneResult.kind === 'error') return { ...tombstoneResult, data: emptyWorkLogsLoadData() };
             let remoteTombstones = mergeWorkLogDeletionTombstones(localTombstones);
@@ -320,7 +328,7 @@ export class WorkLogsSync {
         projects: Project[];
         workLogDeletionTombstones: WorkLogDeletionTombstone[];
     }): Promise<WorkLogsPublishResult> {
-        if (!this.isInitialized) {
+        if (!this.initialized) {
             return {
                 kind: 'store-unavailable',
                 status: this.drive.lastStatus,
@@ -328,6 +336,7 @@ export class WorkLogsSync {
             };
         }
 
+        const session = this.session;
         const timestamp = Date.now();
         const tombstones = mergeWorkLogDeletionTombstones(payload.workLogDeletionTombstones);
         const fileContent = {
@@ -346,6 +355,7 @@ export class WorkLogsSync {
 
         try {
             let published = await this.readPublishedState();
+            session.assertCurrent();
             if (containsPublishedPayload(published, expected)) return { kind: 'published', timestamp };
 
             for (let attempt = 0; attempt < MAX_SNAPSHOT_PUBLISH_ATTEMPTS; attempt++) {
@@ -356,7 +366,9 @@ export class WorkLogsSync {
                         null,
                         { createOnly: true },
                     );
+                    session.assertCurrent();
                     published = await this.readPublishedState();
+                    session.assertCurrent();
                     if (!containsTombstones(published.journalTombstones, tombstones)) continue;
                     if (containsPublishedPayload(published, expected)) return { kind: 'published', timestamp };
                 }
@@ -367,7 +379,9 @@ export class WorkLogsSync {
                     null,
                     { createOnly: true },
                 );
+                session.assertCurrent();
                 published = await this.readPublishedState();
+                session.assertCurrent();
                 if (containsPublishedPayload(published, expected)) return { kind: 'published', timestamp };
             }
             const message = 'Zápis WorkLogs snapshotu se nepodařilo ověřit';
@@ -425,7 +439,7 @@ export class WorkLogsSync {
     }
 
     get initialized(): boolean {
-        return this.isInitialized;
+        return this.isInitialized && this.session.isCurrent();
     }
 
     get status(): DriveStoreStatus {
@@ -459,10 +473,12 @@ export function mergeCloudToLocal(
     cloudProjects: Project[],
     cloudWorkLogDeletionTombstones: WorkLogDeletionTombstone[] = [],
 ): Promise<MergeResult> {
+    const session = captureGoogleAccountSession();
     return enqueueWorkLogsSync(() => performMergeCloudToLocal(
         cloudWorkLogs,
         cloudProjects,
         cloudWorkLogDeletionTombstones,
+        session,
     ));
 }
 
@@ -488,7 +504,9 @@ async function performMergeCloudToLocal(
     cloudWorkLogs: WorkLog[],
     cloudProjects: Project[],
     cloudWorkLogDeletionTombstones: WorkLogDeletionTombstone[] = [],
+    session = captureGoogleAccountSession(),
 ): Promise<MergeResult> {
+    session.assertCurrent();
     const result: MergeResult = {
         workLogsAdded: 0,
         workLogsUpdated: 0,
@@ -499,6 +517,7 @@ async function performMergeCloudToLocal(
     };
 
     await db.transaction('rw', [db.workLogs, db.projects, db.workLogDeletionTombstones], async () => {
+        session.assertCurrent();
         const localTombstones = await db.workLogDeletionTombstones.toArray();
         const localTombstonesBySyncId = new Map(
             localTombstones.map((tombstone) => [tombstone.syncId, tombstone]),
@@ -689,6 +708,8 @@ async function performMergeCloudToLocal(
             result.projectsAdded += reconciliation.projectsCreated;
             result.projectsRemoved += reconciliation.projectsMerged;
         }
+        // Throw inside the transaction so a changed login rolls back the merge.
+        session.assertCurrent();
     });
 
     return result;
@@ -703,10 +724,13 @@ export interface MergeLocalToCloudOptions {
 }
 
 async function performMergeLocalToCloudDetailed(
-    options: MergeLocalToCloudOptions = {},
+    options: MergeLocalToCloudOptions,
+    session: GoogleAccountSession,
 ): Promise<WorkLogsPublishResult> {
+    session.assertCurrent();
     if (!workLogsSync.initialized) {
         await workLogsSync.init();
+        session.assertCurrent();
         if (!workLogsSync.initialized) {
             return {
                 kind: 'store-unavailable',
@@ -716,7 +740,9 @@ async function performMergeLocalToCloudDetailed(
         }
     }
     const localTombstones = await db.workLogDeletionTombstones.toArray();
+    session.assertCurrent();
     const cloudResult = await workLogsSync.loadAllDetailed(localTombstones);
+    session.assertCurrent();
     if (cloudResult.kind === 'store-unavailable') {
         return {
             kind: 'store-unavailable',
@@ -741,7 +767,9 @@ async function performMergeLocalToCloudDetailed(
             cloudWorkLogs,
             cloudResult.data.projects,
             cloudResult.data.workLogDeletionTombstones ?? [],
+            session,
         );
+        session.assertCurrent();
     }
     const [storedTombstones, storedWorkLogs, allProjects] = await db.transaction(
         'r',
@@ -752,6 +780,7 @@ async function performMergeLocalToCloudDetailed(
             db.projects.toArray(),
         ]),
     );
+    session.assertCurrent();
     const tombstones = mergeWorkLogDeletionTombstones(storedTombstones);
     const tombstonedIds = new Set(tombstones.map((tombstone) => tombstone.syncId));
     const allWorkLogs = storedWorkLogs.filter(
@@ -767,9 +796,10 @@ async function performMergeLocalToCloudDetailed(
 export async function mergeLocalToCloudDetailed(
     options: MergeLocalToCloudOptions = {},
 ): Promise<WorkLogsPublishResult> {
+    const session = captureGoogleAccountSession();
     return enqueueWorkLogsSync(async () => {
         try {
-            return await performMergeLocalToCloudDetailed(options);
+            return await performMergeLocalToCloudDetailed(options, session);
         } catch (error) {
             return { kind: 'unexpected-error', message: getErrorMessage(error) };
         }

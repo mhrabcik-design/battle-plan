@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { GoogleAuthState, GoogleAuthStatus, GoogleTaskRaw } from '../types';
 import { calendarEventProjection, calendarProjectionToTaskSchedule } from './calendarMapping.ts';
+import { toLocalIsoDate } from '../utils/monthCalendar.ts';
 import type { CalendarConflict, CalendarPublicProjection, GoogleCalendarEvent } from './calendarModel.ts';
 import { calendarChangedFields, calendarPrivateIdentity, rebaseCalendarProjection, reconcileCalendarProjection, safeGoogleCalendarLink,
     type CalendarWriteRequest, type CalendarWriteResult } from './calendarReconciliation.ts';
@@ -377,6 +378,10 @@ class GoogleService {
 
     getAccountId(): string | null {
         return this.verifiedAccount?.token === this.accessToken ? this.verifiedAccount.accountId : null;
+    }
+
+    getAuthGeneration(): number {
+        return this.authGeneration;
     }
 
     private dispatchAuthChange() {
@@ -987,7 +992,7 @@ class GoogleService {
         }
 
         try {
-            const dateStr = task.date || task.deadline || new Date().toISOString().split('T')[0];
+            const dateStr = task.date || task.deadline || toLocalIsoDate(new Date());
             const isAllDay = task.isAllDay === true;
 
             // Pro timed event potřebujeme i čas

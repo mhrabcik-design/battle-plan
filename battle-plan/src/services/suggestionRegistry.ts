@@ -384,7 +384,9 @@ export class SuggestionRegistry {
     async ingestLegacy(
         suggestions: readonly AgentSuggestion[],
         replies: readonly AgentSuggestionReply[],
+        assertCurrent?: () => void,
     ): Promise<void> {
+        assertCurrent?.();
         await this.database.transaction(
             'rw',
             this.database.suggestionSubjects,
@@ -392,6 +394,7 @@ export class SuggestionRegistry {
             this.database.suggestionDecisions,
             this.database.agentProtocolOutbox,
             async () => {
+                assertCurrent?.();
                 const identitiesByProposalId = new Map<string, { subjectId: string; occurrenceKey: string }>();
                 const existingDecisions = new Map(
                     (await this.database.suggestionDecisions.toArray())
@@ -454,6 +457,7 @@ export class SuggestionRegistry {
                         createdAt: reply.created_at,
                     });
                 }
+                assertCurrent?.();
             },
         );
     }
@@ -473,13 +477,15 @@ export class SuggestionRegistry {
         };
     }
 
-    async mergeSnapshot(snapshot: SuggestionRegistrySnapshot, now = Date.now()): Promise<void> {
+    async mergeSnapshot(snapshot: SuggestionRegistrySnapshot, now = Date.now(), assertCurrent?: () => void): Promise<void> {
+        assertCurrent?.();
         await this.database.transaction(
             'rw',
             this.database.suggestionSubjects,
             this.database.suggestionOccurrences,
             this.database.suggestionDecisions,
             async () => {
+                assertCurrent?.();
                 for (const incoming of snapshot.subjects) {
                     const local = await this.database.suggestionSubjects.get(incoming.id);
                     const merged = mergeSubject(local, incoming);
@@ -522,19 +528,23 @@ export class SuggestionRegistry {
                         await this.database.suggestionDecisions.put(merged);
                     }
                 }
+                assertCurrent?.();
             },
         );
     }
 
-    async markPublished(decisionIds: readonly string[], publishedAt = Date.now()): Promise<void> {
+    async markPublished(decisionIds: readonly string[], publishedAt = Date.now(), assertCurrent?: () => void): Promise<void> {
+        assertCurrent?.();
         if (decisionIds.length === 0) return;
         await this.database.transaction('rw', this.database.suggestionDecisions, async () => {
+            assertCurrent?.();
             for (const id of decisionIds) {
                 const decision = await this.database.suggestionDecisions.get(id);
                 if (decision && decision.publishedAt == null) {
                     await this.database.suggestionDecisions.put({ ...decision, publishedAt });
                 }
             }
+            assertCurrent?.();
         });
     }
 
@@ -613,7 +623,9 @@ export class SuggestionRegistry {
         suggestion: AgentSuggestion,
         input: SuggestionDecisionInput,
         now = Date.now(),
+        assertCurrent?: () => void,
     ): Promise<SuggestionDecisionRow> {
+        assertCurrent?.();
         if ('deferUntil' in input && !Number.isFinite(input.deferUntil)) {
             throw new Error('deferUntil must be a finite timestamp');
         }
@@ -626,6 +638,7 @@ export class SuggestionRegistry {
                 this.database.agentProtocolOutbox,
             ],
             async () => {
+                assertCurrent?.();
                 const { subject, occurrence } = await this.ensureIdentityRows(suggestion, now);
                 const decision: SuggestionDecisionRow = {
                     id: `sdec_${crypto.randomUUID()}`,
@@ -640,6 +653,7 @@ export class SuggestionRegistry {
                 await this.database.suggestionDecisions.add(decision);
                 const outbox = protocolResponseOutbox(suggestion, decision, now);
                 if (outbox) await this.database.agentProtocolOutbox.add(outbox);
+                assertCurrent?.();
                 return decision;
             },
         );
@@ -649,7 +663,9 @@ export class SuggestionRegistry {
         inputSuggestion: AgentSuggestion,
         inputDraft: SuggestionTaskDraft,
         now = Date.now(),
+        assertCurrent?: () => void,
     ): Promise<SuggestionConversionResult> {
+        assertCurrent?.();
         const suggestion = structuredClone(inputSuggestion);
         const draft = structuredClone(inputDraft);
         return this.database.transaction(
@@ -662,6 +678,7 @@ export class SuggestionRegistry {
                 this.database.agentProtocolOutbox,
             ],
             async () => {
+                assertCurrent?.();
                 const { subject, occurrence } = await this.ensureIdentityRows(suggestion, now);
                 const decisions = await this.decisionsFor(occurrence.id);
                 const stateDecision = effectiveStateDecision(decisions);
@@ -672,6 +689,7 @@ export class SuggestionRegistry {
 
                 if (stateDecision && TERMINAL_KINDS.has(stateDecision.kind)) {
                     if ((stateDecision.kind === 'converted' || stateDecision.kind === 'accepted') && existingTask) {
+                        assertCurrent?.();
                         return { outcome: 'existing', task: existingTask, decision: stateDecision };
                     }
                     throw new SuggestionAlreadyProcessedError(stateDecision);
@@ -697,6 +715,7 @@ export class SuggestionRegistry {
                     await this.database.suggestionDecisions.add(recoveredDecision);
                     const outbox = protocolResponseOutbox(suggestion, recoveredDecision, now);
                     if (outbox) await this.database.agentProtocolOutbox.add(outbox);
+                    assertCurrent?.();
                     return { outcome: 'existing', task: existingTask, decision: recoveredDecision };
                 }
 
@@ -723,6 +742,7 @@ export class SuggestionRegistry {
                 await this.database.suggestionDecisions.add(decision);
                 const outbox = protocolResponseOutbox(suggestion, decision, now);
                 if (outbox) await this.database.agentProtocolOutbox.add(outbox);
+                assertCurrent?.();
                 return { outcome: 'created', task, decision };
             },
         );
@@ -732,7 +752,9 @@ export class SuggestionRegistry {
         suggestion: AgentSuggestion,
         targetOccurrenceKey: string,
         now = Date.now(),
+        assertCurrent?: () => void,
     ): Promise<void> {
+        assertCurrent?.();
         await this.database.transaction(
             'rw',
             this.database.suggestionSubjects,
@@ -740,9 +762,11 @@ export class SuggestionRegistry {
             this.database.suggestionDecisions,
             this.database.agentProtocolOutbox,
             async () => {
+                assertCurrent?.();
                 const target = await this.database.suggestionOccurrences.get(targetOccurrenceKey);
                 if (!target) throw new Error('target suggestion occurrence not found');
                 const { identity, occurrence: candidate } = await this.ensureIdentityRows(suggestion, now);
+                assertCurrent?.();
                 if (candidate.id === target.id) return;
                 await this.database.suggestionOccurrences.put({
                     ...target,
@@ -762,6 +786,7 @@ export class SuggestionRegistry {
                 await this.database.suggestionDecisions.add(decision);
                 const outbox = protocolResponseOutbox(suggestion, decision, now);
                 if (outbox) await this.database.agentProtocolOutbox.add(outbox);
+                assertCurrent?.();
                 // Keep the candidate occurrence as immutable history so any
                 // prior decisions remain referentially valid. findOccurrence()
                 // gives the target's alias precedence over this retained row.
@@ -773,7 +798,9 @@ export class SuggestionRegistry {
         suggestion: AgentSuggestion,
         targetOccurrenceKey: string,
         now = Date.now(),
+        assertCurrent?: () => void,
     ): Promise<void> {
+        assertCurrent?.();
         await this.database.transaction(
             'rw',
             this.database.suggestionSubjects,
@@ -781,6 +808,7 @@ export class SuggestionRegistry {
             this.database.suggestionDecisions,
             this.database.agentProtocolOutbox,
             async () => {
+                assertCurrent?.();
                 const targetOccurrence = await this.database.suggestionOccurrences.get(targetOccurrenceKey);
                 if (!targetOccurrence) throw new Error('target suggestion occurrence not found');
                 const targetSubject = await this.database.suggestionSubjects.get(targetOccurrence.subjectId);
@@ -821,6 +849,7 @@ export class SuggestionRegistry {
                 await this.database.suggestionDecisions.add(decision);
                 const outbox = protocolResponseOutbox(suggestion, decision, now);
                 if (outbox) await this.database.agentProtocolOutbox.add(outbox);
+                assertCurrent?.();
             },
         );
     }

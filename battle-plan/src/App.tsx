@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Mic, MicOff, List, Users, Lightbulb, Clock, Settings, ChevronLeft, ChevronRight, LayoutGrid, CheckCircle2, Inbox, Briefcase, FileText, Undo2, Plus, Search, X, ArrowUpRight, CalendarDays } from 'lucide-react';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
-import { useAudioRecorder } from './hooks/useAudioRecorder';
+import { useAudioRecorder, type RecorderOptions } from './hooks/useAudioRecorder';
 import { useSyncDiagnostics } from './hooks/useSyncDiagnostics';
 import { useDriveSyncOrchestration } from './hooks/useDriveSyncOrchestration';
 import { useTaskBackup } from './hooks/useTaskBackup';
@@ -42,7 +42,7 @@ import {
   getUrgencyColor,
   type WeeklyEdgeDirection,
 } from './utils/calendarUtils';
-import { isTaskCleanupCandidate, isTaskVisibleInWeek } from './utils/taskHistory';
+import { isTaskVisibleInWeek } from './utils/taskHistory';
 import { getTaskGridPresentation, sortTasksActiveFirst } from './utils/taskListPresentation';
 import { buildInfo } from './utils/buildInfo';
 import { workLogsBackupHealth } from './utils/driveSyncDiagnostics';
@@ -91,7 +91,7 @@ const pageFallback = (
 
 function App() {
   const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
-  const { isRecording, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
+  const { isRecording, hasRecordingSession, startRecording, stopRecording, audioBlob, clearAudio } = useAudioRecorder();
   const [viewMode, setViewMode] = useState<ViewMode>('battle');
   const [editingTask, setEditingTask] = useState<UnifiedTask | null>(null);
   const [activeVoiceUpdateId, setActiveVoiceUpdateId] = useState<number | null>(null);
@@ -111,6 +111,8 @@ function App() {
   const [showCompletedTasks, setShowCompletedTasks] = useState(false);
   const [showCompletedMeetings, setShowCompletedMeetings] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const today = toLocalIsoDate(currentTime);
+  const weekDays = useMemo(() => getWeekDays(weekOffset, new Date(`${today}T12:00:00`)), [weekOffset, today]);
   const [debugLogs, setDebugLogs] = useState<{ t: string; m: string; type: 'info' | 'error' }[]>([]);
   const [suggestionsBadge, setSuggestionsBadge] = useState(0);
   const [workLogExtracted, setWorkLogExtracted] = useState<ExtractedWorkLogBatch | null>(null);
@@ -124,15 +126,29 @@ function App() {
   const activeVoiceUpdateIdRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
 
+  useEffect(() => {
+    if (activeVoiceUpdateId === null || hasRecordingSession() || isProcessingRef.current) return;
+    queueMicrotask(() => {
+      if (hasRecordingSession() || isProcessingRef.current || activeVoiceUpdateIdRef.current !== activeVoiceUpdateId) return;
+      activeVoiceUpdateIdRef.current = null;
+      setActiveVoiceUpdateId(null);
+    });
+  }, [activeVoiceUpdateId, isRecording, audioBlob, hasRecordingSession]);
+
+  const startTaskRecording = useCallback((options: RecorderOptions) => {
+    if (isProcessingRef.current || audioBlob) return Promise.resolve(false);
+    return startRecording(options);
+  }, [audioBlob, startRecording]);
+
   const selectView = useCallback((nextView: ViewMode) => {
-    if (nextView === 'worklogs' && isRecording) {
+    if (nextView === 'worklogs' && (hasRecordingSession() || isProcessingRef.current)) {
       setNotice('Nejprve dokončete nebo zastavte probíhající diktování.');
       return;
     }
     setViewMode(nextView);
     setSearchQuery('');
     setPlanningFilter('all');
-  }, [isRecording]);
+  }, [hasRecordingSession]);
 
   const addLog = useCallback((message: string, type: 'info' | 'error' = 'info') => {
     const time = new Date().toLocaleTimeString('cs-CZ');
@@ -234,24 +250,6 @@ const syncVisualState = deriveSyncVisualState({
 });
 
   useEffect(() => {
-    const cleanup = async () => {
-      try {
-        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-        const toDelete = await db.tasks
-          .where('updatedAt').below(thirtyDaysAgo)
-          .filter(t => isTaskCleanupCandidate(t, thirtyDaysAgo))
-          .primaryKeys();
-        if (toDelete.length > 0) {
-          await db.tasks.bulkDelete(toDelete);
-        }
-      } catch (e) {
-        console.error("Cleanup failed", e);
-      }
-    };
-    cleanup();
-  }, []);
-
-  useEffect(() => {
     const initGoogle = async () => {
       try {
         await googleService.init();
@@ -319,9 +317,8 @@ const syncVisualState = deriveSyncVisualState({
     }
 
     if (viewMode === 'week') {
-      const days = getWeekDays(weekOffset);
-      const start = days[0].full;
-      const end = days[6].full;
+      const start = weekDays[0].full;
+      const end = weekDays[6].full;
       // A multi-day event may start before this week; indexed start-date queries miss it.
       return await db.tasks.filter(t => isTaskVisibleInWeek(t, start, end)).toArray();
     }
@@ -333,7 +330,7 @@ const syncVisualState = deriveSyncVisualState({
     else collection = db.tasks.where('type').anyOf(['thought', 'note']).and(t => !t.isDeleted);
 
     return await collection.toArray();
-  }, [viewMode, weekOffset]) ?? EMPTY_TASKS;
+  }, [viewMode, viewMode === 'week' ? weekDays[0].full : null]) ?? EMPTY_TASKS;
 
   // Mapped Google Tasks
   const googleTasksMapped: UnifiedTask[] = useMemo(() => {
@@ -560,7 +557,6 @@ const syncVisualState = deriveSyncVisualState({
     () => getTaskGridPresentation(tasks, viewMode, showCompletedInCurrentView),
     [showCompletedInCurrentView, tasks, viewMode]
   );
-  const today = toLocalIsoDate(currentTime);
   const planningSummary = useMemo(() => getPlanningSummary(tasks, today), [tasks, today]);
   const visibleGridTasks = useMemo(
     () => filterPlanningTasks(unfilteredGridTasks, searchQuery, viewMode === 'battle' ? planningFilter : 'all', today),
@@ -650,7 +646,7 @@ const syncVisualState = deriveSyncVisualState({
               {viewMode === 'week' && (
                 <div className="flex items-center gap-4 bg-slate-900/40 px-4 py-1.5 rounded-xl border border-slate-800/60">
                   <h2 className="text-sm font-black text-white uppercase tracking-[0.2em]">
-                    {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
+                    {new Date(`${weekDays[0].full}T12:00:00`).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })}
                   </h2>
                   <div className="flex gap-1.5 border-l border-slate-800 ml-2 pl-4">
                     <button onClick={() => changeWeek(-1)} className="p-1.5 rounded-lg bg-slate-800/50 text-slate-400 hover:text-white transition-[background-color,border-color,color] border border-slate-700/50"><ChevronLeft className="w-3.5 h-3.5" /></button>
@@ -765,7 +761,7 @@ const syncVisualState = deriveSyncVisualState({
             {viewMode === 'week' && (
               <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900/40 px-4 py-2 rounded-xl border border-white/5">
                 <h2 className="text-xs font-black text-white uppercase tracking-widest">
-                  {new Date(getWeekDays(weekOffset)[0].full).toLocaleDateString('cs-CZ', { month: 'short', year: 'numeric' })}
+                  {new Date(`${weekDays[0].full}T12:00:00`).toLocaleDateString('cs-CZ', { month: 'short', year: 'numeric' })}
                 </h2>
                 <div className="flex gap-2">
                   <button onClick={() => changeWeek(-1)} className="p-2 rounded-lg bg-slate-900 border border-white/5 text-slate-400"><ChevronLeft className="w-4 h-4" /></button>
@@ -844,6 +840,7 @@ const syncVisualState = deriveSyncVisualState({
             <Suspense fallback={pageFallback}>
             <WeeklyCalendar
               weekOffset={weekOffset}
+              days={weekDays}
               tasks={tasks}
               rowHeight={ROW_HEIGHT}
               calendarHours={CALENDAR_HOURS}
@@ -940,7 +937,7 @@ const syncVisualState = deriveSyncVisualState({
                       stopRecording={stopRecording}
                       setActiveVoiceUpdateId={setActiveVoiceUpdateId}
                       activeVoiceUpdateIdRef={activeVoiceUpdateIdRef}
-                      startRecording={startRecording}
+                      startRecording={startTaskRecording}
                     />
                   ))
                 )}
@@ -976,8 +973,9 @@ const syncVisualState = deriveSyncVisualState({
                 setEditingTask={setEditingTask}
                 activeVoiceUpdateId={activeVoiceUpdateId}
                 isRecording={isRecording}
+                hasRecordingSession={hasRecordingSession}
                 stopRecording={stopRecording}
-                startRecording={startRecording}
+                startRecording={startTaskRecording}
                 setActiveVoiceUpdateId={setActiveVoiceUpdateId}
                 activeVoiceUpdateIdRef={activeVoiceUpdateIdRef}
                 handleDeleteTask={handleDeleteTask}
@@ -1041,14 +1039,15 @@ const syncVisualState = deriveSyncVisualState({
                         await activeWorkLogVoiceController.toggle();
                         return;
                       }
-                      if (isRecording) {
+                      if (hasRecordingSession() && !audioBlob && !isProcessingRef.current) {
                         stopRecording();
                         return;
                       }
-                      const targetId = null;
-                      activeVoiceUpdateIdRef.current = targetId;
-                      setActiveVoiceUpdateId(targetId);
-                      void startRecording({
+                      void startTaskRecording({
+                        onAccepted: () => {
+                          activeVoiceUpdateIdRef.current = null;
+                          setActiveVoiceUpdateId(null);
+                        },
                         enableFeedback: true,
                         onSilence: () => stopRecording(),
                         silenceThreshold: -45,

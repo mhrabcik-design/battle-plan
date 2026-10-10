@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { AlertCircle, Mail, Clock, Users, Lightbulb, CheckCircle2, Hourglass, Mic, FileText, Trash2 } from 'lucide-react';
 import type { UnifiedTask } from '../types';
+import type { RecorderOptions } from '../hooks/useAudioRecorder';
 import { getTaskCompletionClasses, getTaskVisualTone, type TaskVisualTone } from '../utils/taskListPresentation';
 import { calendarTaskLabel, calendarIntervalLabel, isCalendarReadonly, openReadonlyCalendarTask } from '../utils/calendarPresentation';
 
@@ -25,9 +26,9 @@ interface TaskCardProps {
     handleToggleTask: (task: UnifiedTask) => Promise<UnifiedTask | null>;
     setEditingTask: (task: UnifiedTask) => void;
     stopRecording: () => void;
-    setActiveVoiceUpdateId: (id: number) => void;
+    setActiveVoiceUpdateId: (id: number | null) => void;
     activeVoiceUpdateIdRef: React.MutableRefObject<number | null>;
-    startRecording: (options: { enableFeedback?: boolean; onSilence?: () => void; silenceThreshold?: number; silenceDuration?: number }) => void | Promise<void>;
+    startRecording: (options: RecorderOptions) => Promise<boolean>;
 }
 
 export function TaskCard({
@@ -160,14 +161,25 @@ export function TaskCard({
                             if (activeVoiceUpdateId === task.id) {
                                 stopRecording();
                             } else {
-                                setActiveVoiceUpdateId(task.id!);
-                                activeVoiceUpdateIdRef.current = task.id!;
-                                void Promise.resolve(startRecording({
+                                let accepted = false;
+                                const resetTarget = () => {
+                                    if (accepted && activeVoiceUpdateIdRef.current === task.id) {
+                                        activeVoiceUpdateIdRef.current = null;
+                                        setActiveVoiceUpdateId(null);
+                                    }
+                                };
+                                void startRecording({
+                                    onAccepted: () => {
+                                        accepted = true;
+                                        activeVoiceUpdateIdRef.current = task.id!;
+                                        setActiveVoiceUpdateId(task.id!);
+                                    },
                                     enableFeedback: true,
                                     onSilence: () => stopRecording(),
                                     silenceThreshold: -45,
                                     silenceDuration: 4000
-                                })).catch((err: unknown) => {
+                                }).then(started => { if (!started) resetTarget(); }).catch((err: unknown) => {
+                                    resetTarget();
                                     console.error('Task voice recording failed', err);
                                 });
                             }

@@ -17,6 +17,8 @@ import {
 import { SuggestionCard } from '../components/SuggestionCard';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth } from '../types';
+import { captureGoogleAccountSession, type GoogleAccountSession } from '../services/googleAccountSession';
+import { googleService } from '../services/googleService';
 import { resolveSuggestionsSnapshot } from '../utils/suggestionReplies';
 import {
   describeSuggestionPartialSync,
@@ -43,6 +45,7 @@ interface SuggestionsPageProps {
 }
 
 export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) {
+  const hasUsableAuthValue = hasUsableAuth(googleAuth);
   const [suggestions, setSuggestions] = useState<AgentSuggestion[]>([]);
   const [repliesBySuggestion, setRepliesBySuggestion] = useState<Record<string, AgentSuggestionReply[]>>({});
   const [resolutionsBySuggestion, setResolutionsBySuggestion] = useState<Record<string, SuggestionResolution>>({});
@@ -52,7 +55,28 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [expandedTextFor, setExpandedTextFor] = useState<string | null>(null);
-  const loadInFlightRef = useRef(false);
+  const loadInFlightRef = useRef<GoogleAccountSession | null>(null);
+  const accountId = googleService.getAccountId();
+  const authGeneration = googleService.getAuthGeneration();
+  const accessToken = googleAuth.accessToken;
+  const pageSession = useMemo(() => {
+    const session = captureGoogleAccountSession();
+    return {
+      ...session,
+      isCurrent: () => session.isCurrent()
+        && googleService.getAuthStatus().accessToken === accessToken
+        && googleService.getAuthGeneration() === authGeneration
+        && googleService.getAccountId() === accountId,
+    };
+  }, [accessToken, authGeneration, accountId]);
+  const previousPageSessionRef = useRef(pageSession);
+  const previousAccountRef = useRef(accountId);
+  const loadedSessionRef = useRef<GoogleAccountSession | null>(null);
+  const activePageSessionRef = useRef<GoogleAccountSession | null>(null);
+  const isPageActive = useCallback(
+    () => pageSession.isCurrent() && activePageSessionRef.current === pageSession,
+    [pageSession],
+  );
 
   const resolveAll = useCallback(async (values: readonly AgentSuggestion[]) => {
     const resolutions = await suggestionRegistry.resolveMany(values);
@@ -61,9 +85,11 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   }, []);
 
   const refreshResolution = useCallback(async (suggestion: AgentSuggestion) => {
+    if (!isPageActive()) return;
     const resolution = await suggestionRegistry.resolve(suggestion);
+    if (!isPageActive()) return;
     setResolutionsBySuggestion((previous) => ({ ...previous, [suggestion.id]: resolution }));
-  }, []);
+  }, [isPageActive]);
 
   const reportPartialSync = (
     action: string,
@@ -75,13 +101,16 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   };
 
   const loadAll = useCallback(async () => {
-    if (!hasUsableAuth(googleAuth)) return;
-    if (loadInFlightRef.current) return;
-    loadInFlightRef.current = true;
+    if (!isPageActive() || !hasUsableAuthValue) return;
+    if (loadInFlightRef.current === pageSession) return;
+    const reservation = pageSession;
+    loadInFlightRef.current = reservation;
+    const isActive = () => isPageActive() && loadInFlightRef.current === reservation;
     setIsLoading(true);
     setLoadError(null);
     try {
       await suggestionsSync.init();
+      if (!isActive()) return;
       if (!suggestionsSync.initialized) {
         setLoadError('Složka s návrhy zatím není dostupná. Nech dokončit první synchronizaci s Google Drive a zkus to znovu.');
         onAddLog('SuggestionsSync: BP složka nenalezena. Otevři BP app a nech poprvé synchronizovat.', 'error');
@@ -92,6 +121,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         suggestionsSync.fetchRepliesDetailed(),
         suggestionRegistrySync.fetchAndMerge(),
       ]);
+      if (!isActive()) return;
 
       if (suggestionsResult.kind === 'store-unavailable' || suggestionsResult.kind === 'error') {
         const message = suggestionsResult.kind === 'error'
@@ -124,31 +154,57 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         return;
       }
       const replies = Object.values(snapshot.repliesBySuggestion).flat();
-      await suggestionRegistry.ingestLegacy(sugs, replies);
-      setResolutionsBySuggestion(await resolveAll(sugs));
+      await suggestionRegistry.ingestLegacy(sugs, replies, pageSession.assertCurrent);
+      if (!isActive()) return;
+      const resolutions = await resolveAll(sugs);
+      if (!isActive()) return;
+      setResolutionsBySuggestion(resolutions);
+      loadedSessionRef.current = reservation;
       setSuggestions(sugs);
       setRepliesBySuggestion(snapshot.repliesBySuggestion);
       const registryPublish = await suggestionRegistrySync.publishPending();
+      if (!isActive()) return;
       if (registryPublish.kind === 'error') {
         console.warn('Suggestion decision registry publish failed', registryPublish.message);
       }
     } catch (e) {
+      if (!isActive()) return;
       setLoadError('Návrhy se nepodařilo načíst. Zkontroluj připojení a zkus obnovení.');
       console.error('Load suggestions failed', e);
       onAddLog('Suggestions: Nepodařilo se načíst návrhy', 'error');
     } finally {
-      loadInFlightRef.current = false;
-      setIsLoading(false);
+      if (loadInFlightRef.current === reservation) {
+        loadInFlightRef.current = null;
+        if (isPageActive()) setIsLoading(false);
+      }
     }
-  }, [googleAuth, onAddLog, resolveAll]);
+  }, [hasUsableAuthValue, onAddLog, resolveAll, isPageActive, pageSession]);
 
   useEffect(() => {
+    activePageSessionRef.current = pageSession;
     queueMicrotask(() => {
+      if (!isPageActive()) return;
+      if (previousPageSessionRef.current !== pageSession) {
+        previousPageSessionRef.current = pageSession;
+        setProcessingId(null);
+      }
+      if (previousAccountRef.current !== accountId) {
+        previousAccountRef.current = accountId;
+        setSuggestions([]);
+        setRepliesBySuggestion({});
+        setResolutionsBySuggestion({});
+        setProcessingId(null);
+        setExpandedTextFor(null);
+        setLoadError(null);
+      }
       loadAll();
     });
     const t = setInterval(loadAll, 30_000);
-    return () => clearInterval(t);
-  }, [loadAll]);
+    return () => {
+      if (activePageSessionRef.current === pageSession) activePageSessionRef.current = null;
+      clearInterval(t);
+    };
+  }, [loadAll, pageSession, isPageActive, accountId]);
 
   const counts = useMemo(() => {
     const c = { open: 0, accepted: 0, rejected: 0, deferred: 0, converted: 0 };
@@ -184,6 +240,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
   const visibleSuggestions = filtered.slice(0, visibleCount);
 
   const acceptAndCreateTask = async (suggestion: AgentSuggestion) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
       // Create task in BP
@@ -219,7 +276,8 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         startTime: deadline ? '15:00' : undefined,
         createdAt: now,
         updatedAt: now,
-      });
+      }, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const taskId = conversion.task.id!;
 
       const [registryResult, replyResult, statusResult] = await Promise.all([
@@ -233,6 +291,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         }),
         suggestionsSync.updateSuggestionStatus(suggestion.id, 'converted'),
       ]);
+      if (!isPageActive()) return;
       reportPartialSync('task byl vytvořen', registryResult, {
         replyMirror: replyResult.success,
         producerStatusMirror: statusResult.success,
@@ -248,21 +307,25 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         )
       );
       await refreshResolution(suggestion);
+      if (!isPageActive()) return;
 
       const retryLabel = conversion.outcome === 'existing' ? ' (už existoval)' : '';
       onAddLog(`Suggestions: ✅ ${suggestion.title.slice(0, 50)} → task #${taskId}${retryLabel}`);
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Accept failed', e);
       onAddLog(`Suggestions: Chyba při vytváření tasku: ${e instanceof Error ? e.message : String(e)}`, 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
   const reject = async (suggestion: AgentSuggestion) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
-      await suggestionRegistry.recordDecision(suggestion, { kind: 'rejected' });
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'rejected' }, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const [registryResult, replyResult, statusResult] = await Promise.all([
         suggestionRegistrySync.publishPending(),
         suggestionsSync.addReply({
@@ -273,6 +336,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         }),
         suggestionsSync.updateSuggestionStatus(suggestion.id, 'rejected'),
       ]);
+      if (!isPageActive()) return;
       reportPartialSync('zamítnutí bylo zaznamenáno', registryResult, {
         replyMirror: replyResult.success,
         producerStatusMirror: statusResult.success,
@@ -285,21 +349,27 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         )
       );
       await refreshResolution(suggestion);
+      if (!isPageActive()) return;
       onAddLog(`Suggestions: ❌ Zamítnuto: ${suggestion.title.slice(0, 50)}`);
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Reject failed', e);
       onAddLog('Suggestions: Zamítnutí se nepodařilo uložit', 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
   const deleteSuggestion = async (suggestion: AgentSuggestion) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
-      await suggestionRegistry.recordDecision(suggestion, { kind: 'dismissed' });
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'dismissed' }, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const registryResult = await suggestionRegistrySync.publishPending();
+      if (!isPageActive()) return;
       const result = await suggestionsSync.deleteSuggestion(suggestion.id);
+      if (!isPageActive()) return;
       reportPartialSync('smazání bylo zaznamenáno', registryResult, {
         deletionMirror: {
           suggestions: result.suggestions,
@@ -318,20 +388,23 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         onAddLog('Suggestions: Smazat návrh selhalo', 'error');
       }
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Delete suggestion failed', e);
       onAddLog('Suggestions: Smazat návrh selhalo', 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
    const defer = async (suggestion: AgentSuggestion, deferUntil: string) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
       await suggestionRegistry.recordDecision(suggestion, {
         kind: 'deferred',
         deferUntil: new Date(`${deferUntil}T00:00:00`).getTime(),
-      });
+      }, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const [registryResult, replyResult, statusResult] = await Promise.all([
         suggestionRegistrySync.publishPending(),
         suggestionsSync.addReply({
@@ -343,6 +416,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         }),
         suggestionsSync.updateSuggestionStatus(suggestion.id, 'deferred'),
       ]);
+      if (!isPageActive()) return;
       reportPartialSync('odložení bylo zaznamenáno', registryResult, {
         replyMirror: replyResult.success,
         producerStatusMirror: statusResult.success,
@@ -355,19 +429,23 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         )
       );
       await refreshResolution(suggestion);
+      if (!isPageActive()) return;
       onAddLog(`Suggestions: ⏰ Odloženo do ${deferUntil}: ${suggestion.title.slice(0, 50)}`);
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Defer failed', e);
       onAddLog('Suggestions: Odložení se nepodařilo uložit', 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
   const sendTextReply = async (suggestion: AgentSuggestion, text: string) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
-      await suggestionRegistry.recordDecision(suggestion, { kind: 'commented', comment: text });
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'commented', comment: text }, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const [registryResult, result] = await Promise.all([
         suggestionRegistrySync.publishPending(),
         suggestionsSync.addReply({
@@ -377,6 +455,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           action: null,
         }),
       ]);
+      if (!isPageActive()) return;
       reportPartialSync('komentář byl zaznamenán', registryResult, {
         replyMirror: result.success,
       });
@@ -396,24 +475,29 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           ],
         }));
         await refreshResolution(suggestion);
+        if (!isPageActive()) return;
         onAddLog(`Suggestions: 💬 Text reply odeslán`);
       }
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Text reply failed', e);
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
   const sendVoiceReply = async (suggestion: AgentSuggestion, blob: Blob) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
       const upload = await suggestionsSync.uploadVoiceReply(suggestion.id, blob);
+      if (!isPageActive()) return;
       if (!upload.success || !upload.fileId) {
         onAddLog('Suggestions: Nahrávání hlasu selhalo', 'error');
         return;
       }
-      await suggestionRegistry.recordDecision(suggestion, { kind: 'commented', comment: 'Hlasová reakce' });
+      await suggestionRegistry.recordDecision(suggestion, { kind: 'commented', comment: 'Hlasová reakce' }, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const [registryResult, result] = await Promise.all([
         suggestionRegistrySync.publishPending(),
         suggestionsSync.addReply({
@@ -424,6 +508,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           action: null,
         }),
       ]);
+      if (!isPageActive()) return;
       reportPartialSync('hlasová reakce byla zaznamenána', registryResult, {
         replyMirror: result.success,
       });
@@ -444,45 +529,57 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
           ],
         }));
         await refreshResolution(suggestion);
+        if (!isPageActive()) return;
         onAddLog(`Suggestions: 🎙 Hlasová reakce uložena`);
       }
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Voice reply failed', e);
       onAddLog('Suggestions: Hlasová reakce selhala', 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
   const confirmSameSuggestion = async (suggestion: AgentSuggestion, targetOccurrenceKey: string) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
-      await suggestionRegistry.confirmSameOccurrence(suggestion, targetOccurrenceKey);
+      await suggestionRegistry.confirmSameOccurrence(suggestion, targetOccurrenceKey, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const registryResult = await suggestionRegistrySync.publishPending();
+      if (!isPageActive()) return;
       reportPartialSync('sloučení návrhů bylo zaznamenáno', registryResult, {});
       await refreshResolution(suggestion);
+      if (!isPageActive()) return;
       onAddLog(`Suggestions: Duplicitní návrh „${suggestion.title.slice(0, 50)}“ byl sloučen.`);
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Confirm duplicate suggestion failed', e);
       onAddLog('Suggestions: Sloučení návrhů se nepodařilo', 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
   const confirmDistinctSuggestion = async (suggestion: AgentSuggestion, targetOccurrenceKey: string) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
-      await suggestionRegistry.confirmDistinctSubjects(suggestion, targetOccurrenceKey);
+      await suggestionRegistry.confirmDistinctSubjects(suggestion, targetOccurrenceKey, undefined, pageSession.assertCurrent);
+      if (!isPageActive()) return;
       const registryResult = await suggestionRegistrySync.publishPending();
+      if (!isPageActive()) return;
       reportPartialSync('nová samostatná událost byla zaznamenána', registryResult, {});
       await refreshResolution(suggestion);
+      if (!isPageActive()) return;
       onAddLog(`Suggestions: „${suggestion.title.slice(0, 50)}“ zůstává jako nový návrh.`);
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Confirm distinct suggestion failed', e);
       onAddLog('Suggestions: Rozlišení návrhů se nepodařilo', 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 
@@ -490,9 +587,11 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
     suggestion: AgentSuggestion,
     updates: { priority?: 'high' | 'medium' | 'low'; deadline?: number | null }
   ) => {
+    if (!isPageActive() || !loadedSessionRef.current?.isCurrent()) return;
     setProcessingId(suggestion.id);
     try {
       const ok = await suggestionsSync.updateSuggestion(suggestion.id, updates);
+      if (!isPageActive()) return;
       if (!ok.success) {
         onAddLog('Suggestions: Úprava selhala', 'error');
         return;
@@ -528,6 +627,7 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
         content: `✏️ ${parts.join(', ')}`,
         action: null,
       });
+      if (!isPageActive()) return;
       if (editReply.success && editReply.id) {
         setRepliesBySuggestion((prev) => ({
           ...prev,
@@ -546,10 +646,11 @@ export function SuggestionsPage({ googleAuth, onAddLog }: SuggestionsPageProps) 
       }
       onAddLog(`Suggestions: ✏️ Upraveno: ${suggestion.title.slice(0, 50)}`);
     } catch (e) {
+      if (!isPageActive()) return;
       console.error('Update suggestion failed', e);
       onAddLog('Suggestions: Úprava selhala', 'error');
     } finally {
-      setProcessingId(null);
+      if (isPageActive()) setProcessingId(null);
     }
   };
 

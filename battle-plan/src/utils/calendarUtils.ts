@@ -85,8 +85,7 @@ export const isOverCapacity = (currentTime: Date, task: UnifiedTask) => {
     return task.duration > available;
 };
 
-export const getWeekDays = (offset: number) => {
-    const today = new Date();
+export const getWeekDays = (offset: number, today = new Date()) => {
     const day = today.getDay();
     const diff = today.getDate() - day + (day === 0 ? -6 : 1) + (offset * 7);
     const start = new Date(today.getFullYear(), today.getMonth(), diff);

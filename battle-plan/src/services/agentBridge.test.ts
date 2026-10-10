@@ -1043,6 +1043,24 @@ test('health: failed acknowledgement and reload never replay a local mutation', 
     assert.ok(writes[0]!.applied_at);
 });
 
+test('account change inside an agent transaction rolls back the mutation and its receipt', async (t) => {
+    await resetDb();
+    let account = 'a';
+    t.mock.method(googleService, 'getAccountId', () => account);
+    const projectId = await db.projects.add({ name: 'Session rollback', isActive: true, color: 'slate', updatedAt: 1, createdAt: 1 } as Project);
+    const changeAccount = () => { account = 'b'; };
+    db.workLogs.hook('creating', changeAccount);
+    try {
+        const result = await agentBridge.applyWrite({ id: 'changed-login', action: 'create_worklog', created_at: 1,
+            worklog_data: { projectId, date: '2026-09-25', hours: 1 } });
+        assert.equal(result.disposition, 'retryable');
+        assert.equal(await db.workLogs.count(), 0);
+        assert.equal(await db.agentInbox.get('changed-login'), undefined);
+    } finally {
+        db.workLogs.hook('creating').unsubscribe(changeAccount);
+    }
+});
+
 test('health: concurrent application is atomic and payload conflicts fail closed', async () => {
     await resetDb();
     const projectId = await db.projects.add({ name: 'Concurrent', isActive: true, color: 'slate', updatedAt: 1, createdAt: 1 } as Project);

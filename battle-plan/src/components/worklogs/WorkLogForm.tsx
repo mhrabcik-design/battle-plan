@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Save, X, Plus } from 'lucide-react';
 import { type WorkLog, type Project } from '../../db';
 import { ProjectPicker } from './ProjectPicker';
@@ -8,15 +8,18 @@ import {
     ProjectUnavailableError,
 } from '../../services/workLogPersistence';
 import { getErrorMessage } from '../../utils/errors';
+import { toLocalIsoDate } from '../../utils/monthCalendar';
+import { getWorkLogRowIssues } from '../../utils/workLogBatch';
 
 interface WorkLogFormProps {
     onSaved?: (log: WorkLog) => void;
     onCancel?: () => void;
 }
 
-const todayIso = () => new Date().toISOString().split('T')[0];
+const todayIso = () => toLocalIsoDate(new Date());
 
 export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
+    const formId = useId();
     const [date, setDate] = useState(todayIso());
     const [project, setProject] = useState<Project | null>(null);
     const [people, setPeople] = useState('');
@@ -35,6 +38,13 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
         const hoursNum = parseFloat(hours.replace(',', '.'));
         if (!hours || Number.isNaN(hoursNum) || hoursNum <= 0 || hoursNum > 24) {
             setError('Zadejte platný počet hodin (0–24).');
+            return;
+        }
+        const issues = getWorkLogRowIssues({
+            date, people, hours: hoursNum, requirePeople: false, maxDate: todayIso(),
+        });
+        if (issues.length) {
+            setError(issues[0]);
             return;
         }
 
@@ -85,8 +95,9 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Datum */}
                 <div className="space-y-1.5">
-                    <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Datum</label>
+                    <label htmlFor={`${formId}-date`} className="text-xs font-black text-slate-500 uppercase tracking-widest">Datum</label>
                     <input
+                        id={`${formId}-date`}
                         type="date"
                         value={date}
                         onChange={(e) => setDate(e.target.value)}
@@ -106,8 +117,9 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
 
                 {/* Lidi */}
                 <div className="space-y-1.5">
-                    <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Kdo byl na zakázce</label>
+                    <label htmlFor={`${formId}-people`} className="text-xs font-black text-slate-500 uppercase tracking-widest">Kdo byl na zakázce</label>
                     <input
+                        id={`${formId}-people`}
                         type="text"
                         value={people}
                         onChange={(e) => setPeople(e.target.value)}
@@ -118,8 +130,9 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
 
                 {/* Hodiny */}
                 <div className="space-y-1.5">
-                    <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Hodiny</label>
+                    <label htmlFor={`${formId}-hours`} className="text-xs font-black text-slate-500 uppercase tracking-widest">Hodiny</label>
                     <input
+                        id={`${formId}-hours`}
                         type="number"
                         inputMode="decimal"
                         step="0.25"
@@ -135,8 +148,9 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
 
             {/* Popis */}
             <div className="space-y-1.5">
-                <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Popis (volitelně)</label>
+                <label htmlFor={`${formId}-description`} className="text-xs font-black text-slate-500 uppercase tracking-widest">Popis (volitelně)</label>
                 <textarea
+                    id={`${formId}-description`}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Co se dělalo..."
@@ -146,7 +160,7 @@ export function WorkLogForm({ onSaved, onCancel }: WorkLogFormProps) {
             </div>
 
             {error && (
-                <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+                <div role="alert" className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
                     {error}
                 </div>
             )}

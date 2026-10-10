@@ -3,6 +3,7 @@ import { suggestionsSync } from '../services/suggestionsSync';
 import { effectiveSuggestionStatus, suggestionRegistry } from '../services/suggestionRegistry';
 import { suggestionRegistrySync } from '../services/suggestionRegistrySync';
 import { googleService } from '../services/googleService';
+import { captureGoogleAccountSession } from '../services/googleAccountSession';
 import type { GoogleAuthStatus } from '../types';
 import { hasUsableAuth, isAuthUnavailable } from '../types';
 import type { SyncHealth } from './useSyncDiagnostics';
@@ -25,23 +26,32 @@ interface UseSuggestionsBadgeArgs {
 
 export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyncHealth, addLog }: UseSuggestionsBadgeArgs) {
   const hasUsableAuthValue = hasUsableAuth(googleAuth);
+  const authGeneration = googleService.getAuthGeneration();
+  const accountId = googleService.getAccountId();
   const registryErrorLogGate = useRef(createRegistryErrorLogGate());
 
   useEffect(() => {
+    let cancelled = false;
+    const session = captureGoogleAccountSession();
+    const isActive = () => !cancelled && session.isCurrent()
+      && googleService.getAuthGeneration() === authGeneration
+      && googleService.getAccountId() === accountId;
     if (!hasUsableAuthValue) {
       queueMicrotask(() => {
+        if (!isActive()) return;
         setSuggestionsBadge(0);
         updateSyncHealth('suggestions', { state: 'idle', detail: 'Čeká na Google přihlášení' });
       });
-      return;
+      return () => { cancelled = true; };
     }
 
     let refreshInFlight = false;
     const refreshBadge = async () => {
-      if (refreshInFlight) return;
+      if (!isActive() || refreshInFlight) return;
       refreshInFlight = true;
       try {
         await suggestionsSync.init();
+        if (!isActive()) return;
         if (!suggestionsSync.initialized) {
           updateSyncHealth('suggestions', driveUnavailableHealth(suggestionsSync.status));
           return;
@@ -51,6 +61,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           suggestionsSync.fetchRepliesDetailed(),
           suggestionRegistrySync.fetchAndMerge(),
         ]);
+        if (!isActive()) return;
         const authAfterFetch = googleService.getAuthStatus();
         if (isAuthUnavailable(authAfterFetch.state)) {
           return;
@@ -97,8 +108,10 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           return;
         }
         const replies = Object.values(snapshot.repliesBySuggestion).flat();
-        await suggestionRegistry.ingestLegacy(sugs, replies);
+        await suggestionRegistry.ingestLegacy(sugs, replies, session.assertCurrent);
+        if (!isActive()) return;
         const registryPublishResult = await suggestionRegistrySync.publishPending();
+        if (!isActive()) return;
         if (registryPublishResult.kind === 'error' || registryPublishResult.kind === 'store-unavailable') {
           const message = registryPublishResult.kind === 'error'
             ? registryPublishResult.message
@@ -112,6 +125,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           return;
         }
         const resolutions = await suggestionRegistry.resolveMany(sugs);
+        if (!isActive()) return;
         const open = sugs.filter((suggestion, index) =>
           effectiveSuggestionStatus(suggestion, resolutions[index]) === 'open'
         ).length;
@@ -132,6 +146,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
           });
         }
       } catch (e) {
+        if (!isActive()) return;
         const lastErrorString = getErrorMessage(e);
         updateSyncHealth('suggestions', {
           state: 'error',
@@ -148,7 +163,7 @@ export function useSuggestionsBadge({ googleAuth, setSuggestionsBadge, updateSyn
 
     refreshBadge();
     const t = setInterval(refreshBadge, 60_000);
-    return () => clearInterval(t);
-  }, [hasUsableAuthValue, setSuggestionsBadge, updateSyncHealth, addLog]);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [hasUsableAuthValue, googleAuth.accessToken, authGeneration, accountId, setSuggestionsBadge, updateSyncHealth, addLog]);
 }
 

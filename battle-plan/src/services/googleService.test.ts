@@ -1290,6 +1290,31 @@ test('addToCalendar uses the following civil date as the exclusive end of an all
     assert.deepEqual(request?.resource?.end, { date: '2027-01-01' });
 });
 
+test('legacy addToCalendar defaults an undated event to the local day at Prague 00:30', async (t) => {
+    const originalTimezone = process.env.TZ;
+    process.env.TZ = 'Europe/Prague';
+    t.after(() => {
+        if (originalTimezone === undefined) delete process.env.TZ;
+        else process.env.TZ = originalTimezone;
+    });
+    const localMidnight = new Date(2026, 9, 9, 0, 30).getTime();
+    class CalendarDate extends Date {
+        constructor(value?: string | number) { super(value === undefined ? localMidnight : value); }
+    }
+    assert.equal(new CalendarDate().toISOString().slice(0, 10), '2026-10-08');
+    t.mock.method(globalThis, 'Date', CalendarDate);
+    clearStore();
+    seedSignedInStorage();
+    let request: { resource?: { start?: unknown; end?: unknown } } | undefined;
+    installGapiMock({ calendarEventsInsert: async (args) => {
+        request = args as typeof request;
+        return { result: { id: 'local-day' } };
+    } });
+    assert.equal(await freshService().addToCalendar({ title: 'Dnes', isAllDay: true }), 'local-day');
+    assert.deepEqual(request?.resource?.start, { date: '2026-10-09' });
+    assert.deepEqual(request?.resource?.end, { date: '2026-10-10' });
+});
+
 test('addToCalendar updates a timed event end from the current duration', async () => {
     clearStore();
     seedSignedInStorage();

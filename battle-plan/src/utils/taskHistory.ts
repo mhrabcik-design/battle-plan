@@ -8,8 +8,3 @@ export const isTaskVisibleInWeek = (task: Task, start: string, end: string): boo
     const scheduledDate = task.type === 'task' ? task.deadline : task.date;
     return !!scheduledDate && scheduledDate >= start && scheduledDate <= end;
 };
-
-export const isTaskCleanupCandidate = (task: Task, cutoff: number): boolean => {
-    return !!task.isDeleted && !task.calendar && !task.googleEventId && !task.reservedGoogleEventId
-        && (task.updatedAt || task.createdAt) < cutoff;
-};
