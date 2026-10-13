@@ -265,7 +265,10 @@ export class GoogleCalendarSync {
             const tasks = await this.db.tasks.toArray();
             for (const [eventId, event] of events) {
                 if (!capture.current()) throw new Error('Přihlášení ke Kalendáři se změnilo.');
-                await this.importEvent(eventId, event, settings, tasks);
+                // Skipped imports must stay synchronous: repeated awaits without
+                // IndexedDB requests can exhaust Dexie's transaction-zone tracking.
+                const imported = this.importEvent(eventId, event, settings, tasks);
+                if (imported) await imported;
             }
             const mutations = new TaskMutationService(this.db, { now: this.now });
             for (const task of tasks) {
@@ -328,7 +331,7 @@ export class GoogleCalendarSync {
         if (type === 'task' && projection.timing.kind === 'all-day') schedule.duration = task.duration;
         return { ...task, title: projection.title, description: projection.description, ...schedule, calendarScheduleExplicit: true };
     }
-    private async importEvent(eventId: string, event: GoogleCalendarEvent | null, settings: CalendarSyncSettings, tasks: Task[]): Promise<void> {
+    private importEvent(eventId: string, event: GoogleCalendarEvent | null, settings: CalendarSyncSettings, tasks: Task[]): Promise<void> | void {
         const identity = event ? privateIdentity(event, settings.accountId, settings.calendarId) : undefined;
         if (identity) {
             const owner = tasks.find(task => task.calendar?.accountId === settings.accountId
@@ -344,14 +347,16 @@ export class GoogleCalendarSync {
             const local = toCalendarProjection(previous, settings.timeZone) ?? undefined;
             const metadata = previous.calendar ?? { accountId: settings.accountId, calendarId: settings.calendarId, eventId,
                 canonicalIdentity: canonicalCalendarIdentity(previous), origin: 'local' as const, generation: 0, metadataUpdatedAt: this.now() };
-            const pending = (await this.db.agentProtocolEffects.where('entityPublicId').equals(previous.publicId!).toArray())
-                .some(effect => effect.kind === 'calendar' && effect.operation === 'upsert' && activeEffect(effect.state));
-            const changed = !previous.isDeleted && Boolean(local && (!metadata.baseline || calendarChangedFields(metadata.baseline, local).length || pending));
-            const conflict: CalendarConflict | undefined = metadata.conflict ? { ...metadata.conflict, local, remote: undefined, remoteEtag: undefined }
-                : changed ? { kind: 'remote-deleted', fields: [], base: metadata.baseline, local, detectedAt: this.now() } : undefined;
-            const next = { ...previous, calendar: { ...metadata, suppressed: true, conflict } };
-            if (previous.type === 'meeting' && !conflict) next.isDeleted = true;
-            await this.save(next, previous, tasks); return;
+            return (async () => {
+                const pending = (await this.db.agentProtocolEffects.where('entityPublicId').equals(previous.publicId!).toArray())
+                    .some(effect => effect.kind === 'calendar' && effect.operation === 'upsert' && activeEffect(effect.state));
+                const changed = !previous.isDeleted && Boolean(local && (!metadata.baseline || calendarChangedFields(metadata.baseline, local).length || pending));
+                const conflict: CalendarConflict | undefined = metadata.conflict ? { ...metadata.conflict, local, remote: undefined, remoteEtag: undefined }
+                    : changed ? { kind: 'remote-deleted', fields: [], base: metadata.baseline, local, detectedAt: this.now() } : undefined;
+                const next = { ...previous, calendar: { ...metadata, suppressed: true, conflict } };
+                if (previous.type === 'meeting' && !conflict) next.isDeleted = true;
+                await this.save(next, previous, tasks);
+            })();
         }
         const advancedGeneration = Boolean(previous?.calendar && identity && identity.generation > previous.calendar.generation);
         if (previous?.calendar && identity && (identity.canonicalIdentity !== previous.calendar.canonicalIdentity
@@ -391,7 +396,7 @@ export class GoogleCalendarSync {
             else { next = this.applyProjection(next, result.projection); metadata.baseline = projection; }
         } else if (projection) { next = this.applyProjection(next, projection); metadata.baseline = projection; }
         // applyProjection preserves the same metadata object.
-        await this.save(next, previous, tasks);
+        return this.save(next, previous, tasks);
     }
 
     /** Decisions fetch fresh Google data and compare both domain revision and metadata clock after I/O. */
