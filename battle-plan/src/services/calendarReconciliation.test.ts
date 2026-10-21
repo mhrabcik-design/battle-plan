@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { calendarAcknowledgedTask, calendarChangedFields, rebaseCalendarProjection, reconcileCalendarProjection, safeGoogleCalendarLink } from './calendarReconciliation.ts';
+import { calendarAcknowledgedTask, calendarChangedFields, calendarScopeMatches, rebaseCalendarProjection, reconcileCalendarProjection, safeGoogleCalendarLink } from './calendarReconciliation.ts';
 import type { Task } from '../db.ts';
 import type { CalendarPublicProjection } from './calendarModel.ts';
 
@@ -75,4 +75,24 @@ test('fresh deletion acknowledgements preserve concurrent local edits and expose
         projection: { ...base, title: 'Google' }, etag: '"v2"' }, 2).task;
     assert.equal(editedRemote.isDeleted, true); assert.equal(editedRemote.title, 'A');
     assert.equal(editedRemote.calendar?.conflict?.kind, 'local-deleted');
+});
+
+test('late upsert and deletion acknowledgements cannot change a detached copy sharing its owners Calendar identity', () => {
+    const scope = { accountId: 'owner', calendarId: 'primary', eventId: 'event', canonicalIdentity: 'public:task_owner', generation: 0 };
+    const task: Task = { publicId: 'task_copy', title: 'Local copy', description: 'Retained description',
+        internalNotes: 'Private notes', type: 'meeting', status: 'pending', urgency: 2,
+        date: '2026-10-09', startTime: '14:00', duration: 60, createdAt: 1, updatedAt: 1,
+        calendar: { ...scope, origin: 'local', metadataUpdatedAt: 3, timing: base.timing, baseline: base,
+            duplicateOf: 'task_owner', suppressed: true } };
+    const before = structuredClone(task);
+    assert.equal(calendarScopeMatches(task, scope), false);
+    for (const acknowledgement of [
+        { ...scope, sentProjection: base, projection: { ...base, title: 'Remote title' }, etag: '"new"' },
+        { ...scope, sentProjection: base, deleted: true },
+    ]) {
+        const result = calendarAcknowledgedTask(task, acknowledgement, 4);
+        assert.equal(result.task, task);
+        assert.equal(result.contentChanged, false);
+        assert.deepEqual(task, before);
+    }
 });

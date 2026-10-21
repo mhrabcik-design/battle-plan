@@ -43,6 +43,8 @@ export interface TaskCalendarMetadata {
     originalStartTime?: GoogleCalendarDateTime;
     eventType?: string;
     suppressed?: boolean;
+    /** Retained local copy; only this public ID owns the shared Google event. */
+    duplicateOf?: string;
     conflict?: CalendarConflict;
 }
 

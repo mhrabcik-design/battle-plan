@@ -108,6 +108,11 @@ Exact terminal decisions suppress an occurrence across later cycles and devices.
 
 ## Calendar Planning
 
+### Calendar Pairing
+A relation scoped to a Google account and calendar that identifies which local record owns a calendar event.
+
+Saved local copies can refer to the same event while retaining different private content. Only the established owner can send changes; detached copies remain local. A shared event reference does not authorize merging their private content or restoring them under the owner's event identity.
+
 ### Scheduled Work Block
 A calendar interval reserved for a task, distinct from the task itself and from a meeting imported from the calendar.
 

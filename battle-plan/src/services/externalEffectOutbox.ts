@@ -49,7 +49,7 @@ function calendarEffectMatchesTask(effect: AgentProtocolEffectRow, task: Task | 
     const target = effect.operation === 'upsert' ? effect.payload.googleEventId ?? effect.payload.reservedEventId : effect.payload.eventId;
     if (!task?.calendar) return !(effect.operation === 'upsert' && effect.payload.projection);
     const meta = task.calendar;
-    return meta.accountId === effect.accountId && meta.eventId === target
+    return !meta.duplicateOf && meta.accountId === effect.accountId && meta.eventId === target
         && (!effect.payload.calendarId || effect.payload.calendarId === meta.calendarId)
         && (!effect.payload.canonicalIdentity || effect.payload.canonicalIdentity === meta.canonicalIdentity)
         && (effect.payload.generation === undefined || effect.payload.generation === meta.generation);
@@ -371,7 +371,7 @@ export class ExternalEffectOutbox {
                 const retired: AgentProtocolEffectRow = { ...effect, state: 'failed', superseded: true, fencingToken: effect.fencingToken + 1,
                     leaseOwner: undefined, leaseExpiresAt: undefined, nextAttemptAt: undefined,
                     lastErrorCode: 'external_effect_failed',
-                    lastErrorMessage: 'Původní záměr byl nahrazen výslovnou volbou při řešení konfliktu; nebyl odeslán.', updatedAt: this.now() };
+                    lastErrorMessage: 'Původní Calendar záměr byl nahrazen; nebyl odeslán.', updatedAt: this.now() };
                 await this.db.agentProtocolEffects.put(retired);
                 await this.queueCommandResult(retired);
             }

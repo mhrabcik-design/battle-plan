@@ -219,6 +219,14 @@ test('ambiguous legacy tasks survive separately without numeric ID deduplication
     assert.ok(result.data?.tasks?.every(row => !row.publicId));
 });
 
+test('legacy Calendar snapshots preserve private copies even when they share an event and differ in age', () => {
+    const first = task('unused', { publicId: undefined, googleAccountId: 'a', googleEventId: 'event', internalNotes: 'First notes' });
+    const second = { ...first, internalNotes: 'Other notes', updatedAt: 2 };
+    const result = mergeTaskBackupSnapshots([snapshot([first, second])]).data!.tasks!;
+    assert.equal(result.length, 2);
+    assert.deepEqual(result.map(row => row.internalNotes).sort(), ['First notes', 'Other notes']);
+});
+
 test('publication success requires matching persisted bytes and filters secrets both ways', async () => {
     const store = memoryStore();
     const backup = new TaskDriveBackup(store.drive);

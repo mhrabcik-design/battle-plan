@@ -77,7 +77,7 @@ export function reconcileCalendarProjection(base: CalendarPublicProjection | und
 
 export function calendarScopeMatches(task: Task | undefined, scope: CalendarEffectScope): boolean {
     const meta = task?.calendar;
-    return Boolean(meta && meta.accountId === scope.accountId && meta.calendarId === scope.calendarId
+    return Boolean(meta && !meta.duplicateOf && meta.accountId === scope.accountId && meta.calendarId === scope.calendarId
         && meta.eventId === scope.eventId && meta.canonicalIdentity === scope.canonicalIdentity && meta.generation === scope.generation);
 }
 

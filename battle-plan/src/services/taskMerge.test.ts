@@ -93,6 +93,18 @@ test('legacy snapshots cannot overwrite an identified row and repeated import is
     assert.equal((await db.tasks.toArray())[0]?.publicId, imported?.publicId);
 });
 
+test('legacy copies sharing a Calendar event retain distinct private data and stable replay identities', async () => {
+    await db.tasks.clear();
+    const legacy = task({ googleAccountId: 'a', googleEventId: 'event', internalNotes: 'First private notes' });
+    const other = { ...legacy, internalNotes: 'Other private notes', updatedAt: 20 };
+    await mergeTasksFromDrive([legacy, other]);
+    assert.equal(await db.tasks.count(), 2);
+    const original = await db.tasks.toArray();
+    assert.deepEqual(original.map(row => row.internalNotes).sort(), ['First private notes', 'Other private notes']);
+    assert.equal(await mergeTasksFromDrive([other, legacy]), false);
+    assert.deepEqual(await db.tasks.toArray(), original);
+});
+
 test('same suggestion converted on two devices merges by occurrence and imports unrelated tasks', async () => {
     await db.tasks.clear();
     const local = task({ id: 1, publicId: 'task_device_a', suggestionOccurrenceKey: 'socc_shared', suggestionSubjectId: 'subject_shared', title: 'Local conversion' });

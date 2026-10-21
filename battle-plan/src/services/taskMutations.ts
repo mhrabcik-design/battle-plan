@@ -395,6 +395,8 @@ export class TaskMutationService {
             if (!task || (task.isDeleted && (!request.effects.length
                 || request.effects.some(effect => effect.kind !== 'calendar' || effect.operation !== 'delete')))) return { status: 'not_found' } as const;
             if (context.origin === 'google' || context.origin === 'drive') return { status: 'queued', effectIds: [] } as const;
+            if (task.calendar?.duplicateOf && request.effects.some(effect => effect.kind === 'calendar'))
+                throw new Error('Tato místní kopie je odpojená od Kalendáře. Pro samostatnou událost vytvořte nový záznam.');
             assertCalendarWritable(task, context.origin);
             if (isStale(task, request.expectedRevision)) return { status: 'stale', currentRevision: currentRevision(task) } as const;
             if (task.calendar?.suppressed && request.effects.some(effect => effect.kind === 'calendar' && effect.operation === 'upsert')) {
