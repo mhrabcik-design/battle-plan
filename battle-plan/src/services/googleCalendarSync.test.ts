@@ -94,6 +94,95 @@ async function seed(f: Awaited<ReturnType<typeof fixture>>, overrides: Partial<T
     assert.equal(result.status, 'applied'); return result.task;
 }
 
+test('a proven Calendar owner repairs duplicate links without losing local copies or replaying their writes', async t => {
+    const f = await fixture(t);
+    const owner = await seed(f);
+    await f.mutations.updateTask({ publicId: owner.publicId, changes: { description: 'Owner edit' }, context: authored() });
+    const copy = await seed(f, { publicId: 'task_old_copy', internalNotes: 'Unique copy notes',
+        calendar: { ...owner.calendar!, canonicalIdentity: 'public:task_old_copy' } });
+    await f.mutations.updateTask({ publicId: copy.publicId, changes: { title: 'Unsynced copy edit' }, context: authored() });
+    const before = (await f.db.tasks.get(copy.id!))!;
+    const ownerEffect = (await f.db.agentProtocolEffects.where('entityPublicId').equals(owner.publicId!).first())!;
+    f.f.events = [{ ...event(), extendedProperties: { private: calendarPrivateIdentity({ ...owner.calendar!, type: 'task' }) } }];
+
+    await f.service.refresh();
+    const repaired = (await f.db.tasks.get(copy.id!))!;
+    assert.deepEqual({ ...repaired, calendar: undefined }, { ...before, calendar: undefined });
+    assert.equal(repaired.calendar?.duplicateOf, owner.publicId);
+    assert.equal(repaired.calendar?.suppressed, true);
+    assert.equal((await f.db.tasks.get(owner.id!))?.description, 'Owner edit');
+    assert.deepEqual(await f.db.agentProtocolEffects.get(ownerEffect.id), ownerEffect);
+    const copyEffects = await f.db.agentProtocolEffects.where('entityPublicId').equals(copy.publicId!).toArray();
+    assert.ok(copyEffects.length && copyEffects.every(effect => effect.state === 'failed' && effect.superseded));
+    assert.equal((await f.service.getStatus()).phase, 'ready');
+    assert.equal((await f.service.getStatus()).repairedDuplicates, 1);
+    assert.equal((await f.service.getStatus()).pending, 1);
+    assert.equal(await calendarEffectDeliveryAllowed(f.db, ownerEffect, 'a', 'session'), true);
+    const rows = await f.db.tasks.toArray(), events = await f.db.agentProtocolEvents.count();
+    await f.service.refresh();
+    assert.deepEqual(await f.db.tasks.toArray(), rows);
+    assert.equal(await f.db.agentProtocolEvents.count(), events);
+    await f.mutations.updateTask({ publicId: copy.publicId, changes: { internalNotes: 'Editable local copy' }, context: authored() });
+    assert.equal((await f.db.agentProtocolEffects.where('entityPublicId').equals(copy.publicId!).toArray()).length, copyEffects.length);
+    await assert.rejects(f.mutations.queueEffects({ publicId: copy.publicId, context: authored(),
+        effects: [{ kind: 'calendar', operation: 'upsert' }] }), /kopie/);
+});
+
+test('one established Calendar pairing wins over legacy aliases, including deleted copies, within its account only', async t => {
+    const f = await fixture(t); const owner = await seed(f);
+    const copy = await seed(f, { publicId: 'task_legacy_copy', calendar: undefined, isDeleted: true, internalNotes: 'Keep archived' });
+    const other = await seed(f, { publicId: 'task_other_account', googleAccountId: 'b', calendar: undefined });
+    f.f.events = [event()];
+    await f.service.refresh();
+    assert.equal((await f.db.tasks.get(copy.id!))?.calendar?.duplicateOf, owner.publicId);
+    assert.equal((await f.db.tasks.get(copy.id!))?.internalNotes, 'Keep archived');
+    assert.equal((await f.db.tasks.get(copy.id!))?.isDeleted, true);
+    assert.deepEqual(await f.db.tasks.get(other.id!), other);
+    assert.equal(await f.db.tasks.count(), 3);
+});
+
+test('an acknowledged legacy event does not also claim another events obsolete reservation', async t => {
+    const f = await fixture(t);
+    const first = await seed(f, { publicId: 'task_first', calendar: undefined, googleEventId: 'event-a', reservedGoogleEventId: 'event-b' });
+    const second = await seed(f, { publicId: 'task_second', calendar: undefined, googleEventId: 'event-b', reservedGoogleEventId: 'event-b' });
+    f.f.events = [event('event-b'), event('event-a')];
+    await f.service.refresh();
+    assert.equal((await f.db.tasks.get(first.id!))?.calendar?.eventId, 'event-a');
+    assert.equal((await f.db.tasks.get(second.id!))?.calendar?.eventId, 'event-b');
+    assert.ok((await f.db.tasks.toArray()).every(task => !task.calendar?.duplicateOf));
+    assert.equal(await f.db.tasks.count(), 2);
+});
+
+test('different established Calendar identities without remote ownership proof still roll back atomically', async t => {
+    const f = await fixture(t); const owner = await seed(f);
+    await seed(f, { publicId: 'task_other_owner', calendar: { ...owner.calendar!, canonicalIdentity: 'public:task_other_owner' } });
+    const tasks = await f.db.tasks.toArray(), settings = await readCalendarSyncSettings(f.db, 'a');
+    f.f.events = [event('new'), event()];
+    await assert.rejects(f.service.refresh(), /více místních položek/);
+    assert.deepEqual(await f.db.tasks.toArray(), tasks);
+    assert.deepEqual(await readCalendarSyncSettings(f.db, 'a'), settings);
+    assert.equal(f.f.drains, 0);
+});
+
+test('repair supersedes a legacy duplicate deletion before the real outbox can delete the owners event', async t => {
+    const f = await fixture(t); const owner = await seed(f);
+    const copy = await seed(f, { publicId: 'task_deleted_legacy', calendar: undefined });
+    await f.mutations.archiveTask({ publicId: copy.publicId, context: authored() });
+    assert.ok((await f.db.agentProtocolEffects.toArray()).some(effect => effect.operation === 'delete'));
+    let writes = 0;
+    const outbox = new ExternalEffectOutbox(f.db, { accountId: () => 'a', now: () => NOW,
+        canDeliver: effect => calendarEffectDeliveryAllowed(f.db, effect, 'a', 'session'),
+        execute: async () => { writes++; return {}; } });
+    f.f.drain = () => outbox.drainOnce(); f.f.events = [event()];
+    await f.service.refresh();
+    assert.equal(writes, 0);
+    assert.equal((await f.db.tasks.get(owner.id!))?.isDeleted, undefined);
+    assert.equal((await f.db.tasks.get(copy.id!))?.isDeleted, true);
+    assert.equal((await f.db.tasks.get(copy.id!))?.calendar?.duplicateOf, owner.publicId);
+    assert.ok((await f.db.agentProtocolEffects.toArray()).every(effect => effect.state === 'failed' && effect.superseded));
+    assert.equal((await f.service.getStatus()).pending, 0);
+});
+
 test('large batches of unowned cancellations and missing targets commit before draining all 61 queued plans', async t => {
     const f = await fixture(t, false);
     await f.db.tasks.bulkAdd(Array.from({ length: 61 }, (_, i): Task => ({

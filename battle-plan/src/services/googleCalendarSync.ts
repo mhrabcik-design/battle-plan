@@ -29,6 +29,7 @@ export interface CalendarSyncStatus {
     conflicts: Task[];
     error: string | null;
     timeZone: string;
+    repairedDuplicates?: number;
 }
 export interface CalendarConflictVersion { revisionId: string | null; metadataUpdatedAt: number }
 export interface CalendarSyncClient {
@@ -211,7 +212,8 @@ export class GoogleCalendarSync {
         return { accountId, enabled, phase, error: this.state.error, timeZone: settings?.timeZone ?? browserZone(),
             lastCheckedAt: settings?.lastCheckedAt ?? null,
             pending,
-            conflicts: tasks.filter(task => task.calendar?.accountId === accountId && task.calendar.conflict) };
+            repairedDuplicates: tasks.filter(task => task.calendar?.accountId === accountId && task.calendar.duplicateOf).length,
+            conflicts: tasks.filter(task => task.calendar?.accountId === accountId && !task.calendar.duplicateOf && task.calendar.conflict) };
     }
 
     /** Shared promise survives hook teardown/remount. Triggers during the same read collapse. */
@@ -238,9 +240,9 @@ export class GoogleCalendarSync {
         const localTasks = await this.db.tasks.toArray();
         const unlinked = localTasks.filter(task => needsAutomaticEnrollment(task, accountId, settings.timeZone));
         const observedPublicIds = new Set(unlinked.map(task => task.publicId!));
-        const tracked = localTasks.filter(task =>
+        const tracked = localTasks.filter(task => !task.calendar?.duplicateOf && (
             (task.calendar?.accountId === accountId && task.calendar.calendarId === settings.calendarId)
-            || (!task.calendar && (task.googleEventId || task.reservedGoogleEventId) && task.googleAccountId === accountId));
+            || (!task.calendar && (task.googleEventId || task.reservedGoogleEventId) && task.googleAccountId === accountId)));
         const result = await this.client.listCalendarEvents({ accountId, calendarId: settings.calendarId,
             timeMin: listBoundary(range.startDate, settings.timeZone), timeMax: listBoundary(range.endDate, settings.timeZone),
             timeZone: settings.timeZone }, capture.guard);
@@ -263,6 +265,7 @@ export class GoogleCalendarSync {
             if (!capture.current() || !currentSettings?.enabled || !same(settings, currentSettings)) return false;
             // One fresh table read for the entire batch, updated as mutations commit.
             const tasks = await this.db.tasks.toArray();
+            await this.repairDuplicatePairings(settings, tasks, events);
             for (const [eventId, event] of events) {
                 if (!capture.current()) throw new Error('Přihlášení ke Kalendáři se změnilo.');
                 // Skipped imports must stay synchronous: repeated awaits without
@@ -288,15 +291,58 @@ export class GoogleCalendarSync {
         await this.options.drain();
     }
 
+    private directTasks(eventId: string, settings: CalendarSyncSettings, tasks: Task[]): Task[] {
+        return tasks.filter(task => task.calendar
+            ? !task.calendar.duplicateOf && task.calendar.accountId === settings.accountId && task.calendar.calendarId === settings.calendarId && task.calendar.eventId === eventId
+            : task.googleAccountId === settings.accountId && (task.googleEventId ?? task.reservedGoogleEventId) === eventId);
+    }
+
+    private async repairDuplicatePairings(settings: CalendarSyncSettings, tasks: Task[], events: Map<string, GoogleCalendarEvent | null>): Promise<void> {
+        const groups = new Map<string, Task[]>();
+        for (const task of tasks) {
+            const metadata = task.calendar;
+            if (metadata ? metadata.duplicateOf || metadata.accountId !== settings.accountId || metadata.calendarId !== settings.calendarId
+                : task.googleAccountId !== settings.accountId) continue;
+            const eventId = metadata?.eventId ?? task.googleEventId ?? task.reservedGoogleEventId;
+            if (!eventId || !events.has(eventId)) continue;
+            const group = groups.get(eventId) ?? [];
+            group.push(task); groups.set(eventId, group);
+        }
+        const outbox = new ExternalEffectOutbox(this.db, { accountId: () => settings.accountId, execute: async () => ({}), now: this.now });
+        for (const [eventId, direct] of groups) {
+            if (direct.length < 2) continue;
+            const event = events.get(eventId);
+            const identity = event ? privateIdentity(event, settings.accountId, settings.calendarId) : undefined;
+            let owners: Task[];
+            if (identity) owners = direct.filter(task => canonicalCalendarIdentity(task) === identity.canonicalIdentity
+                && (!task.calendar || task.calendar.origin === identity.origin && task.calendar.generation === identity.generation));
+            else owners = direct.filter(task => task.calendar);
+            let owner = owners.length === 1 ? owners[0] : undefined;
+            if (!identity && !owners.length) {
+                const projection = toCalendarProjection(direct[0], settings.timeZone);
+                if (projection && direct.every(task => Boolean(task.isDeleted) === Boolean(direct[0].isDeleted)
+                    && same(toCalendarProjection(task, settings.timeZone), projection)))
+                    owner = [...direct].sort((a, b) => a.publicId!.localeCompare(b.publicId!))[0];
+            }
+            if (!owner?.publicId) throw new Error('Jedna Calendar událost má více místních položek.');
+            for (const copy of direct) {
+                if (copy.id === owner.id) continue;
+                const metadata = copy.calendar ?? { accountId: settings.accountId, calendarId: settings.calendarId, eventId,
+                    canonicalIdentity: canonicalCalendarIdentity(copy), origin: 'local' as const, generation: 0, metadataUpdatedAt: 0 };
+                await this.save({ ...copy, calendar: { ...metadata, duplicateOf: owner.publicId, suppressed: true,
+                    metadataUpdatedAt: Math.max(this.now(), metadata.metadataUpdatedAt + 1) } }, copy, tasks);
+                await outbox.supersedeCalendarEffects(copy.publicId!, settings.accountId);
+            }
+        }
+    }
+
     private findTask(eventId: string, event: GoogleCalendarEvent | null, settings: CalendarSyncSettings, tasks: Task[]): Task | undefined {
-        const direct = tasks.filter(task => task.calendar
-            ? task.calendar.accountId === settings.accountId && task.calendar.calendarId === settings.calendarId && task.calendar.eventId === eventId
-            : task.googleAccountId === settings.accountId && (task.googleEventId === eventId || task.reservedGoogleEventId === eventId));
+        const direct = this.directTasks(eventId, settings, tasks);
         if (direct.length > 1) throw new Error('Jedna Calendar událost má více místních položek.');
         if (direct[0]) return direct[0];
         const identity = event ? privateIdentity(event, settings.accountId, settings.calendarId) : undefined;
         if (identity) {
-            const candidates = tasks.filter(task => (!task.calendar || (task.calendar.accountId === settings.accountId && task.calendar.calendarId === settings.calendarId))
+            const candidates = tasks.filter(task => !task.calendar?.duplicateOf && (!task.calendar || (task.calendar.accountId === settings.accountId && task.calendar.calendarId === settings.calendarId))
                 && (!task.googleAccountId || task.googleAccountId === settings.accountId)
                 && canonicalCalendarIdentity(task) === identity.canonicalIdentity);
             if (candidates.length > 1) throw new Error('Calendar identita má více místních položek.');
@@ -307,7 +353,7 @@ export class GoogleCalendarSync {
                 return candidate;
             }
         }
-        return tasks.find(task => task.publicId === calendarEventPublicId(settings.accountId, settings.calendarId, eventId));
+        return tasks.find(task => !task.calendar?.duplicateOf && task.publicId === calendarEventPublicId(settings.accountId, settings.calendarId, eventId));
     }
     private async save(task: Task, previous?: Task, batch?: Task[]): Promise<void> {
         if (previous?.calendar && task.calendar) {
@@ -334,7 +380,7 @@ export class GoogleCalendarSync {
     private importEvent(eventId: string, event: GoogleCalendarEvent | null, settings: CalendarSyncSettings, tasks: Task[]): Promise<void> | void {
         const identity = event ? privateIdentity(event, settings.accountId, settings.calendarId) : undefined;
         if (identity) {
-            const owner = tasks.find(task => task.calendar?.accountId === settings.accountId
+            const owner = tasks.find(task => !task.calendar?.duplicateOf && task.calendar?.accountId === settings.accountId
                 && task.calendar.calendarId === settings.calendarId && task.calendar.canonicalIdentity === identity.canonicalIdentity);
             // An old active generation can still be returned by the finite list.
             // It must neither resurrect a block nor poison an otherwise complete batch.
@@ -405,7 +451,7 @@ export class GoogleCalendarSync {
         const original = await this.db.tasks.where('publicId').equals(publicId).first();
         if (expected && (!original?.calendar?.conflict || original.calendar.metadataUpdatedAt !== expected.metadataUpdatedAt
             || (original.protocolRevision?.revision_id ?? null) !== expected.revisionId)) return 'stale';
-        if (!original?.calendar?.conflict || original.calendar.accountId !== accountId) throw new Error('Konflikt Kalendáře již není dostupný.');
+        if (!original?.calendar?.conflict || original.calendar.duplicateOf || original.calendar.accountId !== accountId) throw new Error('Konflikt Kalendáře již není dostupný.');
         if (choice === 'battleplan' && original.calendar.readonlyReason) throw new Error('Tuto událost lze upravit pouze v Googlu.');
         const event = await this.client.getCalendarEvent(original.calendar.eventId, { accountId, calendarId: original.calendar.calendarId }, capture.guard);
         if (event && event.id !== original.calendar.eventId) throw new Error('Kalendář vrátil jinou identitu události.');
@@ -461,7 +507,7 @@ export class GoogleCalendarSync {
         await this.db.transaction('rw', taskMutationTables(this.db), async () => {
             const task = await this.db.tasks.where('publicId').equals(publicId).first();
             if (!capture.current() || task?.type !== 'task' || task.isDeleted || !task.calendar?.suppressed
-                || task.calendar.accountId !== accountId || task.calendar.conflict || task.calendar.readonlyReason)
+                || task.calendar.accountId !== accountId || task.calendar.duplicateOf || task.calendar.conflict || task.calendar.readonlyReason)
                 throw new Error('Blok úkolu nyní nelze obnovit.');
             await new ExternalEffectOutbox(this.db, { accountId: () => accountId, execute: async () => ({}), now: this.now })
                 .supersedeCalendarEffects(publicId, accountId);

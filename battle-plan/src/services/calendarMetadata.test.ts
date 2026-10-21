@@ -15,6 +15,26 @@ test('suppression is monotonic within a generation, while explicit new generatio
     }
 });
 
+test('a newer stale backup cannot reconnect a retained Calendar duplicate in either merge order', () => {
+    const detached = metadata({ duplicateOf: 'task_owner', suppressed: true, metadataUpdatedAt: 2 });
+    const stale = metadata({ suppressed: false, metadataUpdatedAt: 3 });
+    for (const values of [[detached, stale], [stale, detached]]) {
+        const merged = mergeCalendarMetadata(values);
+        assert.equal(merged?.duplicateOf, 'task_owner');
+        assert.equal(merged?.suppressed, true);
+        assert.equal(merged?.metadataUpdatedAt, 3);
+    }
+});
+
+test('conflicting duplicate owners and malformed duplicate markers reject Calendar recovery', () => {
+    const detached = metadata({ duplicateOf: 'task_owner', suppressed: true, metadataUpdatedAt: 2 });
+    assert.throws(() => mergeCalendarMetadata([detached,
+        metadata({ duplicateOf: 'task_other_owner', suppressed: true, metadataUpdatedAt: 3 })]), /Calendar/);
+    for (const duplicateOf of ['', 42, null, {}]) {
+        assert.throws(() => mergeCalendarMetadata([metadata({ duplicateOf: duplicateOf as string })]), /Calendar/);
+    }
+});
+
 test('ambiguous scopes, pairings and simultaneous divergent baselines reject recovery without selecting one', () => {
     for (const changed of [{ accountId: 'b' }, { calendarId: 'other' }, { canonicalIdentity: 'other' }, { eventId: 'wrong' }, { etag: 'different' }]) {
         assert.throws(() => mergeCalendarMetadata([metadata(), metadata(changed)]), /Calendar/);

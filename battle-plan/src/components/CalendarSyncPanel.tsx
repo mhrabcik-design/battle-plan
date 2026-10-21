@@ -63,6 +63,7 @@ export function CalendarSyncPanel({ controls, googleAuth, isOnline, indicator }:
                 <div><dt className="inline">Čekající změny: </dt><dd className="inline">{indicator.pending}</dd></div>
                 <div><dt className="inline">Konflikty: </dt><dd className="inline">{status.conflicts.length}</dd></div>
             </dl>}
+        {!!status?.repairedDuplicates && <p className="text-xs text-slate-400">Opravená duplicitní propojení: {status.repairedDuplicates}. Místní kopie zůstaly zachované bez automatického odesílání do Kalendáře.</p>}
         {status?.enabled && <>
             {status.phase === 'auth-required' && <button type="button" className={buttonClass} onClick={() => googleService.signIn()}>Obnovit přihlášení</button>}
             <button type="button" disabled={busy || !usable} className={buttonClass} onClick={() => { void run(() => controls.refresh()); }}><RefreshCw className="h-4 w-4" />Obnovit Kalendář</button>

@@ -10,13 +10,16 @@ export function mergeCalendarMetadata(values: readonly (TaskCalendarMetadata | u
         if (!value || typeof value !== 'object' || ![value.accountId, value.calendarId, value.eventId, value.canonicalIdentity].every(field => typeof field === 'string' && field.length > 0)
             || !['local', 'google'].includes(value.origin) || !Number.isSafeInteger(value.generation) || value.generation < 0
             || !Number.isFinite(value.metadataUpdatedAt) || value.metadataUpdatedAt < 0
-            || (value.suppressed !== undefined && typeof value.suppressed !== 'boolean')) throw new Error('Neplatná Calendar metadata v záloze.');
+            || (value.suppressed !== undefined && typeof value.suppressed !== 'boolean')
+            || (value.duplicateOf !== undefined && (typeof value.duplicateOf !== 'string' || !value.duplicateOf))) throw new Error('Neplatná Calendar metadata v záloze.');
     }
     const identity = (value: TaskCalendarMetadata) => canonicalBackupJson([value.accountId, value.calendarId, value.canonicalIdentity, value.origin]);
     if (new Set(present.map(identity)).size > 1) throw new Error('Konflikt Calendar identity v zálohách.');
     const generation = Math.max(...present.map(value => value.generation));
     const current = present.filter(value => value.generation === generation);
     if (new Set(current.map(value => value.eventId)).size > 1) throw new Error('Konflikt Calendar pairing v zálohách.');
+    const duplicateOwners = new Set(current.map(value => value.duplicateOf).filter(Boolean));
+    if (duplicateOwners.size > 1) throw new Error('Konflikt vlastníka duplicitní Calendar vazby.');
     const newest = Math.max(...current.map(value => value.metadataUpdatedAt));
     const winners = current.filter(value => value.metadataUpdatedAt === newest);
     if (new Set(winners.map(canonicalBackupJson)).size > 1) throw new Error('Konflikt stejně nových Calendar metadat.');
@@ -24,6 +27,7 @@ export function mergeCalendarMetadata(values: readonly (TaskCalendarMetadata | u
     // Cancellation is monotonic inside one generation. Only explicit restore
     // allocates a new generation and can remove suppression.
     if (current.some(value => value.suppressed)) winner.suppressed = true;
+    if (duplicateOwners.size) { winner.duplicateOf = [...duplicateOwners][0]; winner.suppressed = true; }
     return winner;
 }
 
